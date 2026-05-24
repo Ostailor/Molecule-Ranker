@@ -27,7 +27,15 @@ class PubChemAdapter:
         self.session = session or requests.Session()
 
     def annotate_molecules(self, molecules: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [self.annotate_molecule(molecule) for molecule in molecules]
+        annotated: list[dict[str, Any]] = []
+        for molecule in molecules:
+            try:
+                annotated.append(self.annotate_molecule(molecule))
+            except EvidenceRetrievalError as exc:
+                preserved = dict(molecule)
+                preserved.setdefault("warnings", []).append(str(exc))
+                annotated.append(preserved)
+        return annotated
 
     def annotate_molecule(self, molecule: dict[str, Any]) -> dict[str, Any]:
         name = str(molecule.get("name") or "")
@@ -89,6 +97,8 @@ class PubChemAdapter:
         url = f"{self.base_url}/{path.lstrip('/')}"
         try:
             response = self.session.get(url, timeout=self.timeout_seconds)
+            if getattr(response, "status_code", 200) == 404:
+                raise EvidenceRetrievalError(f"PubChem returned no record for {url}.")
             response.raise_for_status()
             payload = response.json()
         except requests.RequestException as exc:

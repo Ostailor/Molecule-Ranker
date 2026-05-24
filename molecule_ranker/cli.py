@@ -95,18 +95,21 @@ def rank(
     """Run the V0.0 existing-molecule ranking pipeline."""
     config = RankerConfig(results_dir=output_dir, default_top=top)
     open_targets = OpenTargetsAdapter(timeout_seconds=timeout)
-    runtime_config: dict[str, int] = {}
-    if max_targets is not None:
-        runtime_config["target_limit"] = max_targets
-    if max_molecules_per_target is not None:
-        runtime_config["limit_per_target"] = max_molecules_per_target
+    runtime_config: dict[str, int] = {
+        "target_limit": max_targets or 1,
+        "limit_per_target": max_molecules_per_target or top,
+    }
 
     try:
         result = MoleculeRankerOrchestrator(
             config=config,
             disease_source=open_targets,
             target_source=open_targets,
-            molecule_source=ChEMBLAdapter(timeout_seconds=timeout),
+            molecule_source=ChEMBLAdapter(
+                timeout_seconds=timeout,
+                max_retries=5,
+                retry_delay_seconds=1.0,
+            ),
             molecule_annotation_source=PubChemAdapter(timeout_seconds=timeout),
         ).rank(
             disease_name,

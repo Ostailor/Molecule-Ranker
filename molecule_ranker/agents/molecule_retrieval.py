@@ -108,6 +108,9 @@ class MoleculeRetrievalAgent(BaseAgent):
                 list(existing.get("evidence", [])),
                 list(record.get("evidence", [])),
             )
+            existing["warnings"] = sorted(
+                set(existing.get("warnings", [])) | set(record.get("warnings", []))
+            )
             existing["identifiers"] = {
                 **dict(record.get("identifiers", {})),
                 **dict(existing.get("identifiers", {})),
@@ -154,5 +157,5 @@ class MoleculeRetrievalAgent(BaseAgent):
             evidence=[EvidenceItem(**item) for item in record.get("evidence", [])],
             score=None,
             score_breakdown=None,
-            warnings=[],
+            warnings=[str(warning) for warning in record.get("warnings", [])],
         )

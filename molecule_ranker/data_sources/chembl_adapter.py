@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,10 +25,14 @@ class ChEMBLAdapter:
         *,
         base_url: str = default_base_url,
         timeout_seconds: float = 20.0,
+        max_retries: int = 2,
+        retry_delay_seconds: float = 0.5,
         session: requests.Session | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+        self.retry_delay_seconds = retry_delay_seconds
         self.session = session or requests.Session()
 
     def retrieve_molecules(
@@ -45,7 +50,14 @@ class ChEMBLAdapter:
                     molecule_id = mechanism.get("molecule_chembl_id")
                     if not molecule_id:
                         continue
-                    molecule = self._molecule_details(str(molecule_id))
+                    warnings: list[str] = []
+                    try:
+                        molecule = self._molecule_details(str(molecule_id))
+                    except ExternalDataUnavailableError as exc:
+                        molecule = {}
+                        warnings.append(
+                            f"ChEMBL molecule detail unavailable for {molecule_id}: {exc}"
+                        )
                     record = self._record_from_mechanism(
                         disease=disease,
                         target=target,
@@ -53,6 +65,7 @@ class ChEMBLAdapter:
                         mechanism=mechanism,
                         molecule=molecule,
                     )
+                    record["warnings"].extend(warnings)
                     existing = records_by_id.get(str(molecule_id))
                     if existing is None:
                         records_by_id[str(molecule_id)] = record
@@ -61,6 +74,9 @@ class ChEMBLAdapter:
                             set(existing["known_targets"]) | set(record["known_targets"])
                         )
                         existing["evidence"].extend(record["evidence"])
+                        existing["warnings"] = sorted(
+                            set(existing.get("warnings", [])) | set(record["warnings"])
+                        )
         records = list(records_by_id.values())
         if not records:
             raise NoCandidatesFoundError(
@@ -108,7 +124,7 @@ class ChEMBLAdapter:
         direct_interaction = bool(mechanism.get("direct_interaction"))
         target_fit = 0.8 if direct_interaction else 0.5
         retrieved_at = datetime.now(UTC).isoformat()
-        pref_name = molecule.get("pref_name") or mechanism.get("mechanism_of_action") or molecule_id
+        pref_name = molecule.get("pref_name") or molecule_id
         return {
             "name": str(pref_name),
             "molecule_type": molecule.get("molecule_type") or "unknown",
@@ -123,6 +139,7 @@ class ChEMBLAdapter:
             "clinical_precedence": clinical_precedence,
             "safety_prior": 0.5,
             "repurposing_value": 0.5,
+            "warnings": [],
             "evidence": [
                 {
                     "source": self.source_name,
@@ -149,14 +166,26 @@ class ChEMBLAdapter:
 
     def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url}/{path.lstrip('/')}"
-        try:
-            response = self.session.get(url, params=params, timeout=self.timeout_seconds)
-            response.raise_for_status()
-            payload = response.json()
-        except requests.RequestException as exc:
-            raise ExternalDataUnavailableError(f"ChEMBL request failed: {exc}") from exc
-        except ValueError as exc:
-            raise MoleculeRetrievalError("ChEMBL returned invalid JSON.") from exc
-        if not isinstance(payload, dict):
-            raise MoleculeRetrievalError("ChEMBL returned an unexpected payload.")
-        return payload
+        last_error: requests.RequestException | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.session.get(url, params=params, timeout=self.timeout_seconds)
+                status_code = getattr(response, "status_code", 200)
+                if status_code >= 500 and attempt < self.max_retries:
+                    time.sleep(self.retry_delay_seconds)
+                    continue
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise MoleculeRetrievalError("ChEMBL returned an unexpected payload.")
+                return payload
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < self.max_retries:
+                    time.sleep(self.retry_delay_seconds)
+                    continue
+                raise ExternalDataUnavailableError(f"ChEMBL request failed: {exc}") from exc
+            except ValueError as exc:
+                raise MoleculeRetrievalError("ChEMBL returned invalid JSON.") from exc
+        else:  # pragma: no cover - loop always returns or raises
+            raise ExternalDataUnavailableError(f"ChEMBL request failed: {last_error}")

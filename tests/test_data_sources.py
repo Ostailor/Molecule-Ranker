@@ -8,6 +8,7 @@ import requests
 from molecule_ranker.data_sources.chembl_adapter import ChEMBLAdapter
 from molecule_ranker.data_sources.errors import (
     DiseaseResolutionError,
+    EvidenceRetrievalError,
     ExternalDataUnavailableError,
     NoCandidatesFoundError,
 )
@@ -191,6 +192,82 @@ def test_chembl_retrieves_molecule_records_with_provenance():
     assert records[0]["evidence"][0]["source_record_id"] == "123"
 
 
+def test_chembl_retries_transient_server_errors():
+    session = QueueSession(
+        [
+            MockResponse({}, status_code=500),
+            MockResponse({"targets": []}),
+        ]
+    )
+    adapter = ChEMBLAdapter(
+        session=session,  # type: ignore[arg-type]
+        max_retries=1,
+        retry_delay_seconds=0,
+    )
+
+    payload = adapter._get("target.json", {"limit": 1})
+
+    assert payload == {"targets": []}
+    assert len(session.calls) == 2
+
+
+def test_chembl_preserves_mechanism_record_when_molecule_details_fail():
+    session = QueueSession(
+        [
+            MockResponse(
+                {
+                    "targets": [
+                        {
+                            "target_chembl_id": "CHEMBL6152",
+                            "organism": "Homo sapiens",
+                        }
+                    ]
+                }
+            ),
+            MockResponse(
+                {
+                    "mechanisms": [
+                        {
+                            "mec_id": 123,
+                            "molecule_chembl_id": "CHEMBL1",
+                            "mechanism_of_action": "Target inhibitor",
+                            "action_type": "INHIBITOR",
+                            "direct_interaction": 1,
+                            "max_phase": 2,
+                        }
+                    ]
+                }
+            ),
+            MockResponse({}, status_code=500),
+        ]
+    )
+    adapter = ChEMBLAdapter(
+        session=session,  # type: ignore[arg-type]
+        max_retries=0,
+        retry_delay_seconds=0,
+    )
+    disease = Disease(
+        input_name="Disease",
+        canonical_name="Disease",
+        synonyms=[],
+        identifiers={"open_targets": "MONDO_TEST"},
+        description=None,
+    )
+    target = Target(
+        symbol="SNCA",
+        name="Alpha-synuclein",
+        disease_relevance_score=0.8,
+        evidence=[],
+        mechanism=None,
+    )
+
+    records = adapter.retrieve_molecules(disease, [target], limit_per_target=1)
+
+    assert records[0]["name"] == "CHEMBL1"
+    assert records[0]["evidence"][0]["source"] == "ChEMBL"
+    assert "ChEMBL molecule detail unavailable" in records[0]["warnings"][0]
+
+
 def test_chembl_no_records_raises_no_candidates():
     session = QueueSession([MockResponse({"targets": []})])
     adapter = ChEMBLAdapter(session=session)  # type: ignore[arg-type]
@@ -240,3 +317,37 @@ def test_pubchem_enriches_molecule_with_cid_and_metadata():
     assert enriched["identifiers"]["pubchem_cid"] == "2244"
     assert enriched["evidence"][-1]["source"] == "PubChem"
     assert enriched["evidence"][-1]["source_record_id"] == "2244"
+
+
+def test_pubchem_preserves_molecule_when_annotation_record_is_missing():
+    session = QueueSession([MockResponse({}, status_code=404)])
+    adapter = PubChemAdapter(session=session)  # type: ignore[arg-type]
+    molecule = {
+        "name": "GANTENERUMAB",
+        "identifiers": {"chembl": "CHEMBL1743025"},
+        "evidence": [
+            {
+                "source": "ChEMBL",
+                "source_record_id": "5455",
+                "title": "Mechanism record",
+                "evidence_type": "mechanism",
+                "summary": "ChEMBL mechanism evidence.",
+                "confidence": 0.8,
+                "metadata": {},
+            }
+        ],
+    }
+
+    annotated = adapter.annotate_molecules([molecule])
+
+    assert annotated[0]["identifiers"] == {"chembl": "CHEMBL1743025"}
+    assert annotated[0]["evidence"] == molecule["evidence"]
+    assert "PubChem returned no record" in annotated[0]["warnings"][0]
+
+
+def test_pubchem_single_molecule_missing_record_raises_evidence_error():
+    session = QueueSession([MockResponse({}, status_code=404)])
+    adapter = PubChemAdapter(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(EvidenceRetrievalError):
+        adapter.annotate_molecule({"name": "GANTENERUMAB", "identifiers": {}})
