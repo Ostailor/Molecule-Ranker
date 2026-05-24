@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from molecule_ranker.config import RankerConfig
+from molecule_ranker.data_sources.errors import TargetDiscoveryError
 from molecule_ranker.orchestrator import MoleculeRankerOrchestrator
 from molecule_ranker.schemas import Disease, EvidenceItem, Target
 
@@ -40,6 +43,11 @@ class FakeTargetSource:
                 mechanism=None,
             )
         ]
+
+
+class EmptyTargetSource:
+    def discover_targets(self, disease: Disease, *, limit: int = 20) -> list[Target]:
+        return []
 
 
 class FakeMoleculeSource:
@@ -96,12 +104,23 @@ class FakeMoleculeSource:
         ]
 
 
+class NoOpAnnotationSource:
+    source_name = "Test annotation source"
+
+    def annotate_molecule(self, molecule: dict[str, Any]) -> dict[str, Any]:
+        return molecule
+
+    def annotate_molecules(self, molecules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return molecules
+
+
 def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
     orchestrator = MoleculeRankerOrchestrator(
         config=RankerConfig(results_dir=tmp_path),
         disease_source=FakeDiseaseSource(),
         target_source=FakeTargetSource(),
         molecule_source=FakeMoleculeSource(),
+        molecule_annotation_source=NoOpAnnotationSource(),
     )
 
     result = orchestrator.rank("Parkinson disease", top=2)
@@ -124,7 +143,25 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
     report = (output_dir / "report.md").read_text()
     assert "requires experimental validation" in report.lower()
     assert "medical advice" in report.lower()
-    assert "cure" not in report.lower()
+    assert "does not predict" in report.lower()
 
     payload = json.loads((output_dir / "candidates.json").read_text())
     assert payload["candidates"][0]["score_breakdown"]["final_score"] > 0
+
+
+def test_orchestrator_failed_run_does_not_write_success_artifacts(tmp_path):
+    orchestrator = MoleculeRankerOrchestrator(
+        config=RankerConfig(results_dir=tmp_path),
+        disease_source=FakeDiseaseSource(),
+        target_source=EmptyTargetSource(),
+        molecule_source=FakeMoleculeSource(),
+        molecule_annotation_source=NoOpAnnotationSource(),
+    )
+
+    with pytest.raises(TargetDiscoveryError):
+        orchestrator.rank("Parkinson disease", top=2)
+
+    output_dir = tmp_path / "parkinson-disease"
+    assert not (output_dir / "candidates.json").exists()
+    assert not (output_dir / "report.md").exists()
+    assert not (output_dir / "trace.json").exists()
