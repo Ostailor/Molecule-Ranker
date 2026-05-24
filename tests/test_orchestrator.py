@@ -8,6 +8,7 @@ import pytest
 from molecule_ranker.config import RankerConfig
 from molecule_ranker.data_sources.errors import (
     DiseaseResolutionError,
+    ExternalDataUnavailableError,
     MoleculeRetrievalError,
     NoCandidatesFoundError,
     TargetDiscoveryError,
@@ -30,6 +31,11 @@ class FakeDiseaseSource:
 class FailingDiseaseSource:
     def resolve_disease(self, disease_name: str) -> Disease:
         raise DiseaseResolutionError("Disease could not be resolved.")
+
+
+class UnavailableDiseaseSource:
+    def resolve_disease(self, disease_name: str) -> Disease:
+        raise ExternalDataUnavailableError("Open Targets is unavailable.")
 
 
 class FakeTargetSource:
@@ -193,6 +199,12 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
 
     payload = json.loads((output_dir / "candidates.json").read_text())
     assert payload["candidates"][0]["score_breakdown"]["final_score"] > 0
+    for candidate in result.candidates:
+        assert candidate.score is not None
+        assert 0 <= candidate.score <= 1
+        assert candidate.score_breakdown is not None
+        assert candidate.score_breakdown.explanation
+        assert 0 <= candidate.score_breakdown.confidence <= 1
 
 
 def test_orchestrator_accepts_top_n_output_dir_and_runtime_config(tmp_path):
@@ -232,6 +244,25 @@ def test_disease_resolution_failure_stops_pipeline(tmp_path):
     assert target_source.calls == 0
     assert molecule_source.calls == 0
     assert not (tmp_path / "unknown-disease" / "report.md").exists()
+
+
+def test_external_data_unavailable_stops_pipeline(tmp_path):
+    target_source = FakeTargetSource()
+    molecule_source = FakeMoleculeSource()
+    orchestrator = MoleculeRankerOrchestrator(
+        config=RankerConfig(results_dir=tmp_path),
+        disease_source=UnavailableDiseaseSource(),
+        target_source=target_source,
+        molecule_source=molecule_source,
+        molecule_annotation_source=NoOpAnnotationSource(),
+    )
+
+    with pytest.raises(ExternalDataUnavailableError):
+        orchestrator.rank("Parkinson disease", top_n=2)
+
+    assert target_source.calls == 0
+    assert molecule_source.calls == 0
+    assert not (tmp_path / "parkinson-disease" / "report.md").exists()
 
 
 def test_target_discovery_failure_stops_pipeline(tmp_path):

@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 import molecule_ranker.cli as cli
 from molecule_ranker.cli import app
-from molecule_ranker.data_sources.errors import DiseaseResolutionError
+from molecule_ranker.data_sources.errors import (
+    DiseaseResolutionError,
+    ExternalDataUnavailableError,
+    MoleculeRetrievalError,
+    NoCandidatesFoundError,
+    TargetDiscoveryError,
+)
 from molecule_ranker.schemas import (
     AgentTrace,
     Disease,
@@ -83,6 +90,8 @@ class FakeOrchestrator:
 
 
 class FailingOrchestrator:
+    error: Exception = DiseaseResolutionError("Disease could not be resolved.")
+
     def __init__(self, *, config, **kwargs):
         self.config = config
 
@@ -94,7 +103,7 @@ class FailingOrchestrator:
         output_dir: Path | None = None,
         config: dict[str, int] | None = None,
     ):
-        raise DiseaseResolutionError(f'Could not resolve disease input: "{disease_name}"')
+        raise self.error
 
 
 def test_help_commands_work():
@@ -196,8 +205,28 @@ def test_rank_command_prints_verbose_trace(tmp_path, monkeypatch):
     assert "- DiseaseResolverAgent: Resolved disease." in result.stdout
 
 
-def test_rank_command_surfaces_pipeline_failures(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "MoleculeRankerOrchestrator", FailingOrchestrator)
+@pytest.mark.parametrize(
+    ("error", "label"),
+    [
+        (
+            DiseaseResolutionError('Could not resolve disease input: "Unknown disease"'),
+            "DiseaseResolutionError",
+        ),
+        (TargetDiscoveryError("Target discovery failed."), "TargetDiscoveryError"),
+        (MoleculeRetrievalError("Molecule retrieval failed."), "MoleculeRetrievalError"),
+        (
+            ExternalDataUnavailableError("Open Targets is unavailable."),
+            "ExternalDataUnavailableError",
+        ),
+        (NoCandidatesFoundError("No candidates found."), "NoCandidatesFoundError"),
+    ],
+)
+def test_rank_command_surfaces_pipeline_failures(tmp_path, monkeypatch, error, label):
+    class ConfiguredFailingOrchestrator(FailingOrchestrator):
+        pass
+
+    ConfiguredFailingOrchestrator.error = error
+    monkeypatch.setattr(cli, "MoleculeRankerOrchestrator", ConfiguredFailingOrchestrator)
     runner = CliRunner()
 
     result = runner.invoke(
@@ -213,7 +242,7 @@ def test_rank_command_surfaces_pipeline_failures(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 1
-    assert "Error: DiseaseResolutionError" in result.stderr
-    assert 'Could not resolve disease input: "Unknown disease"' in result.stderr
+    assert f"Error: {label}" in result.stderr
+    assert str(error) in result.stderr
     assert "No report was generated." in result.stderr
     assert not (tmp_path / "unknown-disease" / "report.md").exists()

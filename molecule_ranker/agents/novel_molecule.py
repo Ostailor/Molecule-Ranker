@@ -43,7 +43,7 @@ class NovelMoleculeAgent(BaseAgent):
     def trace_metadata(self, context: PipelineContext) -> dict[str, object]:
         return {
             "implemented": False,
-            "v0_0_behavior": "no molecule generation, no placeholder candidates",
+            "v0_0_behavior": "generation disabled; candidate list is left unchanged",
             "future_interface": {
                 "inputs": FUTURE_INPUTS,
                 "outputs": FUTURE_OUTPUTS,
