@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from molecule_ranker.agents import (
     DiseaseResolverAgent,
     EvidenceScoringAgent,
     MoleculeRetrievalAgent,
+    NovelMoleculeAgent,
     ReportWriterAgent,
     TargetDiscoveryAgent,
 )
@@ -18,7 +22,7 @@ from molecule_ranker.data_sources.base import (
     TargetDiscoveryDataSource,
 )
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
-from molecule_ranker.schemas import RankingRun
+from molecule_ranker.schemas import MoleculeCandidate, RankingRun
 
 
 class MoleculeRankerOrchestrator:
@@ -39,24 +43,45 @@ class MoleculeRankerOrchestrator:
             molecule_source or ChEMBLAdapter(),
             molecule_annotation_source,
         )
+        self.novel_molecule = NovelMoleculeAgent()
         self.evidence_scoring = EvidenceScoringAgent()
         self.report_writer = ReportWriterAgent()
         self.agents: list[BaseAgent] = [
             self.disease_resolver,
             self.target_discovery,
             self.molecule_retrieval,
+            self.novel_molecule,
             self.evidence_scoring,
             self.report_writer,
         ]
 
-    def rank(self, disease_name: str, *, top: int | None = None) -> RankingRun:
-        limit = top or self.config.default_top
+    def rank(
+        self,
+        disease_input: str,
+        *,
+        top_n: int | None = None,
+        output_dir: Path | None = None,
+        config: dict[str, Any] | None = None,
+        top: int | None = None,
+    ) -> RankingRun:
+        limit = top_n if top_n is not None else top
+        limit = limit or self.config.default_top
+        if limit < 1:
+            raise ValueError("top_n must be at least 1.")
+
+        results_dir = output_dir or self.config.results_dir
+        runtime_config: dict[str, Any] = {
+            "top": limit,
+            "results_dir": str(results_dir),
+        }
+        if config:
+            runtime_config.update(config)
+            runtime_config["top"] = limit
+            runtime_config["results_dir"] = str(results_dir)
+
         context = PipelineContext(
-            disease_input=disease_name,
-            config={
-                "top": limit,
-                "results_dir": str(self.config.results_dir),
-            },
+            disease_input=disease_input,
+            config=runtime_config,
         )
 
         for agent in self.agents:
@@ -66,6 +91,16 @@ class MoleculeRankerOrchestrator:
             raise NoCandidatesFoundError("Disease resolution failed; no candidates can be ranked.")
         if not context.candidates:
             raise NoCandidatesFoundError("No molecule candidates were found for ranking.")
+        missing_evidence = [
+            candidate.name
+            for candidate in context.candidates
+            if not self._has_real_retrieved_evidence(candidate)
+        ]
+        if missing_evidence:
+            raise NoCandidatesFoundError(
+                "Ranked candidates require real retrieved evidence; missing evidence for "
+                f"{', '.join(missing_evidence)}."
+            )
         result = RankingRun(
             disease=context.disease,
             targets=context.targets,
@@ -74,3 +109,6 @@ class MoleculeRankerOrchestrator:
             limitations=list(context.config.get("limitations", DEFAULT_LIMITATIONS)),
         )
         return result
+
+    def _has_real_retrieved_evidence(self, candidate: MoleculeCandidate) -> bool:
+        return any(item.source and item.source_record_id for item in candidate.evidence)

@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 
 import molecule_ranker.cli as cli
 from molecule_ranker.cli import app
+from molecule_ranker.data_sources.errors import DiseaseResolutionError
 from molecule_ranker.schemas import Disease, MoleculeCandidate, RankingRun
 
 
@@ -13,8 +14,14 @@ class FakeOrchestrator:
     def __init__(self, *, config):
         self.config = config
 
-    def rank(self, disease_name: str, *, top: int):
-        output_dir = Path(self.config.results_dir) / "parkinson-disease"
+    def rank(
+        self,
+        disease_name: str,
+        *,
+        top_n: int | None = None,
+        output_dir: Path | None = None,
+    ):
+        output_dir = (output_dir or Path(self.config.results_dir)) / "parkinson-disease"
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "candidates.json").write_text("{}\n")
         (output_dir / "report.md").write_text("# Report\n")
@@ -47,6 +54,20 @@ class FakeOrchestrator:
         )
 
 
+class FailingOrchestrator:
+    def __init__(self, *, config):
+        self.config = config
+
+    def rank(
+        self,
+        disease_name: str,
+        *,
+        top_n: int | None = None,
+        output_dir: Path | None = None,
+    ):
+        raise DiseaseResolutionError("Disease could not be resolved.")
+
+
 def test_rank_command_writes_expected_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "MoleculeRankerOrchestrator", FakeOrchestrator)
     runner = CliRunner()
@@ -69,3 +90,24 @@ def test_rank_command_writes_expected_outputs(tmp_path, monkeypatch):
     assert (output_dir / "candidates.json").exists()
     assert (output_dir / "report.md").exists()
     assert (output_dir / "trace.json").exists()
+
+
+def test_rank_command_surfaces_pipeline_failures(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "MoleculeRankerOrchestrator", FailingOrchestrator)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "rank",
+            "Unknown disease",
+            "--top",
+            "1",
+            "--results-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Ranking failed: Disease could not be resolved." in result.stderr
+    assert not (tmp_path / "unknown-disease" / "report.md").exists()

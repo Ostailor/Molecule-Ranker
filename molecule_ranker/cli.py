@@ -7,8 +7,25 @@ import typer
 
 from molecule_ranker import __version__
 from molecule_ranker.config import RankerConfig
+from molecule_ranker.data_sources.errors import (
+    DiseaseResolutionError,
+    EvidenceRetrievalError,
+    ExternalDataUnavailableError,
+    MoleculeRetrievalError,
+    NoCandidatesFoundError,
+    TargetDiscoveryError,
+)
 from molecule_ranker.orchestrator import MoleculeRankerOrchestrator
 from molecule_ranker.utils import slugify
+
+PIPELINE_ERRORS = (
+    DiseaseResolutionError,
+    TargetDiscoveryError,
+    MoleculeRetrievalError,
+    EvidenceRetrievalError,
+    NoCandidatesFoundError,
+    ExternalDataUnavailableError,
+)
 
 app = typer.Typer(
     help="Rank existing molecules for disease research hypotheses using transparent evidence.",
@@ -41,7 +58,15 @@ def rank(
 ) -> None:
     """Run the V0.0 existing-molecule ranking pipeline."""
     config = RankerConfig(results_dir=results_root, default_top=top)
-    result = MoleculeRankerOrchestrator(config=config).rank(disease_name, top=top)
+    try:
+        result = MoleculeRankerOrchestrator(config=config).rank(
+            disease_name,
+            top_n=top,
+            output_dir=results_root,
+        )
+    except PIPELINE_ERRORS as exc:
+        typer.echo(f"Ranking failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     output_dir = results_root / slugify(result.disease.canonical_name)
     typer.echo(f"Wrote {len(result.candidates)} candidates to {output_dir}")
 
