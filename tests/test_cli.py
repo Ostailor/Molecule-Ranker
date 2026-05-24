@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import click
 import pytest
+from typer.main import get_command
 from typer.testing import CliRunner
 
 import molecule_ranker.cli as cli
@@ -114,15 +116,27 @@ def test_help_commands_work():
 
     assert root.exit_code == 0
     assert rank.exit_code == 0
-    assert "--fixture-mode" not in rank.stdout
-    assert "--mock-mode" not in rank.stdout
-    assert "--fallback" not in rank.stdout
-    assert "--output-dir" in rank.stdout
-    assert "--json" in rank.stdout
-    assert "--verbose" in rank.stdout
-    assert "--timeout" in rank.stdout
-    assert "--max-targets" in rank.stdout
-    assert "--max-molecules-per-ta" in rank.stdout
+    command_group = get_command(app)
+    assert isinstance(command_group, click.Group)
+    command = command_group.commands["rank"]
+    options = {
+        option
+        for parameter in command.params
+        for option in getattr(parameter, "opts", [])
+        if option.startswith("--")
+    }
+    assert "--fixture-mode" not in options
+    assert "--mock-mode" not in options
+    assert "--fallback" not in options
+    assert {
+        "--top",
+        "--output-dir",
+        "--json",
+        "--verbose",
+        "--timeout",
+        "--max-targets",
+        "--max-molecules-per-target",
+    } <= options
 
 
 def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_path, monkeypatch):
