@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
@@ -50,7 +52,17 @@ def _candidate(
     )
 
 
-def _mechanism_evidence(record_id: str, target: str, confidence: float = 0.8) -> EvidenceItem:
+def _mechanism_evidence(
+    record_id: str,
+    target: str,
+    confidence: float = 0.8,
+    *,
+    action_type: str = "INHIBITOR",
+    mapping_confidence: float | None = None,
+) -> EvidenceItem:
+    metadata: dict[str, Any] = {"target": target, "action_type": action_type}
+    if mapping_confidence is not None:
+        metadata["target_mapping_confidence"] = mapping_confidence
     return EvidenceItem(
         source="ChEMBL",
         source_record_id=record_id,
@@ -58,7 +70,37 @@ def _mechanism_evidence(record_id: str, target: str, confidence: float = 0.8) ->
         evidence_type="mechanism",
         summary=f"Mocked mechanism evidence for {target}.",
         confidence=confidence,
-        metadata={"target": target, "action_type": "INHIBITOR"},
+        metadata=metadata,
+    )
+
+
+def _activity_evidence(
+    record_id: str,
+    *,
+    pchembl_value: float | None = 8.0,
+    assay_confidence: float | None = 8.0,
+    mapping_confidence: float | None = 0.9,
+    confidence: float = 0.8,
+) -> EvidenceItem:
+    metadata = {
+        "standard_type": "IC50",
+        "standard_value": 12.0,
+        "standard_units": "nM",
+    }
+    if pchembl_value is not None:
+        metadata["pchembl_value"] = pchembl_value
+    if assay_confidence is not None:
+        metadata["assay_confidence_score"] = assay_confidence
+    if mapping_confidence is not None:
+        metadata["target_mapping_confidence"] = mapping_confidence
+    return EvidenceItem(
+        source="ChEMBL",
+        source_record_id=record_id,
+        title="Activity record",
+        evidence_type="activity",
+        summary="Mocked ChEMBL activity evidence.",
+        confidence=confidence,
+        metadata=metadata,
     )
 
 
@@ -97,7 +139,7 @@ def test_scoring_formula_uses_real_retrieved_evidence_components():
     assert breakdown.mechanism_plausibility == pytest.approx(0.8)
     assert breakdown.clinical_precedence == pytest.approx(0.6)
     assert breakdown.safety_prior == pytest.approx(0.5)
-    assert breakdown.data_quality == pytest.approx(0.8)
+    assert breakdown.data_quality == pytest.approx(0.71)
     assert breakdown.novelty_or_repurposing_value == pytest.approx(0.6)
     expected = (
         0.25 * 0.8
@@ -105,7 +147,7 @@ def test_scoring_formula_uses_real_retrieved_evidence_components():
         + 0.20 * 0.8
         + 0.10 * 0.6
         + 0.10 * 0.5
-        + 0.10 * 0.8
+        + 0.10 * 0.71
         + 0.05 * 0.6
     )
     assert breakdown.final_score == pytest.approx(round(expected, 3))
@@ -161,6 +203,188 @@ def test_scoring_adds_warnings_for_missing_evidence_dimensions():
     assert "missing mechanism evidence" in warning_text
     assert "missing development status" in warning_text
     assert "sparse identifiers" in warning_text
+
+
+def test_scoring_uses_activity_indication_and_warning_evidence_dimensions():
+    targets = [_target("LRRK2", 0.9)]
+    candidate = _candidate(
+        name="Richer evidence",
+        known_targets=["LRRK2"],
+        development_status=None,
+        mechanism_of_action="LRRK2 inhibitor",
+        evidence=[
+            _mechanism_evidence("mec-1", "LRRK2", 0.8),
+            EvidenceItem(
+                source="ChEMBL",
+                source_record_id="act-1",
+                title="Potent activity",
+                evidence_type="activity",
+                summary="Activity record with pChEMBL value.",
+                confidence=0.9,
+                metadata={"pchembl_value": 8.0, "standard_type": "IC50"},
+            ),
+            EvidenceItem(
+                source="ChEMBL",
+                source_record_id="ind-1",
+                title="Clinical indication",
+                evidence_type="indication",
+                summary="Indication record.",
+                confidence=0.8,
+                metadata={"max_phase_for_ind": 3, "indication": "Disease"},
+            ),
+            EvidenceItem(
+                source="ChEMBL",
+                source_record_id="warn-1",
+                title="Drug warning",
+                evidence_type="safety_warning",
+                summary="Black box warning.",
+                confidence=0.9,
+                metadata={"warning_type": "Black Box Warning", "warning_class": "boxed_warning"},
+            ),
+        ],
+        identifiers={"chembl": "CHEMBL1", "pubchem_cid": "123", "inchikey": "KEY"},
+    )
+
+    scored = TransparentEvidenceScorer().score([candidate], targets, top=1)[0]
+
+    assert scored.score_breakdown is not None
+    breakdown = scored.score_breakdown
+    assert breakdown.molecule_target_evidence > 0.85
+    assert breakdown.clinical_precedence == pytest.approx(0.8)
+    assert breakdown.safety_prior < 0.5
+    assert any("warning" in warning.lower() for warning in scored.warnings)
+
+
+def test_activity_quality_increases_molecule_target_evidence():
+    targets = [_target("LRRK2", 0.8)]
+    mechanism_only = _candidate(
+        name="Mechanism only",
+        known_targets=["LRRK2"],
+        development_status="phase 1",
+        mechanism_of_action="LRRK2 inhibitor",
+        evidence=[_mechanism_evidence("mec-1", "LRRK2", confidence=0.55)],
+        identifiers={"chembl": "CHEMBL_MECH"},
+    )
+    with_activity = _candidate(
+        name="Mechanism plus activity",
+        known_targets=["LRRK2"],
+        development_status="phase 1",
+        mechanism_of_action="LRRK2 inhibitor",
+        evidence=[
+            _mechanism_evidence("mec-1", "LRRK2", confidence=0.55),
+            _activity_evidence(
+                "act-1",
+                pchembl_value=8.4,
+                assay_confidence=9,
+                mapping_confidence=0.95,
+                confidence=0.75,
+            ),
+        ],
+        identifiers={"chembl": "CHEMBL_ACT"},
+    )
+
+    scored = TransparentEvidenceScorer().score([mechanism_only, with_activity], targets, top=2)
+    by_name = {candidate.name: candidate for candidate in scored}
+
+    mechanism_score = by_name["Mechanism only"].score_breakdown
+    activity_score = by_name["Mechanism plus activity"].score_breakdown
+    assert mechanism_score is not None
+    assert activity_score is not None
+    assert activity_score.molecule_target_evidence > mechanism_score.molecule_target_evidence
+    assert activity_score.mechanism_plausibility >= mechanism_score.mechanism_plausibility
+    assert "pchembl" in activity_score.explanation.lower()
+    assert "mapping confidence" in activity_score.explanation.lower()
+
+
+def test_indication_overlap_lowers_novelty_relative_to_repurposing_candidate():
+    targets = [_target("LRRK2", 0.8)]
+    known_for_query = _candidate(
+        name="Known indication",
+        known_targets=["LRRK2"],
+        development_status="approved",
+        mechanism_of_action="LRRK2 inhibitor",
+        evidence=[
+            _mechanism_evidence("mec-known", "LRRK2"),
+            EvidenceItem(
+                source="ChEMBL",
+                source_record_id="ind-known",
+                title="Known indication",
+                evidence_type="indication",
+                summary="Retrieved indication overlaps the queried disease.",
+                confidence=0.8,
+                metadata={"indication": "Parkinson disease", "query_disease_match": True},
+            ),
+        ],
+        identifiers={"chembl": "CHEMBL_KNOWN"},
+    )
+    repurposing = _candidate(
+        name="Repurposing candidate",
+        known_targets=["LRRK2"],
+        development_status="approved",
+        mechanism_of_action="LRRK2 inhibitor",
+        evidence=[
+            _mechanism_evidence("mec-repurpose", "LRRK2"),
+            EvidenceItem(
+                source="ChEMBL",
+                source_record_id="ind-other",
+                title="Other indication",
+                evidence_type="indication",
+                summary="Retrieved indication is for another disease.",
+                confidence=0.8,
+                metadata={"indication": "Other disease", "query_disease_match": False},
+            ),
+        ],
+        identifiers={"chembl": "CHEMBL_REPURPOSE"},
+    )
+
+    scored = TransparentEvidenceScorer().score([known_for_query, repurposing], targets, top=2)
+    by_name = {candidate.name: candidate for candidate in scored}
+
+    known_breakdown = by_name["Known indication"].score_breakdown
+    repurpose_breakdown = by_name["Repurposing candidate"].score_breakdown
+    assert known_breakdown is not None
+    assert repurpose_breakdown is not None
+    assert known_breakdown.novelty_or_repurposing_value < (
+        repurpose_breakdown.novelty_or_repurposing_value
+    )
+    assert "indication overlap" in known_breakdown.explanation.lower()
+
+
+def test_missing_required_evidence_keeps_confidence_low_and_explanation_specific():
+    candidate = _candidate(
+        name="Sparse annotation",
+        known_targets=[],
+        development_status=None,
+        mechanism_of_action=None,
+        evidence=[_annotation_evidence("cid-only", 0.4)],
+        identifiers={},
+    )
+
+    scored = TransparentEvidenceScorer().score([candidate], [_target("LRRK2", 0.8)], top=1)[0]
+
+    assert scored.score_breakdown is not None
+    assert scored.score_breakdown.confidence < 0.35
+    assert scored.score_breakdown.molecule_target_evidence == 0.0
+    explanation = scored.score_breakdown.explanation.lower()
+    assert "missing molecule-target evidence" in explanation
+    assert "chemical annotation" in explanation
+
+
+def test_scoring_lack_of_warning_data_does_not_increase_safety_prior():
+    targets = [_target("LRRK2", 0.9)]
+    candidate = _candidate(
+        name="No warning data",
+        known_targets=["LRRK2"],
+        development_status="approved",
+        mechanism_of_action="LRRK2 inhibitor",
+        evidence=[_mechanism_evidence("mec-1", "LRRK2", 0.8)],
+    )
+
+    scored = TransparentEvidenceScorer().score([candidate], targets, top=1)[0]
+
+    assert scored.score_breakdown is not None
+    assert scored.score_breakdown.safety_prior == pytest.approx(0.8)
+    assert not any("warning evidence lowers" in warning.lower() for warning in scored.warnings)
 
 
 def test_scoring_rejects_candidates_with_no_real_evidence():

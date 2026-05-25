@@ -32,8 +32,16 @@ class DiseaseResolverAgent(BaseAgent):
 
     def trace_metadata(self, context: PipelineContext) -> dict[str, object]:
         identifiers = context.disease.identifiers if context.disease else {}
+        resolution_metadata = dict(
+            getattr(self._data_source, "last_resolution_metadata", {}) or {}
+        )
         return {
             "source": context.config.get(f"{self.name}.source"),
             "canonical_name": context.disease.canonical_name if context.disease else None,
             "identifiers": identifiers,
+            "search_hit_count": resolution_metadata.get("search_hit_count"),
+            "selected_disease_id": resolution_metadata.get("selected_disease_id"),
+            "selected_disease_name": resolution_metadata.get("selected_disease_name"),
+            "match_reason": resolution_metadata.get("match_reason"),
+            "ambiguity": resolution_metadata.get("ambiguity"),
         }

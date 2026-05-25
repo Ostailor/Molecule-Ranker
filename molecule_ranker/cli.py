@@ -51,6 +51,38 @@ def version() -> None:
 
 
 @app.command()
+def health(
+    timeout: Annotated[
+        float,
+        typer.Option(
+            "--timeout",
+            min=0.5,
+            help="Short request timeout in seconds for public adapter health checks.",
+        ),
+    ] = 10.0,
+) -> None:
+    """Check public biomedical adapter reachability."""
+    adapters = [
+        OpenTargetsAdapter(timeout_seconds=timeout),
+        ChEMBLAdapter(timeout_seconds=timeout, max_retries=0, retry_delay_seconds=0),
+        PubChemAdapter(timeout_seconds=timeout),
+    ]
+    statuses = [adapter.health_check(timeout_seconds=timeout) for adapter in adapters]
+
+    typer.echo("Source\tStatus\tLatency\tEndpoint\tError")
+    for status in statuses:
+        state = "OK" if status.ok else "FAIL"
+        latency = f"{status.latency_ms:.1f} ms" if status.latency_ms is not None else "n/a"
+        error = status.error or ""
+        typer.echo(
+            f"{status.source_name}\t{state}\t{latency}\t{status.endpoint}\t{error}"
+        )
+
+    if not all(status.ok for status in statuses):
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def rank(
     disease_name: Annotated[str, typer.Argument(help="Disease name to resolve and rank.")],
     top: Annotated[int, typer.Option("--top", min=1, help="Number of candidates to retain.")] = 20,
@@ -77,6 +109,28 @@ def rank(
             help="Request timeout in seconds for public biomedical data sources.",
         ),
     ] = 20.0,
+    use_cache: Annotated[
+        bool,
+        typer.Option(
+            "--use-cache",
+            help=(
+                "Use cached-real-data fallback when live requests fail. "
+                "Default writes successful live responses but does not read cache."
+            ),
+        ),
+    ] = False,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Bypass cache reads and writes for this run."),
+    ] = False,
+    cache_dir: Annotated[
+        Path,
+        typer.Option("--cache-dir", help="Directory for successful real API response cache."),
+    ] = Path(".cache/molecule-ranker"),
+    cache_ttl_hours: Annotated[
+        int,
+        typer.Option("--cache-ttl-hours", min=1, help="Cached real response TTL in hours."),
+    ] = 24,
     max_targets: Annotated[
         int | None,
         typer.Option(
@@ -93,35 +147,93 @@ def rank(
             help="Optional molecule limit applied per target during real molecule retrieval.",
         ),
     ] = None,
+    max_activity_records_per_target: Annotated[
+        int | None,
+        typer.Option(
+            "--max-activity-records-per-target",
+            min=1,
+            help="Optional ChEMBL activity-record limit per mapped target.",
+        ),
+    ] = None,
+    max_indications_per_molecule: Annotated[
+        int,
+        typer.Option(
+            "--max-indications-per-molecule",
+            min=1,
+            help="Maximum ChEMBL indication records retained per molecule.",
+        ),
+    ] = 20,
+    max_warnings_per_molecule: Annotated[
+        int,
+        typer.Option(
+            "--max-warnings-per-molecule",
+            min=1,
+            help="Maximum ChEMBL warning records retained per molecule.",
+        ),
+    ] = 20,
+    max_retries: Annotated[
+        int,
+        typer.Option(
+            "--max-retries",
+            min=0,
+            help="Maximum retries for transient 429/5xx responses.",
+        ),
+    ] = 3,
+    retry_backoff_seconds: Annotated[
+        float,
+        typer.Option(
+            "--retry-backoff-seconds",
+            min=0.0,
+            help="Initial exponential backoff delay for transient API failures.",
+        ),
+    ] = 0.5,
+    strict_enrichment: Annotated[
+        bool,
+        typer.Option(
+            "--strict-enrichment",
+            help="Record strict enrichment intent in run config for future adapter policy.",
+        ),
+    ] = False,
 ) -> None:
-    """Run the V0.0 existing-molecule ranking pipeline."""
-    config = RankerConfig(results_dir=output_dir, default_top=top)
-    open_targets = OpenTargetsAdapter(timeout_seconds=timeout)
-    runtime_config: dict[str, int] = {}
-    if max_targets is not None:
-        runtime_config["target_limit"] = max_targets
-    if max_molecules_per_target is not None:
-        runtime_config["limit_per_target"] = max_molecules_per_target
+    """Run the V0.1 existing-molecule ranking pipeline."""
+    defaults = RankerConfig()
+    config = RankerConfig(
+        results_dir=output_dir,
+        cache_dir=cache_dir,
+        default_top=top,
+        use_cache=not no_cache,
+        allow_cached_real_data=use_cache and not no_cache,
+        cache_ttl_seconds=cache_ttl_hours * 60 * 60,
+        default_target_limit=max_targets or defaults.default_target_limit,
+        target_source_limit=defaults.target_source_limit,
+        max_molecules_per_target=(
+            max_molecules_per_target or defaults.max_molecules_per_target
+        ),
+        max_activity_records_per_target=(
+            max_activity_records_per_target or defaults.max_activity_records_per_target
+        ),
+        max_indications_per_molecule=max_indications_per_molecule,
+        max_warnings_per_molecule=max_warnings_per_molecule,
+        request_timeout_seconds=timeout,
+        max_retries=max_retries,
+        retry_backoff_seconds=retry_backoff_seconds,
+        strict_enrichment=strict_enrichment,
+    )
 
     try:
         result = MoleculeRankerOrchestrator(
             config=config,
-            disease_source=open_targets,
-            target_source=open_targets,
-            molecule_source=ChEMBLAdapter(
-                timeout_seconds=timeout,
-                max_retries=5,
-                retry_delay_seconds=1.0,
-            ),
-            molecule_annotation_source=PubChemAdapter(timeout_seconds=timeout),
         ).rank(
             disease_name,
             top_n=top,
             output_dir=output_dir,
-            config=runtime_config,
         )
     except PIPELINE_ERRORS as exc:
         typer.echo(f"Error: {exc.__class__.__name__}", err=True)
+        if isinstance(exc, DiseaseResolutionError) and "ambiguous" in str(exc).lower():
+            typer.echo(str(exc), err=True)
+            typer.echo("No report was generated.", err=True)
+            raise typer.Exit(code=1) from exc
         typer.echo(str(exc), err=True)
         typer.echo("No report was generated.", err=True)
         raise typer.Exit(code=1) from exc

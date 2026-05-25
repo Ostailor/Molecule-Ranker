@@ -30,7 +30,16 @@ def _evidence(source: str, record_id: str, evidence_type: str) -> EvidenceItem:
         summary=f"Retrieved {source} evidence.",
         confidence=0.8,
         retrieval_timestamp=RETRIEVED_AT,
-        metadata={"query": "Parkinson disease"},
+        metadata={
+            "query": "Parkinson disease",
+            "response_provenance": {
+                "mode": "cached-real-data",
+                "cache_key": "cache-test-key",
+                "retrieved_at": RETRIEVED_AT.isoformat(),
+                "source": source,
+                "endpoint": f"https://example.org/{record_id}",
+            },
+        },
     )
 
 
@@ -45,9 +54,17 @@ def _scored_context(tmp_path) -> PipelineContext:
     target = Target(
         symbol="MAOB",
         name="Monoamine oxidase B",
+        identifiers={"open_targets": "ENSG00000000001", "ensembl": "ENSG00000000001"},
         disease_relevance_score=0.8,
         evidence=[_evidence("Open Targets", "MONDO_0005180:ENSG1", "target_disease")],
         mechanism="Retrieved target mechanism.",
+        metadata={
+            "chembl_target_mapping": {
+                "chembl_target_id": "CHEMBL_T_MAOB",
+                "mapping_method": "uniprot_accession",
+                "confidence": 0.95,
+            }
+        },
     )
     breakdown = ScoreBreakdown(
         disease_target_relevance=0.8,
@@ -65,13 +82,83 @@ def _scored_context(tmp_path) -> PipelineContext:
         name="Evidence-backed candidate",
         molecule_type="small_molecule",
         identifiers={"chembl": "CHEMBL_TEST"},
+        chemical_metadata={
+            "inchikey": "TEST-INCHIKEY",
+            "canonical_smiles": "CCO",
+        },
         known_targets=["MAOB"],
         development_status="approved",
         mechanism_of_action="MAOB inhibitor",
-        evidence=[_evidence("ChEMBL", "mec-1", "mechanism")],
+        evidence=[
+            _evidence("ChEMBL", "mec-1", "mechanism"),
+            EvidenceItem(
+                source="ChEMBL",
+                source_record_id="act-1",
+                title="ChEMBL activity",
+                evidence_type="activity",
+                summary="ChEMBL reports IC50 activity.",
+                confidence=0.85,
+                retrieval_timestamp=RETRIEVED_AT,
+                metadata={
+                    "standard_type": "IC50",
+                    "standard_value": 12.5,
+                    "standard_units": "nM",
+                    "pchembl_value": 8.1,
+                    "target_chembl_id": "CHEMBL_T_MAOB",
+                    "mapping_confidence": 0.95,
+                    "response_provenance": {
+                        "mode": "live",
+                        "endpoint": "https://example.org/activity",
+                    },
+                },
+            ),
+            EvidenceItem(
+                source="ChEMBL",
+                source_record_id="ind-1",
+                title="ChEMBL indication",
+                evidence_type="indication",
+                summary="ChEMBL lists Parkinson Disease as an indication record.",
+                confidence=0.7,
+                retrieval_timestamp=RETRIEVED_AT,
+                metadata={
+                    "indication": "Parkinson Disease",
+                    "mesh_id": "D010300",
+                    "max_phase_for_ind": 3.0,
+                    "response_provenance": {
+                        "mode": "live",
+                        "endpoint": "https://example.org/ind-1",
+                    },
+                },
+            ),
+            EvidenceItem(
+                source="ChEMBL",
+                source_record_id="warn-1",
+                title="ChEMBL warning",
+                evidence_type="safety_warning",
+                summary="Black box warning.",
+                confidence=0.8,
+                retrieval_timestamp=RETRIEVED_AT,
+                metadata={
+                    "warning_type": "Black Box Warning",
+                    "country": "US",
+                    "year": 2020,
+                    "warning_class": "boxed_warning",
+                    "response_provenance": {
+                        "mode": "live",
+                        "endpoint": "https://example.org/warn-1",
+                    },
+                },
+            ),
+        ],
         score=0.835,
         score_breakdown=breakdown,
-        warnings=["Scores are heuristic and require experimental validation."],
+        warnings=[
+            "Scores are heuristic and require experimental validation.",
+            (
+                "Low-confidence normalized-name-only deduplication used; "
+                "stable chemistry identifiers were unavailable."
+            ),
+        ],
     )
     return PipelineContext(
         disease_input="Parkinson disease",
@@ -87,7 +174,15 @@ def _scored_context(tmp_path) -> PipelineContext:
                 metadata={},
             )
         ],
-        config={"results_dir": str(tmp_path)},
+        config={
+            "results_dir": str(tmp_path),
+            "ranker_config": {
+                "cache_dir": ".cache/molecule-ranker",
+                "use_cache": True,
+                "allow_cached_real_data": True,
+                "request_timeout_seconds": 20,
+            },
+        },
     )
 
 
@@ -117,16 +212,54 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert "# Molecule Ranking Report: Parkinson disease" in report
     assert "## Research-use disclaimer" in report
     assert "## Data provenance" in report
+    assert "## Data Sources and Retrieval" in report
+    assert "Open Targets endpoint: https://example.org/MONDO_0005180:ENSG1" in report
+    assert "ChEMBL endpoint: https://example.org/mec-1" in report
+    assert "PubChem endpoint: unavailable" in report
+    assert "Cache usage: enabled; cached-real-data fallback allowed" in report
+    assert "Source versions/status: unavailable" in report
+    assert "## Disease Resolution" in report
+    assert "Selected disease entity: Parkinson disease" in report
+    assert "Match reason: unavailable" in report
+    assert "Ambiguity handling result: unavailable" in report
+    assert "## Target Mapping" in report
+    assert "Open Targets ID: ENSG00000000001" in report
+    assert "ChEMBL target mapping: CHEMBL_T_MAOB" in report
+    assert "Mapping method: uniprot_accession" in report
+    assert "Mapping confidence: 0.950" in report
+    assert "Molecules found: yes" in report
+    assert "## Evidence Coverage" in report
+    assert "Disease-target evidence count: 1" in report
+    assert "Mechanism evidence count: 1" in report
+    assert "Activity evidence count: 1" in report
+    assert "Indication evidence count: 1" in report
+    assert "Safety warning evidence count: 1" in report
+    assert "Chemical annotation count: 0" in report
+    assert "Molecule-target evidence: 2" in report
+    assert "Activity evidence summary:" in report
+    assert "IC50=12.5 nM; pChEMBL=8.1" in report
+    assert "Indication evidence summary:" in report
+    assert "Safety warnings:" in report
+    assert "Chemical identifiers:" in report
+    assert "inchikey: TEST-INCHIKEY" in report
+    assert "Deduplication metadata:" in report
     assert "MONDO_0005180" in report
     assert "Open Targets" in report
     assert "ChEMBL" in report
     assert "2026-01-02T03:04:05+00:00" in report
     assert "## Ranked Candidates" in report
     assert "| Disease-target relevance | 0.800 |" in report
+    assert "Known indications and warnings" in report
+    assert "Parkinson Disease" in report
+    assert "Black Box Warning" in report
+    assert "record_id=warn-1" in report
     assert "## Targets Considered" in report
     assert "## Pipeline Trace" in report
     assert "ReportWriterAgent" in report
-    assert "Novel molecule generation is not implemented in V0.0." in report
+    assert "Novel molecule generation is not implemented in V0.1." in report
+    assert "Record-level evidence provenance" in report
+    assert "response_mode=cached-real-data" in report
+    assert "cache_key=cache-test-key" in report
     assert "fixture" not in report.lower()
 
 

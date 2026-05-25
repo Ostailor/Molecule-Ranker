@@ -1,7 +1,7 @@
 # molecule-ranker
 
 `molecule-ranker` is an agent-first drug discovery research prototype. Given a
-disease name, V0.0 resolves the disease through public biomedical data sources,
+disease name, V0.1 resolves the disease through public biomedical data sources,
 discovers evidence-backed targets, retrieves existing molecules linked to those
 targets, and ranks the molecules as transparent research hypotheses.
 
@@ -9,18 +9,21 @@ The app does not discover cures, does not provide medical advice, and does not
 provide dosage or patient treatment instructions. Ranked molecules are candidate
 hypotheses for therapeutic relevance and require experimental validation.
 
-## V0.0 Scope
+## V0.1 Scope
 
-V0.0 implements existing-molecule ranking only:
+V0.1 implements existing-molecule ranking only:
 
-- Resolve disease names to public biomedical disease entities.
-- Retrieve real disease-associated targets.
-- Retrieve existing molecules associated with those targets.
+- Resolve disease names to public biomedical disease entities with ambiguity handling.
+- Retrieve real disease-associated targets with richer target identifiers and metadata.
+- Retrieve existing molecules associated with those targets from ChEMBL mechanism,
+  activity, assay, indication, and warning records where available.
 - Score candidates with a transparent component breakdown.
 - Write `candidates.json`, `report.md`, and `trace.json`.
 - Include a `NovelMoleculeAgent` stub that does not generate molecules.
+- Cache real public API responses with source provenance and TTL.
+- Provide adapter health checks and opt-in live smoke tests.
 
-V0.0 does not:
+V0.1 does not:
 
 - Generate novel molecules.
 - Create placeholder molecules.
@@ -63,10 +66,54 @@ uv run molecule-ranker rank "Alzheimer disease" \
   --top 10 \
   --output-dir results \
   --timeout 20 \
+  --use-cache \
+  --cache-dir .cache/molecule-ranker \
+  --cache-ttl-hours 24 \
   --max-targets 25 \
   --max-molecules-per-target 10 \
+  --max-activity-records-per-target 10 \
+  --max-indications-per-molecule 20 \
+  --max-warnings-per-molecule 20 \
+  --max-retries 3 \
+  --retry-backoff-seconds 0.5 \
   --verbose
 ```
+
+By default, ranking requests use the live public APIs first and write successful
+real JSON responses to the configured cache directory. Cached responses are not
+read as an offline substitute unless `--use-cache` is explicitly passed; that
+mode is a cached-real-data fallback for previously retrieved successful
+responses. Use `--no-cache` to bypass cache reads and writes.
+
+Important V0.1 configuration options map to typed `RankerConfig` fields:
+
+- `results_dir`, `cache_dir`: output and successful-real-response cache locations.
+- `use_cache`: enables cache writes; disabled by `--no-cache`.
+- `allow_cached_real_data`: enables cached-real-data fallback; enabled by `--use-cache`.
+- `cache_ttl_seconds`: TTL for cached successful real responses.
+- `default_top`: ranked candidates retained.
+- `default_target_limit`: evidence-backed targets retained after target discovery.
+- `target_source_limit`: Open Targets source retrieval size before local filtering.
+- `max_molecules_per_target`: ChEMBL mechanism/molecule records retained per target.
+- `max_activity_records_per_target`: ChEMBL activity records retained per target.
+- `max_indications_per_molecule`, `max_warnings_per_molecule`: ChEMBL clinical and warning context retained per molecule.
+- `request_timeout_seconds`, `max_retries`, `retry_backoff_seconds`: live API request behavior.
+- `strict_enrichment`: records strict enrichment intent for runs that should treat optional enrichment more conservatively.
+
+The effective config is serialized into `trace.json` so a run can be audited
+with the limits, cache policy, and request policy that produced it. Defaults are
+chosen for a first real run and do not reduce target discovery to a single
+target.
+
+Check live public adapter reachability without running a ranking job:
+
+```bash
+uv run molecule-ranker health
+```
+
+The health command probes Open Targets, ChEMBL, and PubChem with short request
+timeouts and prints source, status, latency, endpoint, and any error. Health
+checks are only run when this command is requested.
 
 JSON summary output:
 
@@ -103,8 +150,8 @@ If real data cannot be retrieved, the app fails instead of inventing results.
 Production adapters are isolated under `molecule_ranker/data_sources/`:
 
 - Open Targets: disease resolution and disease-target association evidence.
-- ChEMBL: target-linked existing molecules, mechanisms, and development status
-  where available.
+- ChEMBL: target-linked existing molecules, mechanisms, activities, assays,
+  indications, drug warnings, and development status where available.
 - PubChem: molecule identifier and chemical metadata enrichment where available.
 
 HTTP requests are made only inside adapter classes. Tests may mock adapter
@@ -137,7 +184,7 @@ Core schemas are Pydantic models:
 
 ## Scoring Formula
 
-V0.0 uses a deterministic transparent heuristic over retrieved evidence:
+V0.1 uses a deterministic transparent heuristic over retrieved evidence:
 
 ```text
 final_score =
@@ -151,9 +198,10 @@ final_score =
 ```
 
 Every component is bounded between 0 and 1. Components are derived only from
-retrieved target scores, molecule evidence, mechanisms, development status,
-source diversity, identifiers, and provenance. Scores are prioritization aids,
-not validated predictions of efficacy or safety.
+retrieved target scores, molecule evidence, mechanisms, activity potency, assay
+metadata, indications, warnings, development status, source diversity,
+identifiers, and provenance. Scores are prioritization aids, not validated
+predictions of efficacy or safety.
 
 Every ranked candidate includes:
 
@@ -189,7 +237,7 @@ does not write a normal `report.md` that looks successful.
   guidance is provided.
 - Approved status does not imply safety or relevance for the queried disease.
 - Absence of evidence is not evidence of absence.
-- Novel molecule generation is intentionally not implemented in V0.0.
+- Novel molecule generation is intentionally not implemented in V0.1.
 
 ## Roadmap
 
@@ -201,11 +249,36 @@ does not write a normal `report.md` that looks successful.
 
 ## Development
 
-Run tests:
+CI runs the same default checks on pull requests and pushes to `main`:
+
+```bash
+uv sync --all-groups --frozen
+uv run ruff check .
+uv run pyright
+uv run pytest
+```
+
+Run normal unit tests:
 
 ```bash
 uv run pytest
 ```
+
+Normal unit tests use mocked public-source responses and do not require network
+access. Live public API smoke tests live under `tests_live/` and are excluded
+from the default pytest test path.
+
+Run live public API smoke tests explicitly:
+
+```bash
+uv run pytest -m live tests_live/
+```
+
+Live tests are intentionally not deterministic. They depend on current Open
+Targets, ChEMBL, and PubChem availability, rate limits, schemas, and records.
+They assert structural properties only, not exact biomedical targets, molecules,
+or scores. The default GitHub Actions CI does not run live network tests; the
+workflow includes a manual `workflow_dispatch` live smoke job for maintainers.
 
 Run lint:
 

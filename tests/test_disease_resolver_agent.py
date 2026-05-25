@@ -12,6 +12,13 @@ class SuccessfulDiseaseSource:
     source_name = "Open Targets"
 
     def resolve_disease(self, disease_name: str) -> Disease:
+        self.last_resolution_metadata = {
+            "search_hit_count": 3,
+            "selected_disease_id": "MONDO_0005180",
+            "selected_disease_name": "Parkinson disease",
+            "match_reason": "exact_canonical_match",
+            "ambiguity": False,
+        }
         assert disease_name == "Parkinson disease"
         return Disease(
             input_name=disease_name,
@@ -54,6 +61,11 @@ def test_disease_resolver_sets_real_disease_and_trace_metadata():
         "open_targets": "MONDO_0005180",
         "mondo": "MONDO:0005180",
     }
+    assert result.traces[-1].metadata["search_hit_count"] == 3
+    assert result.traces[-1].metadata["selected_disease_id"] == "MONDO_0005180"
+    assert result.traces[-1].metadata["selected_disease_name"] == "Parkinson disease"
+    assert result.traces[-1].metadata["match_reason"] == "exact_canonical_match"
+    assert result.traces[-1].metadata["ambiguity"] is False
 
 
 def test_disease_resolver_raises_when_unresolved_and_does_not_set_disease():

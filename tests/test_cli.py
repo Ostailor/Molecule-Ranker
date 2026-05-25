@@ -17,6 +17,7 @@ from molecule_ranker.data_sources.errors import (
     NoCandidatesFoundError,
     TargetDiscoveryError,
 )
+from molecule_ranker.data_sources.health import AdapterHealthStatus
 from molecule_ranker.schemas import (
     AgentTrace,
     Disease,
@@ -28,9 +29,11 @@ from molecule_ranker.schemas import (
 
 class FakeOrchestrator:
     last_runtime_config: dict[str, int] | None = None
+    last_config = None
 
     def __init__(self, *, config, **kwargs):
         self.config = config
+        FakeOrchestrator.last_config = config
         self.kwargs = kwargs
 
     def rank(
@@ -114,6 +117,7 @@ class FailingOrchestrator:
 
 def setup_function() -> None:
     FakeOrchestrator.last_runtime_config = None
+    FakeOrchestrator.last_config = None
 
 
 def test_help_commands_work():
@@ -124,6 +128,8 @@ def test_help_commands_work():
 
     assert root.exit_code == 0
     assert rank.exit_code == 0
+    health = runner.invoke(app, ["health", "--help"])
+    assert health.exit_code == 0
     command_group = get_command(app)
     assert isinstance(command_group, click.Group)
     command = command_group.commands["rank"]
@@ -142,9 +148,79 @@ def test_help_commands_work():
         "--json",
         "--verbose",
         "--timeout",
+        "--use-cache",
+        "--no-cache",
+        "--cache-dir",
+        "--cache-ttl-hours",
         "--max-targets",
         "--max-molecules-per-target",
+        "--max-activity-records-per-target",
+        "--max-indications-per-molecule",
+        "--max-warnings-per-molecule",
+        "--max-retries",
+        "--retry-backoff-seconds",
+        "--strict-enrichment",
     } <= options
+
+
+class HealthyAdapter:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def health_check(self, *, timeout_seconds: float = 10.0) -> AdapterHealthStatus:
+        return AdapterHealthStatus(
+            source_name="Healthy Source",
+            ok=True,
+            endpoint="https://example.org/healthy",
+            latency_ms=12.3,
+            error=None,
+            metadata={"probe": "mocked", "timeout_seconds": timeout_seconds},
+        )
+
+
+class FailingHealthAdapter:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def health_check(self, *, timeout_seconds: float = 10.0) -> AdapterHealthStatus:
+        return AdapterHealthStatus(
+            source_name="Failing Source",
+            ok=False,
+            endpoint="https://example.org/failing",
+            latency_ms=45.6,
+            error="timeout",
+            metadata={"timeout_seconds": timeout_seconds},
+        )
+
+
+def test_health_command_prints_adapter_statuses(monkeypatch):
+    monkeypatch.setattr(cli, "OpenTargetsAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "ChEMBLAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "PubChemAdapter", HealthyAdapter)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["health", "--timeout", "2"])
+
+    assert result.exit_code == 0
+    assert "Source" in result.stdout
+    assert "Healthy Source" in result.stdout
+    assert "OK" in result.stdout
+    assert "12.3 ms" in result.stdout
+    assert "https://example.org/healthy" in result.stdout
+
+
+def test_health_command_returns_nonzero_when_any_adapter_fails(monkeypatch):
+    monkeypatch.setattr(cli, "OpenTargetsAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "ChEMBLAdapter", FailingHealthAdapter)
+    monkeypatch.setattr(cli, "PubChemAdapter", HealthyAdapter)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["health"])
+
+    assert result.exit_code == 1
+    assert "Failing Source" in result.stdout
+    assert "FAIL" in result.stdout
+    assert "timeout" in result.stdout
 
 
 def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_path, monkeypatch):
@@ -166,6 +242,17 @@ def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_pat
             "3",
             "--max-molecules-per-target",
             "2",
+            "--max-activity-records-per-target",
+            "4",
+            "--max-indications-per-molecule",
+            "5",
+            "--max-warnings-per-molecule",
+            "6",
+            "--max-retries",
+            "7",
+            "--retry-backoff-seconds",
+            "0.25",
+            "--strict-enrichment",
         ],
     )
 
@@ -179,10 +266,17 @@ def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_pat
     assert (output_dir / "candidates.json").exists()
     assert (output_dir / "report.md").exists()
     assert (output_dir / "trace.json").exists()
-    assert FakeOrchestrator.last_runtime_config == {
-        "target_limit": 3,
-        "limit_per_target": 2,
-    }
+    assert FakeOrchestrator.last_runtime_config in ({}, None)
+    assert FakeOrchestrator.last_config is not None
+    assert FakeOrchestrator.last_config.default_target_limit == 3
+    assert FakeOrchestrator.last_config.max_molecules_per_target == 2
+    assert FakeOrchestrator.last_config.max_activity_records_per_target == 4
+    assert FakeOrchestrator.last_config.max_indications_per_molecule == 5
+    assert FakeOrchestrator.last_config.max_warnings_per_molecule == 6
+    assert FakeOrchestrator.last_config.request_timeout_seconds == 5
+    assert FakeOrchestrator.last_config.max_retries == 7
+    assert FakeOrchestrator.last_config.retry_backoff_seconds == 0.25
+    assert FakeOrchestrator.last_config.strict_enrichment is True
 
 
 def test_rank_command_does_not_override_default_target_limit(tmp_path, monkeypatch):
@@ -202,7 +296,10 @@ def test_rank_command_does_not_override_default_target_limit(tmp_path, monkeypat
     )
 
     assert result.exit_code == 0
-    assert FakeOrchestrator.last_runtime_config == {}
+    assert FakeOrchestrator.last_runtime_config in ({}, None)
+    config = FakeOrchestrator.last_config
+    assert config is not None
+    assert config.default_target_limit > 1
 
 
 def test_rank_command_prints_json_summary(tmp_path, monkeypatch):
@@ -293,3 +390,29 @@ def test_rank_command_surfaces_pipeline_failures(tmp_path, monkeypatch, error, l
     assert str(error) in result.stderr
     assert "No report was generated." in result.stderr
     assert not (tmp_path / "unknown-disease" / "report.md").exists()
+
+
+def test_rank_command_prints_clear_ambiguous_disease_message(tmp_path, monkeypatch):
+    class AmbiguousOrchestrator(FailingOrchestrator):
+        error = DiseaseResolutionError(
+            "Disease input was ambiguous. Top matches: Alpha condition (MONDO_1), "
+            "Beta condition (MONDO_2)"
+        )
+
+    monkeypatch.setattr(cli, "MoleculeRankerOrchestrator", AmbiguousOrchestrator)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "rank",
+            "condition",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Disease input was ambiguous. Top matches:" in result.stderr
+    assert "Alpha condition" in result.stderr
+    assert "Beta condition" in result.stderr

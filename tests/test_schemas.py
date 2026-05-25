@@ -57,9 +57,12 @@ def test_core_schema_creation_and_json_serialization():
     target = Target(
         symbol="MAOB",
         name="Monoamine oxidase B",
+        identifiers={"ensembl": "ENSG_TEST", "uniprot": "P27338"},
+        target_class="protein_coding",
         disease_relevance_score=0.8,
         evidence=[_evidence()],
         mechanism="Dopaminergic pathway relevance.",
+        metadata={"tractability": [{"modality": "SM", "value": True}]},
     )
     score = ScoreBreakdown(
         disease_target_relevance=0.8,
@@ -81,6 +84,7 @@ def test_core_schema_creation_and_json_serialization():
         development_status="approved_existing_molecule",
         mechanism_of_action="Selective MAO-B inhibition.",
         evidence=[_evidence()],
+        chemical_metadata={"canonical_smiles": "COC1=CC=CC=C1"},
         score=score.final_score,
         score_breakdown=score,
         warnings=["Requires experimental validation."],
@@ -103,6 +107,9 @@ def test_core_schema_creation_and_json_serialization():
 
     payload = run.model_dump(mode="json")
     assert payload["disease"]["canonical_name"] == "Parkinson disease"
+    assert payload["targets"][0]["identifiers"]["uniprot"] == "P27338"
+    assert payload["targets"][0]["target_class"] == "protein_coding"
+    assert payload["candidates"][0]["chemical_metadata"]["canonical_smiles"] == "COC1=CC=CC=C1"
     assert payload["candidates"][0]["score_breakdown"]["final_score"] == 0.65
     assert '"RankingRun"' not in run.model_dump_json()
 

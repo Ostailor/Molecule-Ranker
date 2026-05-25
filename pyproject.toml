@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "molecule-ranker"
-version = "0.0.0"
+version = "0.1.0"
 description = "Agent-first existing-molecule ranking prototype for biomedical research hypotheses."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,6 +30,10 @@ packages = ["molecule_ranker"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+  "live: live public API smoke tests that are not deterministic",
+  "network: tests that require public network access",
+]
 
 [tool.ruff]
 line-length = 100

@@ -227,6 +227,33 @@ def test_orchestrator_accepts_top_n_output_dir_and_runtime_config(tmp_path):
     assert (tmp_path / "custom-results" / "parkinson-disease" / "report.md").exists()
 
 
+def test_orchestrator_writes_effective_config_to_trace_metadata(tmp_path):
+    orchestrator = MoleculeRankerOrchestrator(
+        config=RankerConfig(
+            results_dir=tmp_path,
+            default_target_limit=7,
+            target_source_limit=35,
+            max_molecules_per_target=4,
+            max_activity_records_per_target=9,
+            allow_cached_real_data=True,
+        ),
+        disease_source=FakeDiseaseSource(),
+        target_source=FakeTargetSource(),
+        molecule_source=FakeMoleculeSource(),
+        molecule_annotation_source=NoOpAnnotationSource(),
+    )
+
+    orchestrator.rank("Parkinson disease", top_n=1)
+
+    trace_payload = json.loads((tmp_path / "parkinson-disease" / "trace.json").read_text())
+    config_payload = trace_payload["config"]
+    assert config_payload["default_target_limit"] == 7
+    assert config_payload["target_source_limit"] == 35
+    assert config_payload["max_molecules_per_target"] == 4
+    assert config_payload["max_activity_records_per_target"] == 9
+    assert config_payload["allow_cached_real_data"] is True
+
+
 def test_disease_resolution_failure_stops_pipeline(tmp_path):
     target_source = FakeTargetSource()
     molecule_source = FakeMoleculeSource()

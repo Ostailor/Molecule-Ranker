@@ -16,6 +16,19 @@ class Disease(BaseModel):
     description: str | None = None
 
 
+class DiseaseMatch(BaseModel):
+    """Candidate disease search match considered during resolution."""
+
+    id: str
+    name: str
+    entity: str
+    score: float | None = None
+    synonyms: list[str] = Field(default_factory=list)
+    description: str | None = None
+    identifiers: dict[str, str] = Field(default_factory=dict)
+    match_reason: str
+
+
 class EvidenceItem(BaseModel):
     """Traceable evidence item from a public biomedical source."""
 
@@ -35,10 +48,15 @@ class Target(BaseModel):
 
     symbol: str
     name: str | None = None
+    identifiers: dict[str, str] = Field(default_factory=dict)
     organism: str = "human"
+    target_class: str | None = None
+    tractability: list[dict[str, Any]] = Field(default_factory=list)
+    safety: list[dict[str, Any]] = Field(default_factory=list)
     disease_relevance_score: float = Field(ge=0.0, le=1.0)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     mechanism: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScoreBreakdown(BaseModel):
@@ -65,6 +83,7 @@ class MoleculeCandidate(BaseModel):
     known_targets: list[str] = Field(default_factory=list)
     development_status: str | None = None
     mechanism_of_action: str | None = None
+    chemical_metadata: dict[str, Any] = Field(default_factory=dict)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     score: float | None = Field(default=None, ge=0.0, le=1.0)
     score_breakdown: ScoreBreakdown | None = None

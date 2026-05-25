@@ -18,7 +18,7 @@ def _disease() -> Disease:
     )
 
 
-def _evidence(source_record_id: str = "MONDO_0005180:ENSG") -> EvidenceItem:
+def _evidence(source_record_id: str | None = "MONDO_0005180:ENSG") -> EvidenceItem:
     return EvidenceItem(
         source="Open Targets",
         source_record_id=source_record_id,
@@ -42,23 +42,37 @@ class SortingTargetSource:
             Target(
                 symbol="LOW",
                 name="Low score target",
+                identifiers={"ensembl": "ENSG_LOW"},
+                target_class="protein_coding",
                 disease_relevance_score=0.2,
                 evidence=[_evidence("low")],
                 mechanism=None,
+                metadata={"association_score": 0.2},
             ),
             Target(
                 symbol="HIGH",
                 name="High score target",
+                identifiers={"ensembl": "ENSG_HIGH"},
+                target_class="protein_coding",
+                tractability=[{"label": "Small molecule"}],
+                safety=[{"event": "warning"}],
                 disease_relevance_score=0.9,
                 evidence=[_evidence("high")],
                 mechanism=None,
+                metadata={
+                    "association_score": 0.9,
+                    "tractability": [{"label": "Small molecule"}],
+                    "safety_liabilities": [{"event": "warning"}],
+                },
             ),
             Target(
                 symbol="MID",
                 name="Middle score target",
+                identifiers={"ensembl": "ENSG_MID"},
                 disease_relevance_score=0.5,
                 evidence=[_evidence("mid")],
                 mechanism=None,
+                metadata={"association_score": 0.5},
             ),
         ]
 
@@ -82,6 +96,26 @@ class NoEvidenceSource:
                 evidence=[],
                 mechanism=None,
             )
+        ]
+
+
+class MixedEvidenceSource:
+    source_name = "Open Targets"
+
+    def discover_targets(self, disease: Disease, *, limit: int = 20) -> list[Target]:
+        return [
+            Target(
+                symbol="GOOD",
+                name="Evidence-backed target",
+                disease_relevance_score=0.8,
+                evidence=[_evidence("good")],
+            ),
+            Target(
+                symbol="BAD",
+                name="Missing record id target",
+                disease_relevance_score=0.9,
+                evidence=[_evidence(None)],
+            ),
         ]
 
 
@@ -112,6 +146,16 @@ def test_target_discovery_sorts_filters_limits_and_traces():
     assert trace.metadata["targets_retrieved"] == 3
     assert trace.metadata["targets_retained"] == 2
     assert trace.metadata["top_target_symbols"] == ["HIGH", "MID"]
+    assert trace.metadata["raw_target_count"] == 3
+    assert trace.metadata["evidence_backed_target_count"] == 3
+    assert trace.metadata["rejected_target_count"] == 0
+    assert set(trace.metadata["metadata_fields_enriched"]) >= {
+        "association_score",
+        "identifiers",
+        "safety",
+        "target_class",
+        "tractability",
+    }
 
 
 def test_target_discovery_requires_resolved_disease():
@@ -139,6 +183,18 @@ def test_target_discovery_rejects_targets_without_evidence():
         TargetDiscoveryAgent(NoEvidenceSource()).run(context)
 
     assert context.traces[-1].warnings
+
+
+def test_target_discovery_rejects_targets_without_source_record_id_but_keeps_valid_targets():
+    context = PipelineContext(disease_input="Parkinson disease", disease=_disease())
+
+    result = TargetDiscoveryAgent(MixedEvidenceSource()).run(context)
+
+    assert [target.symbol for target in result.targets] == ["GOOD"]
+    trace = result.traces[-1]
+    assert trace.metadata["raw_target_count"] == 2
+    assert trace.metadata["evidence_backed_target_count"] == 1
+    assert trace.metadata["rejected_target_count"] == 1
 
 
 def test_target_discovery_propagates_external_unavailability():

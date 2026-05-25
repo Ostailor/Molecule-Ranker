@@ -14,7 +14,7 @@ from molecule_ranker.agents import (
 from molecule_ranker.agents.base import BaseAgent, PipelineContext
 from molecule_ranker.agents.report_writer import DEFAULT_LIMITATIONS
 from molecule_ranker.config import RankerConfig
-from molecule_ranker.data_sources import ChEMBLAdapter, OpenTargetsAdapter
+from molecule_ranker.data_sources import ChEMBLAdapter, OpenTargetsAdapter, PubChemAdapter
 from molecule_ranker.data_sources.base import (
     DiseaseResolverDataSource,
     MoleculeAnnotationDataSource,
@@ -23,6 +23,7 @@ from molecule_ranker.data_sources.base import (
 )
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
 from molecule_ranker.schemas import MoleculeCandidate, RankingRun
+from molecule_ranker.utils.http_cache import HttpResponseCache
 
 
 class MoleculeRankerOrchestrator:
@@ -36,12 +37,40 @@ class MoleculeRankerOrchestrator:
         molecule_annotation_source: MoleculeAnnotationDataSource | None = None,
     ) -> None:
         self.config = config or RankerConfig()
-        open_targets = OpenTargetsAdapter()
+        cache = HttpResponseCache(self.config.cache_dir) if self.config.use_cache else None
+        open_targets = OpenTargetsAdapter(
+            timeout_seconds=self.config.request_timeout_seconds,
+            max_retries=self.config.max_retries,
+            retry_delay_seconds=self.config.retry_backoff_seconds,
+            cache=cache,
+            use_cache=self.config.allow_cached_real_data,
+            cache_ttl_seconds=self.config.cache_ttl_seconds,
+        )
         self.disease_resolver = DiseaseResolverAgent(disease_source or open_targets)
         self.target_discovery = TargetDiscoveryAgent(target_source or open_targets)
         self.molecule_retrieval = MoleculeRetrievalAgent(
-            molecule_source or ChEMBLAdapter(),
-            molecule_annotation_source,
+            molecule_source
+            or ChEMBLAdapter(
+                timeout_seconds=self.config.request_timeout_seconds,
+                max_retries=self.config.max_retries,
+                retry_delay_seconds=self.config.retry_backoff_seconds,
+                cache=cache,
+                use_cache=self.config.allow_cached_real_data,
+                cache_ttl_seconds=self.config.cache_ttl_seconds,
+                max_molecules_per_target=self.config.max_molecules_per_target,
+                max_activity_records_per_target=self.config.max_activity_records_per_target,
+                max_indications_per_molecule=self.config.max_indications_per_molecule,
+                max_warnings_per_molecule=self.config.max_warnings_per_molecule,
+            ),
+            molecule_annotation_source
+            or PubChemAdapter(
+                timeout_seconds=self.config.request_timeout_seconds,
+                max_retries=self.config.max_retries,
+                retry_delay_seconds=self.config.retry_backoff_seconds,
+                cache=cache,
+                use_cache=self.config.allow_cached_real_data,
+                cache_ttl_seconds=self.config.cache_ttl_seconds,
+            ),
         )
         self.novel_molecule = NovelMoleculeAgent()
         self.evidence_scoring = EvidenceScoringAgent()
@@ -70,14 +99,19 @@ class MoleculeRankerOrchestrator:
             raise ValueError("top_n must be at least 1.")
 
         results_dir = output_dir or self.config.results_dir
-        runtime_config: dict[str, Any] = {
-            "top": limit,
-            "results_dir": str(results_dir),
-        }
+        runtime_config: dict[str, Any] = self.config.runtime_agent_config(
+            top=limit,
+            results_dir=results_dir,
+        )
         if config:
             runtime_config.update(config)
             runtime_config["top"] = limit
             runtime_config["results_dir"] = str(results_dir)
+            runtime_config["ranker_config"] = {
+                **self.config.trace_metadata(),
+                "results_dir": str(results_dir),
+                "default_top": limit,
+            }
 
         context = PipelineContext(
             disease_input=disease_input,
