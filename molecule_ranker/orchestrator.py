@@ -129,8 +129,8 @@ class MoleculeRankerOrchestrator:
             self.disease_resolver,
             self.target_discovery,
             self.molecule_retrieval,
-            self.novel_molecule,
             self.evidence_scoring,
+            self.novel_molecule,
             self.report_writer,
         ]
         if self.literature_evidence is not None:
@@ -181,6 +181,7 @@ class MoleculeRankerOrchestrator:
             candidate.name
             for candidate in context.candidates
             if not self._has_real_retrieved_evidence(candidate)
+            and candidate.origin != "generated"
         ]
         if missing_evidence:
             raise NoCandidatesFoundError(
@@ -191,6 +192,7 @@ class MoleculeRankerOrchestrator:
             disease=context.disease,
             targets=context.targets,
             candidates=context.candidates,
+            generated_candidates=context.generated_candidates,
             traces=context.traces,
             limitations=list(context.config.get("limitations", DEFAULT_LIMITATIONS)),
         )

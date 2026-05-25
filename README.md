@@ -1,18 +1,23 @@
 # molecule-ranker
 
 `molecule-ranker` is an agent-first drug discovery research prototype. Given a
-disease name, V0.2 resolves the disease through public biomedical data sources,
+disease name, V0.3 resolves the disease through public biomedical data sources,
 discovers evidence-backed targets, retrieves existing molecules linked to those
-targets, retrieves real literature evidence, and ranks the molecules as
-transparent research hypotheses.
+targets, retrieves real literature evidence, ranks the molecules as transparent
+research hypotheses, and can optionally generate target-conditioned in-silico
+molecule hypotheses from those retrieved structures.
 
-The app does not discover cures, does not provide medical advice, and does not
-provide dosage or patient treatment instructions. Ranked molecules are candidate
-hypotheses for therapeutic relevance and require experimental validation.
+The app does not discover cures, does not claim generated molecules treat or are
+active against a disease, does not provide medical advice, and does not provide
+dosage or patient treatment instructions. Ranked molecules and generated
+structures are research hypotheses that require independent validation.
+Generated molecules are computational hypotheses only: they are not known
+actives, have no direct experimental evidence, and are ranked separately from
+existing evidence-backed molecules unless explicitly requested otherwise.
 
-## V0.2 Scope
+## V0.3 Scope
 
-V0.2 implements existing-molecule ranking only:
+V0.3 implements existing-molecule ranking plus opt-in generated hypotheses:
 
 - Resolve disease names to public biomedical disease entities with ambiguity handling.
 - Retrieve real disease-associated targets with richer target identifiers and metadata.
@@ -26,22 +31,37 @@ V0.2 implements existing-molecule ranking only:
 - Score candidates with a transparent component breakdown. Literature evidence
   is used as a research-prioritization modifier, not as proof of therapeutic
   efficacy and not as a replacement for database evidence.
-- Write `candidates.json`, `report.md`, and `trace.json`.
-- Include a `NovelMoleculeAgent` stub that does not generate molecules.
+- Generate target-conditioned novel candidate structures only when
+  `--enable-generation` is passed or the `molecule-ranker generate` command is
+  used. Generation is disabled by default.
+- Use SELFIES mutation/crossover as the first generation backend over real
+  retrieved seed molecules.
+- Use RDKit for generated-structure validation, canonicalization, descriptors,
+  fingerprints, similarity, and coarse chemistry filters.
+- Rank generated structures separately from evidence-backed molecules.
+- Write `candidates.json`, `generated_candidates.json`,
+  `generation_trace.json`, `report.md`, and `trace.json`.
 - Cache real public API responses with source provenance and TTL.
 - Provide adapter health checks and opt-in live smoke tests.
 
-V0.2 does not:
+V0.3 does not:
 
-- Generate novel molecules.
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
+- Use hardcoded generated molecules.
 - Invent fallback targets, molecules, evidence, citations, or scores.
+- Invent evidence for generated molecules.
 - Use LLMs to invent citations, paper claims, or biomedical relationships.
 - Create fake citations or placeholder papers.
+- Create synthesis protocols, retrosynthesis, synthesis planning, full ADMET,
+  docking, wet-lab, dosage, patient-treatment, or clinical guidance.
 - Store full copyrighted articles.
-- Claim that a molecule cures a disease.
+- Claim that a molecule cures, treats, or is active against a disease.
 - Make patient-specific recommendations.
+
+V0.4 is planned to add stronger ADMET, toxicity, synthesizability, and
+structure-aware filters. V0.3 uses only coarse sanity filters and does not
+provide synthesis instructions.
 
 Unit tests use mocked data only to test behavior deterministically. Production
 code uses real public biomedical data adapters and fails if required data cannot
@@ -64,13 +84,22 @@ uv run molecule-ranker rank --help
 
 ## CLI Usage
 
-Run a ranking job:
+Run normal V0.2-style ranking without generated molecules:
+
+```bash
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --disable-generation
+```
+
+Generation is disabled by default, so the same behavior is used when no
+generation option is supplied:
 
 ```bash
 uv run molecule-ranker rank "Alzheimer disease" --top 10
 ```
 
-Normal V0.2 runs include PubMed literature retrieval by default:
+Normal V0.3 ranking includes PubMed literature retrieval by default:
 
 ```bash
 uv run molecule-ranker rank "Alzheimer disease" \
@@ -96,12 +125,61 @@ uv run molecule-ranker rank "Alzheimer disease" \
   --strict-literature
 ```
 
-Write the normal report files and print a JSON summary with literature counts:
+Write the normal report files and print a JSON summary:
 
 ```bash
 uv run molecule-ranker rank "Alzheimer disease" \
   --top 10 \
   --json
+```
+
+Run ranking with target-conditioned generated molecule hypotheses:
+
+```bash
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --enable-generation \
+  --max-generation-objectives 3 \
+  --generated-per-objective 10 \
+  --max-retained-generated 10 \
+  --generation-random-seed 123
+```
+
+Run the generation-focused command. It still runs disease, target, molecule,
+and literature retrieval first, but focuses the terminal output on generated
+hypotheses:
+
+```bash
+uv run molecule-ranker generate "Alzheimer disease" \
+  --top 10 \
+  --max-retained-generated 25 \
+  --generation-random-seed 123
+```
+
+Print a JSON CLI summary for a run that includes generated molecules. The
+summary includes generated counts and output paths; generated structures are
+written to `generated_candidates.json`.
+
+```bash
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --enable-generation \
+  --max-retained-generated 10 \
+  --json
+```
+
+Inspect the retained generated structures from the generated JSON artifact:
+
+```bash
+jq '.retained_generated_molecules[] | {generated_id, canonical_smiles, inchi_key, generation_score}' \
+  results/alzheimer-disease/generated_candidates.json
+```
+
+Benchmark a generated-molecule artifact with internal V0.3 quality metrics:
+
+```bash
+uv run molecule-ranker benchmark-generation \
+  --input results/alzheimer-disease/generated_candidates.json
 ```
 
 Useful options:
@@ -123,6 +201,15 @@ uv run molecule-ranker rank "Alzheimer disease" \
   --max-papers-per-query 10 \
   --max-targets-for-literature 10 \
   --max-candidates-for-literature 20 \
+  --enable-generation \
+  --generation-method selfies_mutation \
+  --max-seed-molecules 20 \
+  --max-generation-objectives 10 \
+  --generated-per-objective 50 \
+  --max-retained-generated 50 \
+  --generation-random-seed 123 \
+  --include-generated-in-main-ranking \
+  --reject-basic-alerts \
   --ncbi-email researcher@example.org \
   --ncbi-api-key-env NCBI_API_KEY \
   --max-retries 3 \
@@ -136,7 +223,7 @@ read as an offline substitute unless `--use-cache` is explicitly passed; that
 mode is a cached-real-data fallback for previously retrieved successful
 responses. Use `--no-cache` to bypass cache reads and writes.
 
-Important V0.2 configuration options map to typed `RankerConfig` fields:
+Important V0.3 configuration options map to typed `RankerConfig` fields:
 
 - `results_dir`, `cache_dir`: output and successful-real-response cache locations.
 - `use_cache`: enables cache writes; disabled by `--no-cache`.
@@ -162,6 +249,23 @@ Important V0.2 configuration options map to typed `RankerConfig` fields:
 - `literature_request_timeout_seconds`, `literature_max_retries`, `literature_cache_ttl_seconds`: literature adapter request behavior.
 - `request_timeout_seconds`, `max_retries`, `retry_backoff_seconds`: live API request behavior.
 - `strict_enrichment`: records strict enrichment intent for runs that should treat optional enrichment more conservatively.
+- `enable_generation`: opt-in switch for generated molecule hypotheses.
+- `strict_generation`: fails when enabled generation cannot produce retained
+  hypotheses; default mode warns and continues.
+- `include_generated_in_main_ranking`: optionally includes generated hypotheses
+  in the main ranking while preserving `origin="generated"` and no direct
+  evidence.
+- `generation_method`: generated molecule backend; V0.3 supports
+  `selfies_mutation`.
+- `generation_random_seed`: optional deterministic random seed.
+- `max_seed_molecules`, `max_generation_objectives`, `generated_per_objective`,
+  `max_generated_before_filtering`, `max_retained_generated`: generation size
+  and retention controls.
+- `duplicate_similarity_threshold`, `near_duplicate_similarity_threshold`,
+  `distant_similarity_threshold`, `reject_distant_generated`: novelty and
+  target-conditioning filters using Morgan-fingerprint Tanimoto similarity.
+- `reject_basic_alerts`, `allowed_generation_elements`: coarse chemistry sanity
+  filters for generated structures.
 
 The effective config is serialized into `trace.json` so a run can be audited
 with the limits, cache policy, and request policy that produced it. Defaults are
@@ -195,8 +299,19 @@ Files are written under:
 ```text
 results/<disease_slug>/report.md
 results/<disease_slug>/candidates.json
+results/<disease_slug>/generated_candidates.json
+results/<disease_slug>/generated_molecules.json
+results/<disease_slug>/generation_trace.json
 results/<disease_slug>/trace.json
 ```
+
+`generated_candidates.json` is written when generation is enabled.
+`generated_molecules.json` is a compatibility alias with the same payload. The
+payload includes objectives, selected seeds, retained generated molecules,
+rejected generated molecules with rejection reasons, generation warnings,
+generation config, and limitations. Generated structures include SMILES and
+InChIKey when available, but no synthesis instructions and no generated
+`EvidenceItem` claims.
 
 No static example biomedical result is included in this README because example
 rankings should only be copied from an actual successful live run with its
@@ -229,9 +344,41 @@ HTTP requests are made only inside adapter classes. Tests may mock adapter
 responses, but production code does not import test fixtures or ship fixture
 biomedical knowledge.
 
+## Generated Molecule Hypotheses
+
+V0.3 adds target-conditioned novel molecule generation as an opt-in workflow.
+Generation is off for ordinary ranking runs unless the user passes
+`--enable-generation` or uses `molecule-ranker generate`.
+
+The generation pipeline:
+
+1. Selects real retrieved existing molecules as seeds.
+2. Builds generation objectives for evidence-backed targets with selected seeds.
+3. Uses SELFIES mutation, insertion, deletion, and seed-seed crossover as the
+   first backend.
+4. Decodes generated SELFIES into structures and validates them with RDKit.
+5. Canonicalizes SMILES, computes InChIKey when possible, descriptors,
+   fingerprints, and Tanimoto similarity.
+6. Filters invalid, duplicate, near-duplicate, distant, and chemically
+   unreasonable structures using coarse V0.3 rules.
+7. Scores retained generated molecules separately from existing
+   evidence-backed molecules.
+
+Generated molecules are computational structures and research hypotheses. They
+are not known actives, do not have direct experimental evidence, and are not
+claimed to bind targets, modulate targets, treat disease, or be safe. Their
+scores are generation-prioritization scores based on seed and target context,
+not efficacy predictions. No fake evidence is generated for them.
+
+V0.3 does not implement full ADMET, toxicity prediction, docking,
+retrosynthesis, synthesizability prediction, synthesis planning, wet-lab
+prediction, dosage, patient treatment, or clinical guidance. No synthesis
+instructions are provided. V0.4 is planned to add stronger ADMET, toxicity,
+synthesizability, and structure-aware filters.
+
 ## Literature Evidence Policy
 
-PubMed is the primary V0.2 literature source. The literature module searches
+PubMed is the primary V0.3 literature source. The literature module searches
 PubMed, retrieves paper metadata and source-provided abstracts through NCBI
 E-utilities, deduplicates papers, extracts citations, and applies conservative
 rule-based claim extraction. OpenAlex enrichment is optional and is used for
@@ -266,7 +413,7 @@ The orchestrator runs agents in this order:
 2. `TargetDiscoveryAgent`
 3. `MoleculeRetrievalAgent`
 4. `LiteratureEvidenceAgent`
-5. `NovelMoleculeAgent` stub
+5. `NovelMoleculeAgent`
 6. `EvidenceScoringAgent`
 7. `ReportWriterAgent`
 
@@ -285,13 +432,14 @@ Core schemas are Pydantic models:
 - `LiteratureEvidenceBundle`
 - `Target`
 - `MoleculeCandidate`
+- `GeneratedMoleculeHypothesis`
 - `ScoreBreakdown`
 - `AgentTrace`
 - `RankingRun`
 
 ## Scoring Formula
 
-V0.2 uses a deterministic transparent heuristic over retrieved evidence. Without
+V0.3 uses a deterministic transparent heuristic over retrieved evidence. Without
 supported literature evidence, the V0.1 formula is preserved:
 
 ```text
@@ -322,6 +470,13 @@ they act as bounded modifiers to existing components:
 - Retracted records do not improve scores.
 
 Scores are prioritization aids, not validated predictions of efficacy or safety.
+
+Generated molecule hypotheses are scored separately by seed similarity,
+target-relevance context, and basic RDKit descriptor fit. This score is a
+generation-prioritization heuristic only. It is not evidence of disease
+activity, target engagement, safety, efficacy, synthesizability, or clinical
+utility. Generated molecules have no direct experimental evidence attached, and
+no fake evidence records are created for them.
 
 Every ranked candidate includes:
 
@@ -364,15 +519,22 @@ does not write a normal `report.md` that looks successful.
   efficacy, or safety.
 - Clinical literature evidence is reported separately from preclinical and
   review evidence.
-- Novel molecule generation is intentionally not implemented in V0.2.
+- Generated molecule hypotheses are in-silico only and have no attached
+  invented evidence.
+- Generated molecule hypotheses are not known actives and are ranked separately
+  from existing molecules by default.
+- V0.3 does not implement full ADMET, toxicity prediction, docking,
+  retrosynthesis, synthesizability prediction, synthesis planning, or wet-lab
+  prediction.
+- No synthesis instructions are provided.
 
 ## Roadmap
 
 - V0.1: stronger live biomedical adapters and source normalization.
 - V0.2: literature evidence retrieval and citation extraction.
 - V0.3: target-conditioned novel molecule generation.
-- V0.4: ADMET and synthesizability filters.
-- V0.5: human expert review workflow.
+- V0.4: ADMET, toxicity, synthesizability, docking/structure-aware filters.
+- V0.5: expert review workflow.
 
 ## Development
 

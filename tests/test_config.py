@@ -36,6 +36,39 @@ def test_ranker_config_defaults_are_sensible_for_first_real_run():
     assert config.max_retries >= 1
     assert config.retry_backoff_seconds >= 0
     assert config.strict_enrichment is False
+    assert config.enable_generation is False
+    assert config.strict_generation is False
+    assert config.include_generated_in_main_ranking is False
+    assert config.generation_method == "selfies_mutation"
+    assert config.generation_random_seed is None
+    assert config.max_seed_molecules == 20
+    assert config.max_generation_objectives == 10
+    assert config.generated_per_objective == 50
+    assert config.max_generated_before_filtering == 1000
+    assert config.max_retained_generated == 50
+    assert config.max_generation_rounds == 2
+    assert config.max_mutations_per_child == 4
+    assert config.enable_crossover is True
+    assert config.min_seed_score == 0.35
+    assert config.min_seed_target_relevance == 0.25
+    assert config.min_target_relevance_for_generation == 0.25
+    assert config.duplicate_similarity_threshold == 0.98
+    assert config.near_duplicate_similarity_threshold == 0.90
+    assert config.distant_similarity_threshold == 0.25
+    assert config.reject_distant_generated is True
+    assert config.reject_basic_alerts is False
+    assert config.allowed_generation_elements == [
+        "C",
+        "H",
+        "N",
+        "O",
+        "S",
+        "P",
+        "F",
+        "Cl",
+        "Br",
+        "I",
+    ]
 
 
 def test_ranker_config_trace_metadata_is_json_serializable():
@@ -46,3 +79,4 @@ def test_ranker_config_trace_metadata_is_json_serializable():
     assert metadata["default_target_limit"] > 1
     assert metadata["enable_literature"] is True
     assert metadata["literature_sources"] == ["pubmed"]
+    assert metadata["enable_generation"] is False

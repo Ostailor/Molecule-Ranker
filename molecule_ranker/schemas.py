@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Disease(BaseModel):
@@ -188,16 +188,52 @@ class MoleculeCandidate(BaseModel):
 
     name: str
     molecule_type: str
+    origin: Literal["existing", "generated"] = "existing"
     identifiers: dict[str, str] = Field(default_factory=dict)
     known_targets: list[str] = Field(default_factory=list)
     development_status: str | None = None
     mechanism_of_action: str | None = None
     chemical_metadata: dict[str, Any] = Field(default_factory=dict)
+    generation_metadata: dict[str, Any] = Field(default_factory=dict)
+    direct_evidence_available: bool = True
     evidence: list[EvidenceItem] = Field(default_factory=list)
     literature_evidence: LiteratureEvidenceBundle | None = None
     score: float | None = Field(default=None, ge=0.0, le=1.0)
     score_breakdown: ScoreBreakdown | None = None
     warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def enforce_generated_candidate_contract(self) -> MoleculeCandidate:
+        if self.origin == "generated":
+            self.direct_evidence_available = False
+            if self.evidence:
+                raise ValueError(
+                    "Generated MoleculeCandidate records must not contain EvidenceItem "
+                    "claims; use generation_metadata for generation trace data."
+                )
+        return self
+
+
+class GeneratedMoleculeHypothesis(BaseModel):
+    """In-silico generated structure hypothesis with generation trace, not evidence."""
+
+    name: str
+    canonical_smiles: str
+    molecule_type: str = "small_molecule"
+    source: str = "SELFIES_MUTATION_CROSSOVER"
+    target_symbol: str
+    target_name: str | None = None
+    seed_molecule_names: list[str] = Field(default_factory=list)
+    seed_identifiers: list[dict[str, str]] = Field(default_factory=list)
+    generation_score: float = Field(ge=0.0, le=1.0)
+    rank: int | None = Field(default=None, ge=1)
+    min_seed_similarity: float = Field(ge=0.0, le=1.0)
+    max_seed_similarity: float = Field(ge=0.0, le=1.0)
+    mean_seed_similarity: float = Field(ge=0.0, le=1.0)
+    descriptors: dict[str, Any] = Field(default_factory=dict)
+    trace: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
 
 
 class AgentTrace(BaseModel):
@@ -218,5 +254,6 @@ class RankingRun(BaseModel):
     disease: Disease
     targets: list[Target]
     candidates: list[MoleculeCandidate]
+    generated_candidates: list[GeneratedMoleculeHypothesis] = Field(default_factory=list)
     traces: list[AgentTrace]
     limitations: list[str] = Field(default_factory=list)

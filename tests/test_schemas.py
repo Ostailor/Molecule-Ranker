@@ -110,8 +110,43 @@ def test_core_schema_creation_and_json_serialization():
     assert payload["targets"][0]["identifiers"]["uniprot"] == "P27338"
     assert payload["targets"][0]["target_class"] == "protein_coding"
     assert payload["candidates"][0]["chemical_metadata"]["canonical_smiles"] == "COC1=CC=CC=C1"
+    assert payload["candidates"][0]["origin"] == "existing"
     assert payload["candidates"][0]["score_breakdown"]["final_score"] == 0.65
     assert '"RankingRun"' not in run.model_dump_json()
+
+
+def test_existing_candidates_default_origin_existing():
+    candidate = MoleculeCandidate(
+        name="Existing candidate",
+        molecule_type="small_molecule",
+    )
+
+    assert candidate.origin == "existing"
+    assert candidate.generation_metadata == {}
+
+
+def test_generated_molecule_candidate_contract_rejects_fake_evidence():
+    candidate = MoleculeCandidate(
+        name="Generated candidate",
+        molecule_type="generated",
+        origin="generated",
+        direct_evidence_available=True,
+        generation_metadata={"generated_id": "gen-1"},
+    )
+
+    assert candidate.origin == "generated"
+    assert candidate.direct_evidence_available is False
+    assert candidate.evidence == []
+
+    with pytest.raises(ValidationError) as error:
+        MoleculeCandidate(
+            name="Generated with fake evidence",
+            molecule_type="generated",
+            origin="generated",
+            evidence=[_evidence()],
+        )
+
+    assert "must not contain EvidenceItem" in str(error.value)
 
 
 @pytest.mark.parametrize(

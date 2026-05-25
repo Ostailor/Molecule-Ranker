@@ -49,7 +49,7 @@ class ChEMBLAdapter:
     }
     request_headers = {
         "Accept": "application/json",
-        "User-Agent": "molecule-ranker/0.2",
+        "User-Agent": "molecule-ranker/0.3",
     }
 
     def __init__(

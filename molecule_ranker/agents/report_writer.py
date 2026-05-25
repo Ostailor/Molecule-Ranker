@@ -20,7 +20,14 @@ from molecule_ranker.evidence import (
     is_safety_warning,
     normalize_evidence_item,
 )
-from molecule_ranker.schemas import AgentTrace, EvidenceItem, MoleculeCandidate, Target
+from molecule_ranker.generation.schemas import GeneratedMolecule, GenerationRun
+from molecule_ranker.schemas import (
+    AgentTrace,
+    EvidenceItem,
+    GeneratedMoleculeHypothesis,
+    MoleculeCandidate,
+    Target,
+)
 from molecule_ranker.utils import slugify
 
 DEFAULT_LIMITATIONS = [
@@ -28,7 +35,15 @@ DEFAULT_LIMITATIONS = [
     "Scores are heuristic prioritization aids.",
     "No wet-lab validation has been performed by this software.",
     "No patient-specific recommendation is provided.",
-    "Novel molecule generation is not implemented in V0.2.",
+    "Generated molecule hypotheses are in-silico research hypotheses only.",
+    (
+        "Generated molecules are not claimed to cure, treat, bind, inhibit, "
+        "activate, or be active against a disease or target."
+    ),
+    (
+        "Generated molecule hypotheses are opt-in and ranked separately from "
+        "evidence-backed molecules."
+    ),
     "Record-level evidence provenance is reported for retrieved public-source records.",
     "Literature claims are conservative rule-based mentions from retrieved paper records.",
     "Absence of evidence is not evidence of absence.",
@@ -169,12 +184,17 @@ class ReportWriterAgent(BaseAgent):
             f"- Canonical disease: {disease.canonical_name}",
             f"- Number of targets: {len(context.targets)}",
             f"- Number of molecule candidates: {len(context.candidates)}",
+            f"- Number of generated molecule hypotheses: {len(context.generated_candidates)}",
             "- Top 5 candidates:",
             *[
                 f"  - {candidate.name} ({candidate.score:.3f})"
                 for candidate in top_candidates
                 if candidate.score is not None
             ],
+            "",
+            "## Generated Molecule Hypotheses",
+            "",
+            *self._generated_molecule_hypothesis_lines(context),
             "",
             "## Ranked Candidates",
         ]
@@ -218,6 +238,7 @@ class ReportWriterAgent(BaseAgent):
                     "disease": context.disease,
                     "targets": context.targets,
                     "candidates": context.candidates,
+                    "generated_molecule_hypotheses": context.generated_candidates,
                     "literature_evidence_summary": self._literature_summary_payload(
                         context
                     ),
@@ -227,6 +248,7 @@ class ReportWriterAgent(BaseAgent):
                     "summary": {
                         "target_count": len(context.targets),
                         "candidate_count": len(context.candidates),
+                        "generated_candidate_count": len(context.generated_candidates),
                         "evidence_item_count": len(
                             list(self._all_evidence(context.targets, context.candidates))
                         ),
@@ -235,6 +257,27 @@ class ReportWriterAgent(BaseAgent):
                 }
             )
         )
+        generation_run = self._generation_run(context)
+        generation_enabled = self._generation_enabled(context, generation_run)
+        if generation_enabled:
+            generated_payload = self._generated_candidates_payload(
+                context,
+                generation_run,
+                limitations,
+            )
+            generation_trace_payload = self._generation_trace_payload(
+                context,
+                generation_run,
+            )
+            (output_dir / "generated_molecules.json").write_text(
+                _json_dumps(generated_payload)
+            )
+            (output_dir / "generated_candidates.json").write_text(
+                _json_dumps(generated_payload)
+            )
+            (output_dir / "generation_trace.json").write_text(
+                _json_dumps(generation_trace_payload)
+            )
         (output_dir / "report.md").write_text(str(context.config["report_md"]))
         (output_dir / "trace.json").write_text(
             _json_dumps(
@@ -268,12 +311,169 @@ class ReportWriterAgent(BaseAgent):
                 f"{', '.join(unscored)}."
             )
 
-        no_evidence = [candidate.name for candidate in context.candidates if not candidate.evidence]
+        no_evidence = [
+            candidate.name
+            for candidate in context.candidates
+            if not candidate.evidence
+            and candidate.origin != "generated"
+        ]
         if no_evidence:
             raise NoCandidatesFoundError(
                 "Report requires evidence-backed candidates; missing evidence for "
                 f"{', '.join(no_evidence)}."
             )
+
+    def _generation_enabled(
+        self,
+        context: PipelineContext,
+        generation_run: GenerationRun | None,
+    ) -> bool:
+        return bool(
+            context.config.get("enable_generation")
+            or context.config.get("enable_novel_generation")
+            or generation_run is not None
+            or context.generated_candidates
+        )
+
+    def _generation_run(self, context: PipelineContext) -> GenerationRun | None:
+        value = context.config.get("generation_run")
+        return value if isinstance(value, GenerationRun) else None
+
+    def _generated_candidates_payload(
+        self,
+        context: PipelineContext,
+        generation_run: GenerationRun | None,
+        limitations: list[str],
+    ) -> dict[str, Any]:
+        retained = generation_run.retained if generation_run is not None else []
+        rejected = generation_run.rejected if generation_run is not None else []
+        generated = generation_run.generated if generation_run is not None else []
+        return {
+            "success": True,
+            "disease": context.disease,
+            "generation_enabled": True,
+            "objectives": generation_run.objectives if generation_run is not None else [],
+            "seeds": generation_run.seeds if generation_run is not None else [],
+            "generated_count": len(generated),
+            "retained_count": len(retained) or len(context.generated_candidates),
+            "rejected_count": len(rejected),
+            "retained_generated_molecules": retained or context.generated_candidates,
+            "rejected_generated_molecules": [
+                {
+                    "generated_molecule": candidate,
+                    "rejection_reasons": self._generated_rejection_reasons(candidate),
+                }
+                for candidate in rejected
+            ],
+            "warnings": list(generation_run.warnings) if generation_run is not None else [],
+            "generation_config": self._generation_config_payload(context),
+            "limitations": limitations,
+        }
+
+    def _generation_trace_payload(
+        self,
+        context: PipelineContext,
+        generation_run: GenerationRun | None,
+    ) -> dict[str, Any]:
+        trace_metadata = self._novel_molecule_trace_metadata(context)
+        run_metadata = generation_run.metadata if generation_run is not None else {}
+        return {
+            "seed_selection_trace": trace_metadata.get("seed_selection", {}),
+            "objective_building_trace": trace_metadata.get("objective_building", {}),
+            "generator_trace": trace_metadata.get("generator_trace", {}),
+            "validation_filtering_trace": trace_metadata.get(
+                "validation_filtering_trace",
+                {},
+            ),
+            "scoring_trace": trace_metadata.get("scoring_trace", {}),
+            "random_seed": self._generation_config_payload(context).get(
+                "generation_random_seed"
+            ),
+            "generator_method": run_metadata.get(
+                "generation_method",
+                trace_metadata.get("generator"),
+            ),
+            "generator_version": run_metadata.get("generator_version", "v0.3"),
+            "run_timestamp": run_metadata.get("run_timestamp"),
+        }
+
+    def _novel_molecule_trace_metadata(self, context: PipelineContext) -> dict[str, Any]:
+        for trace in context.traces:
+            if trace.agent_name == "NovelMoleculeAgent":
+                return dict(trace.metadata)
+        return {}
+
+    def _generation_config_payload(self, context: PipelineContext) -> dict[str, Any]:
+        ranker_config = context.config.get("ranker_config")
+        if isinstance(ranker_config, dict):
+            return {
+                key: value
+                for key, value in ranker_config.items()
+                if key.startswith("generation")
+                or key.startswith("max_generation")
+                or key
+                in {
+                    "enable_generation",
+                    "enable_novel_generation",
+                    "strict_generation",
+                    "include_generated_in_main_ranking",
+                    "max_seed_molecules",
+                    "generated_per_objective",
+                    "max_generated_before_filtering",
+                    "max_retained_generated",
+                    "max_mutations_per_child",
+                    "enable_crossover",
+                    "min_seed_score",
+                    "min_seed_target_relevance",
+                    "min_target_relevance_for_generation",
+                    "duplicate_similarity_threshold",
+                    "near_duplicate_similarity_threshold",
+                    "distant_similarity_threshold",
+                    "reject_distant_generated",
+                    "reject_basic_alerts",
+                    "allowed_generation_elements",
+                }
+            }
+        return {
+            key: value
+            for key, value in context.config.items()
+            if key.startswith("generation")
+            or key.startswith("max_generation")
+            or key
+            in {
+                "enable_generation",
+                "enable_novel_generation",
+                "strict_generation",
+                "include_generated_in_main_ranking",
+                "max_seed_molecules",
+                "generated_per_objective",
+                "max_generated_before_filtering",
+                "max_retained_generated",
+                "max_mutations_per_child",
+                "enable_crossover",
+                "min_seed_score",
+                "min_seed_target_relevance",
+                "min_target_relevance_for_generation",
+                "duplicate_similarity_threshold",
+                "near_duplicate_similarity_threshold",
+                "distant_similarity_threshold",
+                "reject_distant_generated",
+                "reject_basic_alerts",
+                "allowed_generation_elements",
+            }
+        }
+
+    def _generated_rejection_reasons(self, candidate: GeneratedMolecule) -> list[str]:
+        reasons = list(candidate.validation.rejection_reasons)
+        if candidate.novelty is not None and candidate.novelty.novelty_class in {
+            "duplicate",
+            "near_duplicate",
+            "distant",
+        }:
+            reasons.append(candidate.novelty.novelty_class)
+        if not reasons:
+            reasons.append("diversity_or_retention_limit")
+        return sorted(set(reasons))
 
     def _candidate_section(self, rank: int, candidate: MoleculeCandidate) -> list[str]:
         score = candidate.score_breakdown
@@ -329,6 +529,289 @@ class ReportWriterAgent(BaseAgent):
         else:
             lines.append("- None recorded.")
         return lines
+
+    def _generated_molecule_hypothesis_lines(
+        self,
+        context: PipelineContext,
+    ) -> list[str]:
+        generation_run = self._generation_run(context)
+        retained = generation_run.retained if generation_run is not None else []
+        rejected = generation_run.rejected if generation_run is not None else []
+        generated = generation_run.generated if generation_run is not None else []
+        header = [
+            "- Generated molecules are computational structures.",
+            "- Generated molecules have no direct experimental evidence.",
+            (
+                "- Their scores are generation-prioritization scores, not efficacy "
+                "predictions."
+            ),
+            (
+                "- They require chemical review, synthesis feasibility review, ADMET "
+                "review, wet-lab testing, and clinical validation."
+            ),
+            "- No synthesis instructions are provided.",
+            "- No invented evidence is attached to generated molecules.",
+            "- Existing evidence-backed candidates and generated hypotheses are listed separately.",
+        ]
+
+        if not retained and not context.generated_candidates:
+            return [
+                *header,
+                "- Generation was not run or produced no retained hypotheses.",
+            ]
+
+        lines = [
+            *header,
+            "",
+            "### Generated Summary",
+            "",
+            "| Metric | Count |",
+            "| --- | ---: |",
+            f"| Generated attempted | {len(generated) or len(context.generated_candidates)} |",
+            f"| Valid retained | {len(retained) or len(context.generated_candidates)} |",
+            f"| Rejected invalid | {self._rejected_invalid_count(rejected)} |",
+            (
+                "| Rejected duplicate/near-duplicate | "
+                f"{self._rejected_novelty_count(rejected, {'duplicate', 'near_duplicate'})} |"
+            ),
+            (
+                "| Rejected distant/unconditioned | "
+                f"{self._rejected_novelty_count(rejected, {'distant'})} |"
+            ),
+            "",
+            "### Retained By Target",
+            "",
+            "| Target | Retained |",
+            "| --- | ---: |",
+            *[
+                f"| {target} | {count} |"
+                for target, count in self._retained_by_target(retained, context).items()
+            ],
+        ]
+
+        if not retained:
+            lines.extend(self._legacy_generated_candidate_lines(context.generated_candidates))
+            return lines
+
+        seed_names_by_id = self._seed_names_by_id(generation_run)
+        for rank, candidate in enumerate(retained, start=1):
+            breakdown = candidate.score_breakdown
+            validation = candidate.validation
+            novelty = candidate.novelty
+            parent_seed_names = [
+                seed_names_by_id.get(seed_id, seed_id) for seed_id in candidate.parent_seed_ids
+            ]
+            explanation = breakdown.explanation if breakdown else "No explanation recorded."
+            lines.extend(
+                [
+                    "",
+                    f"### Generated {rank}. {candidate.generated_id}",
+                    "",
+                    "| Field | Value |",
+                    "| --- | --- |",
+                    f"| Rank within generated list | {rank} |",
+                    f"| Generated ID | `{candidate.generated_id}` |",
+                    f"| Canonical SMILES | `{candidate.canonical_smiles}` |",
+                    f"| InChIKey | {candidate.inchi_key or 'Unavailable'} |",
+                    (
+                        "| Conditioned target(s) | "
+                        f"{', '.join(candidate.conditioned_targets) or 'Unavailable'} |"
+                    ),
+                    (
+                        "| Parent seed molecule(s) | "
+                        f"{', '.join(parent_seed_names) or 'Unavailable'} |"
+                    ),
+                    f"| Generation method | {candidate.generation_method} |",
+                    f"| Final generation score | {(candidate.generation_score or 0.0):.3f} |",
+                    (
+                        "| Confidence | "
+                        f"{breakdown.confidence:.3f} |"
+                        if breakdown
+                        else "| Confidence | Unavailable |"
+                    ),
+                    "",
+                    "Score breakdown:",
+                    "",
+                    "| Component | Score |",
+                    "| --- | ---: |",
+                    *self._generated_score_breakdown_lines(candidate),
+                    "",
+                    "Descriptor table:",
+                    "",
+                    "| Descriptor | Value |",
+                    "| --- | ---: |",
+                    *self._generated_descriptor_lines(candidate.descriptors),
+                    "",
+                    "Novelty assessment:",
+                    "",
+                    *self._generated_novelty_lines(novelty),
+                    "",
+                    "Validation status:",
+                    "",
+                    *self._generated_validation_lines(validation),
+                    "",
+                    "Warnings:",
+                    *[
+                        f"- {warning}"
+                        for warning in (
+                            candidate.warnings
+                            or ["Generated hypothesis requires independent review."]
+                        )
+                    ],
+                    "",
+                    f"Explanation: {explanation}",
+                ]
+            )
+        return lines
+
+    def _legacy_generated_candidate_lines(
+        self,
+        generated_candidates: list[GeneratedMoleculeHypothesis],
+    ) -> list[str]:
+        lines: list[str] = []
+        for candidate in generated_candidates:
+            rank = candidate.rank or "-"
+            lines.extend(
+                [
+                    "",
+                    f"### Generated {rank}. {candidate.name}",
+                    "",
+                    f"- Canonical SMILES: `{candidate.canonical_smiles}`",
+                    f"- Conditioned target(s): {candidate.target_symbol}",
+                    f"- Generation method: {candidate.source}",
+                    f"- Final generation score: {candidate.generation_score:.3f}",
+                    (
+                        "- Parent seed molecule(s): "
+                        f"{', '.join(candidate.seed_molecule_names) or 'Unavailable'}"
+                    ),
+                    "- Warnings:",
+                    *[
+                        f"  - {warning}"
+                        for warning in (
+                            candidate.warnings
+                            or ["Generated hypothesis requires independent review."]
+                        )
+                    ],
+                ]
+            )
+        return lines
+
+    def _generated_score_breakdown_lines(
+        self,
+        candidate: GeneratedMolecule,
+    ) -> list[str]:
+        breakdown = candidate.score_breakdown
+        if breakdown is None:
+            return ["| Unavailable | 0.000 |"]
+        return [
+            f"| Target conditioning | {breakdown.target_conditioning_score:.3f} |",
+            f"| Seed evidence | {breakdown.seed_evidence_score:.3f} |",
+            f"| Novelty | {breakdown.novelty_score:.3f} |",
+            f"| Diversity | {breakdown.diversity_score:.3f} |",
+            f"| Chemical validity | {breakdown.chemical_validity_score:.3f} |",
+            f"| Property profile | {breakdown.property_profile_score:.3f} |",
+            f"| Literature context | {breakdown.literature_context_score:.3f} |",
+            f"| Final generation score | {breakdown.final_generation_score:.3f} |",
+            f"| Confidence | {breakdown.confidence:.3f} |",
+        ]
+
+    def _generated_descriptor_lines(self, descriptors: dict[str, Any]) -> list[str]:
+        if not descriptors:
+            return ["| Unavailable | 0 |"]
+        return [
+            f"| {key} | {self._format_descriptor(descriptors, key)} |"
+            for key in sorted(descriptors)
+        ]
+
+    def _generated_novelty_lines(self, novelty: Any | None) -> list[str]:
+        if novelty is None:
+            return ["- Novelty assessment unavailable."]
+        return [
+            f"- Novelty class: {novelty.novelty_class}",
+            f"- Duplicate of existing: {novelty.duplicate_of_existing}",
+            f"- Duplicate of generated: {novelty.duplicate_of_generated}",
+            (
+                "- Max similarity to existing: "
+                f"{novelty.max_similarity_to_existing:.3f}"
+            ),
+            f"- Nearest existing: {novelty.nearest_existing_name or 'Unavailable'}",
+            f"- Max similarity to seed: {novelty.max_similarity_to_seed:.3f}",
+            f"- Nearest seed: {novelty.nearest_seed_name or 'Unavailable'}",
+        ]
+
+    def _generated_validation_lines(self, validation: Any) -> list[str]:
+        rejection_reasons = (
+            ", ".join(validation.rejection_reasons)
+            if validation.rejection_reasons
+            else "None"
+        )
+        return [
+            f"- RDKit molecule valid: {validation.valid_rdkit_mol}",
+            f"- Sanitization OK: {validation.sanitization_ok}",
+            f"- Canonicalization OK: {validation.canonicalization_ok}",
+            f"- Allowed elements OK: {validation.allowed_elements_ok}",
+            f"- Descriptor bounds OK: {validation.descriptor_bounds_ok}",
+            (
+                "- Alerts: "
+                f"{', '.join(validation.pains_or_alerts) if validation.pains_or_alerts else 'None'}"
+            ),
+            f"- Rejection reasons: {rejection_reasons}",
+        ]
+
+    def _rejected_invalid_count(self, rejected: list[GeneratedMolecule]) -> int:
+        return sum(1 for candidate in rejected if candidate.validation.rejection_reasons)
+
+    def _rejected_novelty_count(
+        self,
+        rejected: list[GeneratedMolecule],
+        novelty_classes: set[str],
+    ) -> int:
+        return sum(
+            1
+            for candidate in rejected
+            if candidate.novelty is not None
+            and candidate.novelty.novelty_class in novelty_classes
+        )
+
+    def _retained_by_target(
+        self,
+        retained: list[GeneratedMolecule],
+        context: PipelineContext,
+    ) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for candidate in retained:
+            for target in candidate.conditioned_targets or ["Unavailable"]:
+                counts[target] = counts.get(target, 0) + 1
+        if counts:
+            return dict(sorted(counts.items()))
+        fallback: dict[str, int] = {}
+        for candidate in context.generated_candidates:
+            fallback[candidate.target_symbol] = fallback.get(candidate.target_symbol, 0) + 1
+        return dict(sorted(fallback.items())) or {"Unavailable": 0}
+
+    def _seed_names_by_id(self, generation_run: GenerationRun | None) -> dict[str, str]:
+        if generation_run is None:
+            return {}
+        names: dict[str, str] = {}
+        for seed in generation_run.seeds:
+            for key in ("chembl", "pubchem_cid", "cid", "inchikey", "name"):
+                value = seed.identifiers.get(key)
+                if value:
+                    names[str(value)] = seed.name
+            names[seed.name] = seed.name
+        return names
+
+    def _format_descriptor(
+        self,
+        descriptors: dict[str, Any],
+        key: str,
+    ) -> str:
+        value = descriptors.get(key)
+        if isinstance(value, float):
+            return f"{value:.3f}"
+        if value in (None, ""):
+            return "unavailable"
+        return str(value)
 
     def _data_sources_retrieval_lines(
         self,
@@ -1381,6 +1864,9 @@ class ReportWriterAgent(BaseAgent):
             return {}
         return {
             "candidates_json": str(output_dir / "candidates.json"),
+            "generated_candidates_json": str(output_dir / "generated_candidates.json"),
+            "generated_molecules_json": str(output_dir / "generated_molecules.json"),
+            "generation_trace_json": str(output_dir / "generation_trace.json"),
             "report_md": str(output_dir / "report.md"),
             "trace_json": str(output_dir / "trace.json"),
         }

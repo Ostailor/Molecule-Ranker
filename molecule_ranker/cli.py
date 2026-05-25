@@ -23,6 +23,11 @@ from molecule_ranker.data_sources.errors import (
     NoCandidatesFoundError,
     TargetDiscoveryError,
 )
+from molecule_ranker.generation.benchmark import (
+    GenerationBenchmarkError,
+    benchmark_generated_file,
+)
+from molecule_ranker.generation.errors import GenerationError
 from molecule_ranker.literature.adapters.openalex_adapter import (
     OpenAlexAdapter as LiteratureOpenAlexAdapter,
 )
@@ -40,6 +45,7 @@ PIPELINE_ERRORS = (
     EvidenceRetrievalError,
     NoCandidatesFoundError,
     ExternalDataUnavailableError,
+    GenerationError,
     AgentExecutionError,
 )
 
@@ -308,8 +314,82 @@ def rank(
             help="Enrich PubMed records with optional OpenAlex citation/OA/retraction metadata.",
         ),
     ] = False,
+    enable_generation: Annotated[
+        bool,
+        typer.Option(
+            "--enable-generation/--disable-generation",
+            "--enable-novel-generation/--disable-novel-generation",
+            help="Opt in to target-conditioned generated molecule hypotheses.",
+        ),
+    ] = False,
+    strict_generation: Annotated[
+        bool,
+        typer.Option(
+            "--strict-generation/--no-strict-generation",
+            help="Fail the run when enabled generation cannot produce retained hypotheses.",
+        ),
+    ] = False,
+    include_generated_in_main_ranking: Annotated[
+        bool,
+        typer.Option(
+            "--include-generated-in-main-ranking/--separate-generated-ranking",
+            help=(
+                "Request generated hypotheses in the main ranking while preserving "
+                "generated labels."
+            ),
+        ),
+    ] = False,
+    generation_method: Annotated[
+        str,
+        typer.Option(
+            "--generation-method",
+            help="Generated molecule backend to use. V0.3 supports selfies_mutation.",
+        ),
+    ] = "selfies_mutation",
+    generation_random_seed: Annotated[
+        int | None,
+        typer.Option(
+            "--generation-random-seed",
+            help="Optional deterministic random seed for generated molecule hypotheses.",
+        ),
+    ] = None,
+    max_seed_molecules: Annotated[
+        int,
+        typer.Option("--max-seed-molecules", min=1, help="Maximum seed molecules selected."),
+    ] = 20,
+    max_generation_objectives: Annotated[
+        int,
+        typer.Option(
+            "--max-generation-objectives",
+            min=1,
+            help="Maximum target-conditioned generation objectives.",
+        ),
+    ] = 10,
+    generated_per_objective: Annotated[
+        int,
+        typer.Option(
+            "--generated-per-objective",
+            min=1,
+            help="Generated structures requested per objective before filtering.",
+        ),
+    ] = 50,
+    max_retained_generated: Annotated[
+        int,
+        typer.Option(
+            "--max-retained-generated",
+            min=1,
+            help="Maximum retained generated molecule hypotheses.",
+        ),
+    ] = 50,
+    reject_basic_alerts: Annotated[
+        bool,
+        typer.Option(
+            "--reject-basic-alerts",
+            help="Reject generated structures with coarse chemistry alerts.",
+        ),
+    ] = False,
 ) -> None:
-    """Run the V0.2 existing-molecule ranking pipeline with literature evidence."""
+    """Run the V0.3 ranking pipeline with optional generated molecule hypotheses."""
     defaults = RankerConfig()
     config = RankerConfig(
         results_dir=output_dir,
@@ -350,6 +430,16 @@ def rank(
         max_retries=max_retries,
         retry_backoff_seconds=retry_backoff_seconds,
         strict_enrichment=strict_enrichment,
+        enable_generation=enable_generation,
+        strict_generation=strict_generation,
+        include_generated_in_main_ranking=include_generated_in_main_ranking,
+        generation_method=generation_method,
+        generation_random_seed=generation_random_seed,
+        max_seed_molecules=max_seed_molecules,
+        max_generation_objectives=max_generation_objectives,
+        generated_per_objective=generated_per_objective,
+        max_retained_generated=max_retained_generated,
+        reject_basic_alerts=reject_basic_alerts,
     )
 
     try:
@@ -377,11 +467,139 @@ def rank(
     _print_human_summary(result, output_dir, verbose=verbose)
 
 
+@app.command()
+def generate(
+    disease_name: Annotated[
+        str,
+        typer.Argument(help="Disease name to resolve before generated hypotheses."),
+    ],
+    top: Annotated[
+        int,
+        typer.Option("--top", min=1, help="Number of existing candidates used as context."),
+    ] = 10,
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help="Directory where disease-specific outputs are written.",
+        ),
+    ] = Path("results"),
+    max_retained_generated: Annotated[
+        int,
+        typer.Option(
+            "--max-retained-generated",
+            min=1,
+            help="Maximum retained generated molecule hypotheses.",
+        ),
+    ] = 25,
+    generation_method: Annotated[
+        str,
+        typer.Option(
+            "--generation-method",
+            help="Generated molecule backend to use. V0.3 supports selfies_mutation.",
+        ),
+    ] = "selfies_mutation",
+    generation_random_seed: Annotated[
+        int | None,
+        typer.Option(
+            "--generation-random-seed",
+            help="Optional deterministic random seed for generated molecule hypotheses.",
+        ),
+    ] = None,
+    strict_generation: Annotated[
+        bool,
+        typer.Option(
+            "--strict-generation/--no-strict-generation",
+            help="Fail the run when generation cannot produce retained hypotheses.",
+        ),
+    ] = False,
+    include_generated_in_main_ranking: Annotated[
+        bool,
+        typer.Option(
+            "--include-generated-in-main-ranking/--separate-generated-ranking",
+            help="Also include generated hypotheses in the main candidate list.",
+        ),
+    ] = False,
+    reject_basic_alerts: Annotated[
+        bool,
+        typer.Option(
+            "--reject-basic-alerts",
+            help="Reject generated structures with coarse chemistry alerts.",
+        ),
+    ] = False,
+) -> None:
+    """Run the full retrieval pipeline and focus output on generated molecules."""
+    config = RankerConfig(
+        results_dir=output_dir,
+        default_top=top,
+        enable_generation=True,
+        strict_generation=strict_generation,
+        include_generated_in_main_ranking=include_generated_in_main_ranking,
+        generation_method=generation_method,
+        generation_random_seed=generation_random_seed,
+        max_retained_generated=max_retained_generated,
+        reject_basic_alerts=reject_basic_alerts,
+    )
+
+    try:
+        result = MoleculeRankerOrchestrator(config=config).rank(
+            disease_name,
+            top_n=top,
+            output_dir=output_dir,
+        )
+    except PIPELINE_ERRORS as exc:
+        typer.echo(f"Error: {exc.__class__.__name__}", err=True)
+        typer.echo(str(exc), err=True)
+        typer.echo("No report was generated.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _print_generation_summary(result, output_dir)
+
+
+@app.command()
+def benchmark_generation(
+    input_path: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to generated_candidates.json.",
+        ),
+    ],
+) -> None:
+    """Benchmark generated molecule artifact quality with internal V0.3 metrics."""
+    try:
+        result = benchmark_generated_file(input_path)
+    except GenerationBenchmarkError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("Generation benchmark summary")
+    typer.echo(f"Input: {input_path}")
+    typer.echo(f"Validity rate: {result.validity_rate:.3f}")
+    typer.echo(f"Uniqueness rate: {result.uniqueness_rate:.3f}")
+    typer.echo(f"Novelty rate: {result.novelty_rate:.3f}")
+    typer.echo(f"Near-duplicate rate: {result.near_duplicate_rate:.3f}")
+    typer.echo(f"Retained rate: {result.retained_rate:.3f}")
+    typer.echo(f"Diversity clusters: {result.diversity_cluster_count}")
+    typer.echo("")
+    typer.echo("JSON summary:")
+    typer.echo(json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True))
+
+
 def _print_human_summary(result: RankingRun, output_dir: Path, *, verbose: bool) -> None:
     artifact_dir = output_dir / slugify(result.disease.canonical_name)
+    generation = _generation_summary_from_traces(result)
     typer.echo(f"Disease: {result.disease.canonical_name}")
     typer.echo(f"Targets found: {len(result.targets)}")
     typer.echo(f"Candidates ranked: {len(result.candidates)}")
+    typer.echo(f"Generated hypotheses: {len(result.generated_candidates)}")
+    typer.echo(f"Generated molecules attempted: {generation['attempted']}")
+    typer.echo(f"Generated molecules retained: {generation['retained']}")
+    typer.echo(f"Generated molecules rejected: {generation['rejected']}")
     literature = _literature_summary_from_traces(result)
     typer.echo(
         f"Literature papers retrieved: {literature['literature_papers_retrieved']}"
@@ -404,6 +622,7 @@ def _print_human_summary(result: RankingRun, output_dir: Path, *, verbose: bool)
     typer.echo("Files written:")
     typer.echo(str(artifact_dir / "report.md"))
     typer.echo(str(artifact_dir / "candidates.json"))
+    typer.echo(str(artifact_dir / "generated_candidates.json"))
     typer.echo(str(artifact_dir / "trace.json"))
     if verbose:
         typer.echo("")
@@ -414,12 +633,37 @@ def _print_human_summary(result: RankingRun, output_dir: Path, *, verbose: bool)
                 typer.echo(f"  warning: {warning}")
 
 
+def _print_generation_summary(result: RankingRun, output_dir: Path) -> None:
+    artifact_dir = output_dir / slugify(result.disease.canonical_name)
+    generation = _generation_summary_from_traces(result)
+    typer.echo(f"Disease: {result.disease.canonical_name}")
+    typer.echo(f"Generated molecules attempted: {generation['attempted']}")
+    typer.echo(f"Generated molecules retained: {generation['retained']}")
+    typer.echo(f"Generated molecules rejected: {generation['rejected']}")
+    typer.echo("")
+    typer.echo("Generated molecule hypotheses:")
+    for candidate in result.generated_candidates:
+        score = candidate.generation_score or 0.0
+        rank = f"{candidate.rank}." if candidate.rank is not None else "-"
+        typer.echo(f"{rank} {candidate.name} - score {score:.2f}")
+    typer.echo("")
+    typer.echo("Files written:")
+    typer.echo(str(artifact_dir / "generated_candidates.json"))
+    typer.echo(str(artifact_dir / "report.md"))
+    typer.echo(str(artifact_dir / "trace.json"))
+
+
 def _summary_payload(result: RankingRun, output_dir: Path, *, verbose: bool) -> dict[str, object]:
     artifact_dir = output_dir / slugify(result.disease.canonical_name)
+    generation = _generation_summary_from_traces(result)
     payload: dict[str, object] = {
         "disease": result.disease.canonical_name,
         "targets_found": len(result.targets),
         "candidates_ranked": len(result.candidates),
+        "generated_hypotheses": len(result.generated_candidates),
+        "generated_molecules_attempted": generation["attempted"],
+        "generated_molecules_retained": generation["retained"],
+        "generated_molecules_rejected": generation["rejected"],
         **_literature_summary_from_traces(result),
         "top_candidates": [
             {
@@ -438,6 +682,7 @@ def _summary_payload(result: RankingRun, output_dir: Path, *, verbose: bool) -> 
         "files_written": {
             "report_md": str(artifact_dir / "report.md"),
             "candidates_json": str(artifact_dir / "candidates.json"),
+            "generated_candidates_json": str(artifact_dir / "generated_candidates.json"),
             "trace_json": str(artifact_dir / "trace.json"),
         },
     }
@@ -451,6 +696,30 @@ def _summary_payload(result: RankingRun, output_dir: Path, *, verbose: bool) -> 
             for trace in result.traces
         ]
     return payload
+
+
+def _generation_summary_from_traces(result: RankingRun) -> dict[str, int]:
+    for trace in result.traces:
+        if trace.agent_name != "NovelMoleculeAgent":
+            continue
+        metadata = trace.metadata
+        run = metadata.get("generation_run")
+        if not isinstance(run, dict):
+            return {
+                "attempted": 0,
+                "retained": len(result.generated_candidates),
+                "rejected": 0,
+            }
+        return {
+            "attempted": int(run.get("raw_generated_count", 0) or 0),
+            "retained": int(run.get("retained_count", 0) or 0),
+            "rejected": int(run.get("rejected_count", 0) or 0),
+        }
+    return {
+        "attempted": 0,
+        "retained": len(result.generated_candidates),
+        "rejected": 0,
+    }
 
 
 def _literature_summary_from_traces(result: RankingRun) -> dict[str, int]:

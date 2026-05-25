@@ -14,8 +14,15 @@ from molecule_ranker.data_sources.errors import (
     NoCandidatesFoundError,
     TargetDiscoveryError,
 )
+from molecule_ranker.generation.errors import GenerationError
 from molecule_ranker.literature.errors import LiteratureParsingError, LiteratureRetrievalError
-from molecule_ranker.schemas import AgentTrace, Disease, MoleculeCandidate, Target
+from molecule_ranker.schemas import (
+    AgentTrace,
+    Disease,
+    GeneratedMoleculeHypothesis,
+    MoleculeCandidate,
+    Target,
+)
 from molecule_ranker.utils.logging import get_logger
 
 T = TypeVar("T")
@@ -32,6 +39,7 @@ DOMAIN_ERRORS = (
     LiteratureRetrievalError,
     LiteratureParsingError,
     NoCandidatesFoundError,
+    GenerationError,
     AgentExecutionError,
 )
 
@@ -51,6 +59,7 @@ class PipelineContext(BaseModel):
     disease: Disease | None = None
     targets: list[Target] = Field(default_factory=list)
     candidates: list[MoleculeCandidate] = Field(default_factory=list)
+    generated_candidates: list[GeneratedMoleculeHypothesis] = Field(default_factory=list)
     traces: list[AgentTrace] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
     output_dir: Path | None = None

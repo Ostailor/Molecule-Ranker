@@ -13,6 +13,7 @@ from molecule_ranker.data_sources.errors import (
     NoCandidatesFoundError,
     TargetDiscoveryError,
 )
+from molecule_ranker.generation.errors import GenerationError
 from molecule_ranker.orchestrator import MoleculeRankerOrchestrator
 from molecule_ranker.schemas import Disease, EvidenceItem, Target
 
@@ -198,8 +199,8 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
             "TargetDiscoveryAgent",
             "MoleculeRetrievalAgent",
             "LiteratureEvidenceAgent",
-            "NovelMoleculeAgent",
             "EvidenceScoringAgent",
+            "NovelMoleculeAgent",
             "ReportWriterAgent",
     ]
 
@@ -207,6 +208,8 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
     assert (output_dir / "candidates.json").exists()
     assert (output_dir / "report.md").exists()
     assert (output_dir / "trace.json").exists()
+    assert not (output_dir / "generated_candidates.json").exists()
+    assert not (output_dir / "generation_trace.json").exists()
 
     report = (output_dir / "report.md").read_text()
     assert "requires experimental validation" in report.lower()
@@ -221,6 +224,53 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
         assert candidate.score_breakdown is not None
         assert candidate.score_breakdown.explanation
         assert 0 <= candidate.score_breakdown.confidence <= 1
+
+
+def test_orchestrator_writes_generation_artifacts_when_generation_enabled(tmp_path):
+    orchestrator = MoleculeRankerOrchestrator(
+        config=RankerConfig(results_dir=tmp_path, enable_generation=True),
+        disease_source=FakeDiseaseSource(),
+        target_source=FakeTargetSource(),
+        molecule_source=FakeMoleculeSource(),
+        molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
+    )
+
+    orchestrator.rank("Parkinson disease", top=2)
+
+    output_dir = tmp_path / "parkinson-disease"
+    assert (output_dir / "generated_candidates.json").exists()
+    assert (output_dir / "generation_trace.json").exists()
+    payload = json.loads((output_dir / "generated_candidates.json").read_text())
+    assert payload["success"] is True
+    assert payload["generation_enabled"] is True
+    assert payload["warnings"]
+    assert payload["retained_count"] == 0
+    trace_payload = json.loads((output_dir / "generation_trace.json").read_text())
+    assert "seed_selection_trace" in trace_payload
+    assert trace_payload["generator_method"] == "selfies_mutation"
+
+
+def test_strict_generation_failure_does_not_write_success_generation_files(tmp_path):
+    orchestrator = MoleculeRankerOrchestrator(
+        config=RankerConfig(
+            results_dir=tmp_path,
+            enable_generation=True,
+            strict_generation=True,
+        ),
+        disease_source=FakeDiseaseSource(),
+        target_source=FakeTargetSource(),
+        molecule_source=FakeMoleculeSource(),
+        molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
+    )
+
+    with pytest.raises(GenerationError):
+        orchestrator.rank("Parkinson disease", top=2)
+
+    output_dir = tmp_path / "parkinson-disease"
+    assert not (output_dir / "generated_candidates.json").exists()
+    assert not (output_dir / "generation_trace.json").exists()
 
 
 def test_orchestrator_can_disable_literature_agent(tmp_path):
@@ -304,6 +354,10 @@ def test_orchestrator_writes_effective_config_to_trace_metadata(tmp_path):
             max_molecules_per_target=4,
             max_activity_records_per_target=9,
             allow_cached_real_data=True,
+            enable_novel_generation=True,
+            generated_candidate_limit=3,
+            generation_attempt_budget=40,
+            generation_random_seed=11,
         ),
         disease_source=FakeDiseaseSource(),
         target_source=FakeTargetSource(),
@@ -321,6 +375,10 @@ def test_orchestrator_writes_effective_config_to_trace_metadata(tmp_path):
     assert config_payload["max_molecules_per_target"] == 4
     assert config_payload["max_activity_records_per_target"] == 9
     assert config_payload["allow_cached_real_data"] is True
+    assert config_payload["enable_novel_generation"] is True
+    assert config_payload["generated_candidate_limit"] == 3
+    assert config_payload["generation_attempt_budget"] == 40
+    assert config_payload["generation_random_seed"] == 11
 
 
 def test_disease_resolution_failure_stops_pipeline(tmp_path):
