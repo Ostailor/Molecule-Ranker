@@ -8,6 +8,7 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 import molecule_ranker.cli as cli
+from molecule_ranker.agents.base import AgentExecutionError
 from molecule_ranker.cli import app
 from molecule_ranker.data_sources.errors import (
     DiseaseResolutionError,
@@ -26,6 +27,8 @@ from molecule_ranker.schemas import (
 
 
 class FakeOrchestrator:
+    last_runtime_config: dict[str, int] | None = None
+
     def __init__(self, *, config, **kwargs):
         self.config = config
         self.kwargs = kwargs
@@ -38,6 +41,7 @@ class FakeOrchestrator:
         output_dir: Path | None = None,
         config: dict[str, int] | None = None,
     ):
+        FakeOrchestrator.last_runtime_config = config
         artifact_dir = (output_dir or Path(self.config.results_dir)) / "alzheimer-disease"
         artifact_dir.mkdir(parents=True, exist_ok=True)
         (artifact_dir / "candidates.json").write_text("{}\n")
@@ -108,6 +112,10 @@ class FailingOrchestrator:
         raise self.error
 
 
+def setup_function() -> None:
+    FakeOrchestrator.last_runtime_config = None
+
+
 def test_help_commands_work():
     runner = CliRunner()
 
@@ -171,6 +179,30 @@ def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_pat
     assert (output_dir / "candidates.json").exists()
     assert (output_dir / "report.md").exists()
     assert (output_dir / "trace.json").exists()
+    assert FakeOrchestrator.last_runtime_config == {
+        "target_limit": 3,
+        "limit_per_target": 2,
+    }
+
+
+def test_rank_command_does_not_override_default_target_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "MoleculeRankerOrchestrator", FakeOrchestrator)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "rank",
+            "Alzheimer disease",
+            "--top",
+            "5",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert FakeOrchestrator.last_runtime_config == {}
 
 
 def test_rank_command_prints_json_summary(tmp_path, monkeypatch):
@@ -233,6 +265,7 @@ def test_rank_command_prints_verbose_trace(tmp_path, monkeypatch):
             "ExternalDataUnavailableError",
         ),
         (NoCandidatesFoundError("No candidates found."), "NoCandidatesFoundError"),
+        (AgentExecutionError("Agent failed unexpectedly."), "AgentExecutionError"),
     ],
 )
 def test_rank_command_surfaces_pipeline_failures(tmp_path, monkeypatch, error, label):

@@ -265,7 +265,7 @@ def test_chembl_preserves_mechanism_record_when_molecule_details_fail():
 
     assert records[0]["name"] == "CHEMBL1"
     assert records[0]["evidence"][0]["source"] == "ChEMBL"
-    assert "ChEMBL molecule detail unavailable" in records[0]["warnings"][0]
+    assert "Optional ChEMBL molecule-detail enrichment unavailable" in records[0]["warnings"][0]
 
 
 def test_chembl_no_records_raises_no_candidates():

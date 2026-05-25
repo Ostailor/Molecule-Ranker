@@ -18,6 +18,10 @@ from molecule_ranker.schemas import AgentTrace, Disease, MoleculeCandidate, Targ
 from molecule_ranker.utils.logging import get_logger
 
 T = TypeVar("T")
+class AgentExecutionError(RuntimeError):
+    """Raised when an agent has an unexpected programming or runtime failure."""
+
+
 DOMAIN_ERRORS = (
     ExternalDataUnavailableError,
     DiseaseResolutionError,
@@ -25,6 +29,7 @@ DOMAIN_ERRORS = (
     MoleculeRetrievalError,
     EvidenceRetrievalError,
     NoCandidatesFoundError,
+    AgentExecutionError,
 )
 
 
@@ -59,7 +64,6 @@ class BaseAgent(ABC):
     def run(self, context: PipelineContext) -> PipelineContext:
         input_summary = self.summarize_input(context)
         warnings: list[str] = []
-        should_raise = False
         caught: Exception | None = None
         try:
             updated = self.process(context)
@@ -71,7 +75,6 @@ class BaseAgent(ABC):
             warnings.append(warning)
             output_summary = warning
             self.logger.warning(warning)
-            should_raise = isinstance(exc, DOMAIN_ERRORS)
             caught = exc
 
         updated.traces.append(
@@ -83,8 +86,10 @@ class BaseAgent(ABC):
                 metadata=self.trace_metadata(updated),
             )
         )
-        if should_raise and caught is not None:
-            raise caught
+        if caught is not None:
+            if isinstance(caught, DOMAIN_ERRORS):
+                raise caught
+            raise AgentExecutionError(f"{self.name} failed unexpectedly: {caught}") from caught
         return updated
 
     @abstractmethod

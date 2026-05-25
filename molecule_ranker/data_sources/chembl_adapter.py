@@ -15,7 +15,14 @@ from molecule_ranker.schemas import Disease, Target
 
 
 class ChEMBLAdapter:
-    """ChEMBL REST adapter for target-linked molecule and mechanism retrieval."""
+    """ChEMBL REST adapter for target-linked molecule and mechanism retrieval.
+
+    Target lookup and mechanism records are required evidence sources. Molecule
+    detail lookup is optional enrichment: when a mechanism record already
+    identifies an existing ChEMBL molecule, a detail lookup failure preserves the
+    evidence-backed record with a warning instead of fabricating replacement
+    metadata.
+    """
 
     source_name = "ChEMBL"
     default_base_url = "https://www.ebi.ac.uk/chembl/api/data"
@@ -56,7 +63,8 @@ class ChEMBLAdapter:
                     except ExternalDataUnavailableError as exc:
                         molecule = {}
                         warnings.append(
-                            f"ChEMBL molecule detail unavailable for {molecule_id}: {exc}"
+                            "Optional ChEMBL molecule-detail enrichment unavailable "
+                            f"for {molecule_id}: {exc}"
                         )
                     record = self._record_from_mechanism(
                         disease=disease,

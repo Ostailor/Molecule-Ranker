@@ -7,7 +7,12 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from molecule_ranker.agents.base import DOMAIN_ERRORS, BaseAgent, PipelineContext
+from molecule_ranker.agents.base import (
+    DOMAIN_ERRORS,
+    AgentExecutionError,
+    BaseAgent,
+    PipelineContext,
+)
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
 from molecule_ranker.schemas import AgentTrace, EvidenceItem, MoleculeCandidate, Target
 from molecule_ranker.utils import slugify
@@ -46,7 +51,7 @@ class ReportWriterAgent(BaseAgent):
             )
             if isinstance(exc, DOMAIN_ERRORS):
                 raise
-            return updated
+            raise AgentExecutionError(f"{self.name} failed unexpectedly: {exc}") from exc
 
         trace = AgentTrace(
             agent_name=self.name,

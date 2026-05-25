@@ -31,6 +31,9 @@ class OpenTargetsAdapter:
         self.session = session or requests.Session()
 
     def resolve_disease(self, disease_name: str) -> Disease:
+        # V0.0 uses the top Open Targets search hit. V0.1 should request a
+        # wider result page and add ambiguity handling plus confidence thresholds
+        # before accepting a canonical disease entity.
         query = """
         query SearchDisease($queryString: String!) {
           search(queryString: $queryString, entityNames: ["disease"], page: {index: 0, size: 1}) {
