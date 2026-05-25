@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,10 @@ from molecule_ranker.agents.base import (
     PipelineContext,
 )
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
+from molecule_ranker.developability.schemas import (
+    DevelopabilityAssessment as StructuredDevelopabilityAssessment,
+)
+from molecule_ranker.developability.schemas import DevelopabilityRun
 from molecule_ranker.evidence import (
     is_clinical_evidence,
     is_molecule_target_evidence,
@@ -23,6 +28,7 @@ from molecule_ranker.evidence import (
 from molecule_ranker.generation.schemas import GeneratedMolecule, GenerationRun
 from molecule_ranker.schemas import (
     AgentTrace,
+    DevelopabilityAssessment,
     EvidenceItem,
     GeneratedMoleculeHypothesis,
     MoleculeCandidate,
@@ -47,6 +53,20 @@ DEFAULT_LIMITATIONS = [
     "Record-level evidence provenance is reported for retrieved public-source records.",
     "Literature claims are conservative rule-based mentions from retrieved paper records.",
     "Absence of evidence is not evidence of absence.",
+    "Developability outputs are computational risk triage and require expert review.",
+    "ADMET-style predictions do not prove clinical safety.",
+    "Synthetic-accessibility heuristics do not prove practical synthesizability.",
+    "No synthesis instructions are provided.",
+]
+
+DEVELOPABILITY_DISCLAIMER_LINES = [
+    "- Developability scores are computational triage heuristics.",
+    "- They do not establish safety, efficacy, or synthesizability.",
+    (
+        "- They require medicinal chemistry, toxicology, pharmacology, and synthesis "
+        "expert review."
+    ),
+    "- No synthesis instructions are provided.",
 ]
 
 
@@ -174,6 +194,10 @@ class ReportWriterAgent(BaseAgent):
             "",
             *self._candidate_literature_evidence_overview_lines(context),
             "",
+            "## Developability Summary",
+            "",
+            *self._developability_summary_lines(context),
+            "",
             "## Citations",
             "",
             *self._citation_lines(context),
@@ -237,11 +261,11 @@ class ReportWriterAgent(BaseAgent):
                     "success": True,
                     "disease": context.disease,
                     "targets": context.targets,
-                    "candidates": context.candidates,
-                    "generated_molecule_hypotheses": context.generated_candidates,
-                    "literature_evidence_summary": self._literature_summary_payload(
-                        context
-                    ),
+                    "candidates": self._candidate_payload(context),
+                    "generated_molecule_hypotheses": self._generated_hypothesis_payload(context),
+                    "developability_assessments": self._developability_payload(context),
+                    "developability_run": self._developability_run_payload(context),
+                    "literature_evidence_summary": self._literature_summary_payload(context),
                     "literature_queries": self._literature_queries_payload(context),
                     "literature_papers": self._literature_papers_payload(context),
                     "extracted_claims": self._extracted_claims_payload(context),
@@ -269,16 +293,27 @@ class ReportWriterAgent(BaseAgent):
                 context,
                 generation_run,
             )
-            (output_dir / "generated_molecules.json").write_text(
-                _json_dumps(generated_payload)
-            )
-            (output_dir / "generated_candidates.json").write_text(
-                _json_dumps(generated_payload)
-            )
-            (output_dir / "generation_trace.json").write_text(
-                _json_dumps(generation_trace_payload)
-            )
+            (output_dir / "generated_molecules.json").write_text(_json_dumps(generated_payload))
+            (output_dir / "generated_candidates.json").write_text(_json_dumps(generated_payload))
+            (output_dir / "generation_trace.json").write_text(_json_dumps(generation_trace_payload))
         (output_dir / "report.md").write_text(str(context.config["report_md"]))
+        (output_dir / "developability_assessments.json").write_text(
+            _json_dumps(
+                {
+                    "success": True,
+                    "disease": context.disease,
+                    "assessments": self._developability_payload(context),
+                    "developability_run": self._developability_run_payload(context),
+                    "limitations": limitations,
+                }
+            )
+        )
+        (output_dir / "developability.json").write_text(
+            _json_dumps(self._developability_output_payload(context, limitations))
+        )
+        (output_dir / "developability_report.md").write_text(
+            self._render_developability_report(context)
+        )
         (output_dir / "trace.json").write_text(
             _json_dumps(
                 {
@@ -286,6 +321,7 @@ class ReportWriterAgent(BaseAgent):
                     "disease": context.disease,
                     "traces": context.traces,
                     "config": context.config.get("ranker_config", {}),
+                    "developability_run": self._developability_run_payload(context),
                     "limitations": limitations,
                     "artifacts": artifacts,
                 }
@@ -303,7 +339,8 @@ class ReportWriterAgent(BaseAgent):
         unscored = [
             candidate.name
             for candidate in context.candidates
-            if candidate.score is None or candidate.score_breakdown is None
+            if candidate.origin != "generated"
+            and (candidate.score is None or candidate.score_breakdown is None)
         ]
         if unscored:
             raise NoCandidatesFoundError(
@@ -314,8 +351,7 @@ class ReportWriterAgent(BaseAgent):
         no_evidence = [
             candidate.name
             for candidate in context.candidates
-            if not candidate.evidence
-            and candidate.origin != "generated"
+            if not candidate.evidence and candidate.origin != "generated"
         ]
         if no_evidence:
             raise NoCandidatesFoundError(
@@ -357,11 +393,28 @@ class ReportWriterAgent(BaseAgent):
             "generated_count": len(generated),
             "retained_count": len(retained) or len(context.generated_candidates),
             "rejected_count": len(rejected),
-            "retained_generated_molecules": retained or context.generated_candidates,
+            "retained_generated_molecules": [
+                self._generated_molecule_payload(candidate) for candidate in retained
+            ]
+            or [
+                {
+                    **candidate.model_dump(mode="json"),
+                    "developability": self._generated_hypothesis_developability_payload(
+                        candidate
+                    ),
+                    "developability_summary": self._generated_hypothesis_summary(candidate),
+                    "rejection_reasons": [],
+                }
+                for candidate in context.generated_candidates
+            ],
             "rejected_generated_molecules": [
                 {
-                    "generated_molecule": candidate,
+                    "generated_molecule": self._generated_molecule_payload(candidate),
                     "rejection_reasons": self._generated_rejection_reasons(candidate),
+                    "developability": self._generated_developability_payload(candidate),
+                    "developability_summary": self._developability_summary_from_payload(
+                        self._generated_developability_payload(candidate)
+                    ),
                 }
                 for candidate in rejected
             ],
@@ -377,6 +430,7 @@ class ReportWriterAgent(BaseAgent):
     ) -> dict[str, Any]:
         trace_metadata = self._novel_molecule_trace_metadata(context)
         run_metadata = generation_run.metadata if generation_run is not None else {}
+        developability = self._developability_summary_payload(context)
         return {
             "seed_selection_trace": trace_metadata.get("seed_selection", {}),
             "objective_building_trace": trace_metadata.get("objective_building", {}),
@@ -386,15 +440,22 @@ class ReportWriterAgent(BaseAgent):
                 {},
             ),
             "scoring_trace": trace_metadata.get("scoring_trace", {}),
-            "random_seed": self._generation_config_payload(context).get(
-                "generation_random_seed"
-            ),
+            "random_seed": self._generation_config_payload(context).get("generation_random_seed"),
             "generator_method": run_metadata.get(
                 "generation_method",
                 trace_metadata.get("generator"),
             ),
             "generator_version": run_metadata.get("generator_version", "v0.3"),
             "run_timestamp": run_metadata.get("run_timestamp"),
+            "developability_filtering_trace": {
+                "enabled": developability["enabled"],
+                "assessed_generated_count": developability["assessed_generated_count"],
+                "retained_count": developability["retained_count"],
+                "deprioritized_count": developability["deprioritized_count"],
+                "rejected_count": developability["rejected_count"],
+                "risk_distribution": developability["risk_levels"],
+                "alert_distribution": developability["alerts"],
+            },
         }
 
     def _novel_molecule_trace_metadata(self, context: PipelineContext) -> dict[str, Any]:
@@ -506,6 +567,7 @@ class ReportWriterAgent(BaseAgent):
                         f"{score.novelty_or_repurposing_value:.3f} |"
                     ),
                     f"| Literature quality | {score.literature_quality:.3f} |",
+                    f"| Developability score | {score.developability_score:.3f} |",
                     f"| Final score | {score.final_score:.3f} |",
                     f"| Confidence | {score.confidence:.3f} |",
                     "",
@@ -519,6 +581,8 @@ class ReportWriterAgent(BaseAgent):
         lines.extend(self._candidate_literature_lines(candidate))
         lines.extend(["", "Candidate evidence coverage:"])
         lines.extend(self._candidate_coverage_lines(candidate))
+        lines.extend(["", "Developability triage:"])
+        lines.extend(self._candidate_developability_lines(candidate.developability_assessment))
         lines.extend(["", "Known indications and warnings:"])
         lines.extend(self._known_indication_warning_lines(candidate.evidence))
         lines.extend(["", "Source provenance:"])
@@ -541,10 +605,7 @@ class ReportWriterAgent(BaseAgent):
         header = [
             "- Generated molecules are computational structures.",
             "- Generated molecules have no direct experimental evidence.",
-            (
-                "- Their scores are generation-prioritization scores, not efficacy "
-                "predictions."
-            ),
+            ("- Their scores are generation-prioritization scores, not efficacy predictions."),
             (
                 "- They require chemical review, synthesis feasibility review, ADMET "
                 "review, wet-lab testing, and clinical validation."
@@ -624,8 +685,7 @@ class ReportWriterAgent(BaseAgent):
                     f"| Generation method | {candidate.generation_method} |",
                     f"| Final generation score | {(candidate.generation_score or 0.0):.3f} |",
                     (
-                        "| Confidence | "
-                        f"{breakdown.confidence:.3f} |"
+                        f"| Confidence | {breakdown.confidence:.3f} |"
                         if breakdown
                         else "| Confidence | Unavailable |"
                     ),
@@ -649,6 +709,10 @@ class ReportWriterAgent(BaseAgent):
                     "Validation status:",
                     "",
                     *self._generated_validation_lines(validation),
+                    "",
+                    "Developability triage:",
+                    "",
+                    *self._candidate_developability_lines(candidate.developability_assessment),
                     "",
                     "Warnings:",
                     *[
@@ -730,10 +794,7 @@ class ReportWriterAgent(BaseAgent):
             f"- Novelty class: {novelty.novelty_class}",
             f"- Duplicate of existing: {novelty.duplicate_of_existing}",
             f"- Duplicate of generated: {novelty.duplicate_of_generated}",
-            (
-                "- Max similarity to existing: "
-                f"{novelty.max_similarity_to_existing:.3f}"
-            ),
+            (f"- Max similarity to existing: {novelty.max_similarity_to_existing:.3f}"),
             f"- Nearest existing: {novelty.nearest_existing_name or 'Unavailable'}",
             f"- Max similarity to seed: {novelty.max_similarity_to_seed:.3f}",
             f"- Nearest seed: {novelty.nearest_seed_name or 'Unavailable'}",
@@ -741,9 +802,7 @@ class ReportWriterAgent(BaseAgent):
 
     def _generated_validation_lines(self, validation: Any) -> list[str]:
         rejection_reasons = (
-            ", ".join(validation.rejection_reasons)
-            if validation.rejection_reasons
-            else "None"
+            ", ".join(validation.rejection_reasons) if validation.rejection_reasons else "None"
         )
         return [
             f"- RDKit molecule valid: {validation.valid_rdkit_mol}",
@@ -769,8 +828,7 @@ class ReportWriterAgent(BaseAgent):
         return sum(
             1
             for candidate in rejected
-            if candidate.novelty is not None
-            and candidate.novelty.novelty_class in novelty_classes
+            if candidate.novelty is not None and candidate.novelty.novelty_class in novelty_classes
         )
 
     def _retained_by_target(
@@ -882,9 +940,7 @@ class ReportWriterAgent(BaseAgent):
         lines: list[str] = []
         for candidate in context.candidates:
             literature = self._candidate_literature_items(candidate)
-            literature_papers = self._candidate_literature_papers_from_config(
-                context, candidate
-            )
+            literature_papers = self._candidate_literature_papers_from_config(context, candidate)
             counts = self._literature_claim_counts(literature)
             paper_keys = self._paper_keys(literature) | {
                 self._paper_payload_key(paper) for paper in literature_papers
@@ -964,8 +1020,7 @@ class ReportWriterAgent(BaseAgent):
                     [
                         item
                         for item in normalized_literature
-                        if item.evidence_type
-                        in {"literature_safety", "literature_contradictory"}
+                        if item.evidence_type in {"literature_safety", "literature_contradictory"}
                     ],
                     limit=5,
                     contradictory_label=True,
@@ -1014,9 +1069,7 @@ class ReportWriterAgent(BaseAgent):
         match_reason = metadata.get("match_reason") or "unavailable"
         ambiguity = metadata.get("ambiguity")
         ambiguity_text = (
-            "unavailable"
-            if ambiguity is None
-            else ("ambiguous" if ambiguity else "not ambiguous")
+            "unavailable" if ambiguity is None else ("ambiguous" if ambiguity else "not ambiguous")
         )
         identifiers = disease.identifiers if disease is not None else {}
         lines = [
@@ -1075,9 +1128,7 @@ class ReportWriterAgent(BaseAgent):
         return lines
 
     def _candidate_coverage_lines(self, candidate: MoleculeCandidate) -> list[str]:
-        molecule_target = [
-            item for item in candidate.evidence if is_molecule_target_evidence(item)
-        ]
+        molecule_target = [item for item in candidate.evidence if is_molecule_target_evidence(item)]
         return [
             f"Molecule-target evidence: {len(molecule_target)}",
             "Activity evidence summary:",
@@ -1124,9 +1175,7 @@ class ReportWriterAgent(BaseAgent):
 
     def _known_indication_warning_lines(self, evidence: list[EvidenceItem]) -> list[str]:
         relevant = [
-            item
-            for item in evidence
-            if is_clinical_evidence(item) or is_safety_warning(item)
+            item for item in evidence if is_clinical_evidence(item) or is_safety_warning(item)
         ]
         if not relevant:
             return ["- None retrieved from ChEMBL."]
@@ -1200,8 +1249,7 @@ class ReportWriterAgent(BaseAgent):
             phase = item.metadata.get("max_phase_for_ind")
             phase_text = f"; max_phase_for_ind={phase}" if phase not in (None, "") else ""
             lines.append(
-                f"- {indication}{phase_text}; "
-                f"record_id={item.source_record_id or 'unavailable'}"
+                f"- {indication}{phase_text}; record_id={item.source_record_id or 'unavailable'}"
             )
         return lines
 
@@ -1215,8 +1263,7 @@ class ReportWriterAgent(BaseAgent):
             warning_class = item.metadata.get("warning_class")
             class_text = f"; class={warning_class}" if warning_class else ""
             lines.append(
-                f"- {warning_type}{class_text}; "
-                f"record_id={item.source_record_id or 'unavailable'}"
+                f"- {warning_type}{class_text}; record_id={item.source_record_id or 'unavailable'}"
             )
         return lines
 
@@ -1445,8 +1492,7 @@ class ReportWriterAgent(BaseAgent):
     def _literature_sources(self, context: PipelineContext) -> list[str]:
         sources: set[str] = set()
         sources.update(
-            str(source)
-            for source in self._literature_config(context).get("sources_used", [])
+            str(source) for source in self._literature_config(context).get("sources_used", [])
         )
         for candidate in context.candidates:
             bundle = candidate.literature_evidence
@@ -1467,11 +1513,7 @@ class ReportWriterAgent(BaseAgent):
         return dict(value) if isinstance(value, dict) else {}
 
     def _candidate_literature_items(self, candidate: MoleculeCandidate) -> list[EvidenceItem]:
-        return [
-            item
-            for item in candidate.evidence
-            if item.evidence_type.startswith("literature_")
-        ]
+        return [item for item in candidate.evidence if item.evidence_type.startswith("literature_")]
 
     def _all_literature_items(self, context: PipelineContext) -> list[EvidenceItem]:
         items: list[EvidenceItem] = []
@@ -1479,9 +1521,7 @@ class ReportWriterAgent(BaseAgent):
             items.extend(self._candidate_literature_items(candidate))
         for target in context.targets:
             items.extend(
-                item
-                for item in target.evidence
-                if item.evidence_type.startswith("literature_")
+                item for item in target.evidence if item.evidence_type.startswith("literature_")
             )
         return items
 
@@ -1752,21 +1792,16 @@ class ReportWriterAgent(BaseAgent):
                 counts["contradictory"] += 1
             if item.evidence_type == "literature_mention" or claim_type == "mention_only":
                 counts["mention_only"] += 1
-            if (
-                direction == "supportive"
-                and item.evidence_type
-                not in {"literature_safety", "literature_contradictory"}
-            ):
+            if direction == "supportive" and item.evidence_type not in {
+                "literature_safety",
+                "literature_contradictory",
+            }:
                 counts["supportive"] += 1
         return counts
 
     def _paper_keys(self, items: list[EvidenceItem]) -> set[str]:
         return {
-            str(
-                item.metadata.get("paper_id")
-                or item.metadata.get("pmid")
-                or item.source_record_id
-            )
+            str(item.metadata.get("paper_id") or item.metadata.get("pmid") or item.source_record_id)
             for item in items
         }
 
@@ -1859,6 +1894,712 @@ class ReportWriterAgent(BaseAgent):
         for candidate in candidates:
             yield from candidate.evidence
 
+    def _developability_payload(
+        self,
+        context: PipelineContext,
+    ) -> list[dict[str, Any]]:
+        structured = self._structured_developability_assessments(context)
+        if structured:
+            return [assessment.model_dump(mode="json") for assessment in structured]
+        assessments = self._all_legacy_developability_assessments(context)
+        return [assessment.model_dump(mode="json") for assessment in assessments]
+
+    def _all_legacy_developability_assessments(
+        self,
+        context: PipelineContext,
+    ) -> list[DevelopabilityAssessment]:
+        assessments: list[DevelopabilityAssessment] = []
+        seen: set[tuple[str, str]] = set()
+        for candidate in context.candidates:
+            assessment = candidate.developability_assessment
+            if assessment is None:
+                continue
+            key = (assessment.origin, assessment.molecule_name)
+            if key not in seen:
+                seen.add(key)
+                assessments.append(assessment)
+        for candidate in context.generated_candidates:
+            assessment = candidate.developability_assessment
+            if assessment is None:
+                continue
+            key = (assessment.origin, assessment.molecule_name)
+            if key not in seen:
+                seen.add(key)
+                assessments.append(assessment)
+        return assessments
+
+    def _developability_summary_lines(self, context: PipelineContext) -> list[str]:
+        summary = self._developability_summary_payload(context)
+        if summary["assessment_count"] == 0:
+            return ["- No developability assessments were recorded."]
+        lines = [
+            *DEVELOPABILITY_DISCLAIMER_LINES,
+            f"- Assessed existing molecules: {summary['assessed_existing_count']}",
+            f"- Assessed generated molecules: {summary['assessed_generated_count']}",
+            f"- Retained count: {summary['retained_count']}",
+            f"- Deprioritized count: {summary['deprioritized_count']}",
+            f"- Rejected count: {summary['rejected_count']}",
+            f"- Risk-level distribution: {self._format_distribution(summary['risk_levels'])}",
+            f"- Alert distribution: {self._format_distribution(summary['alerts'])}",
+            f"- ADMET endpoint coverage: {self._format_distribution(summary['admet_endpoints'])}",
+            (
+                "- Synthesizability method coverage: "
+                f"{self._format_distribution(summary['synthesizability_methods'])}"
+            ),
+            (
+                "- Structure/docking availability: "
+                f"{self._format_distribution(summary['structure_docking'])}"
+            ),
+            "- Separate artifact: `developability_report.md`",
+            "- Machine-readable artifact: `developability.json`",
+        ]
+        if summary["docking_enabled"]:
+            lines.append(
+                "- Docking scores, when present, are weak computational heuristics and "
+                "do not prove binding."
+            )
+        return lines
+
+    def _candidate_developability_lines(
+        self,
+        assessment: DevelopabilityAssessment | None,
+    ) -> list[str]:
+        if assessment is None:
+            return ["- No developability assessment recorded."]
+        structured = self._structured_from_legacy(assessment)
+        if structured is not None:
+            return self._structured_developability_lines(structured)
+        lines = [
+            f"- Triage recommendation: {assessment.triage_recommendation}",
+            f"- Developability score: {assessment.developability_score:.3f}",
+            f"- Structure available: {assessment.structure_available}",
+        ]
+        if assessment.structure_filter_pass is not None:
+            lines.append(f"- Structure filter pass: {assessment.structure_filter_pass}")
+        if assessment.synthetic_accessibility_score is not None:
+            lines.append(
+                "- Synthetic-accessibility heuristic score: "
+                f"{assessment.synthetic_accessibility_score:.3f}"
+            )
+        flag_groups = [
+            ("ADMET-style property flags", self._flag_labels(assessment.admet_property_flags)),
+            ("Toxicity-risk flags", self._flag_labels(assessment.toxicity_risk_flags)),
+            (
+                "Medicinal chemistry alerts",
+                self._flag_labels(assessment.medicinal_chemistry_alerts),
+            ),
+            ("Chemical liability flags", self._flag_labels(assessment.chemical_liability_flags)),
+            ("Structure quality flags", self._flag_labels(assessment.structure_quality_flags)),
+        ]
+        for label, values in flag_groups:
+            lines.append(f"- {label}: {values or 'None recorded.'}")
+        return lines
+
+    def _render_developability_report(self, context: PipelineContext) -> str:
+        disease_name = context.disease.canonical_name if context.disease is not None else "unknown"
+        lines = [
+            f"# Developability Triage Report: {disease_name}",
+            "",
+            "## Scope",
+            "",
+            (
+                "This report summarizes V0.4 computational developability triage. "
+                "It does not claim any molecule is safe, clinically suitable, or "
+                "practically synthesizable."
+            ),
+            *DEVELOPABILITY_DISCLAIMER_LINES,
+            "",
+            "## Developability Summary",
+            "",
+            *self._developability_summary_lines(context),
+            "",
+            "## Existing Molecules",
+        ]
+        existing = [
+            assessment
+            for assessment in self._structured_developability_assessments(context)
+            if assessment.origin == "existing"
+        ]
+        generated = [
+            assessment
+            for assessment in self._structured_developability_assessments(context)
+            if assessment.origin == "generated"
+        ]
+        legacy = self._all_legacy_developability_assessments(context)
+        if not existing and not generated and not legacy:
+            lines.append("- No developability assessments were recorded.")
+        for assessment in existing:
+            lines.extend(
+                [
+                    "",
+                    f"### {assessment.molecule_name}",
+                    "",
+                    *self._structured_developability_lines(assessment),
+                ]
+            )
+        if not existing:
+            for assessment in [item for item in legacy if item.origin == "existing"]:
+                lines.extend(
+                    [
+                        "",
+                        f"### {assessment.molecule_name}",
+                        "",
+                        f"- Canonical SMILES: `{assessment.canonical_smiles or 'Unavailable'}`",
+                        *self._candidate_developability_lines(assessment),
+                    ]
+                )
+        lines.extend(["", "## Generated Molecules"])
+        for assessment in generated:
+            reason = self._generated_rejection_or_deprioritization_reason(context, assessment)
+            lines.extend(
+                [
+                    "",
+                    f"### {assessment.molecule_name}",
+                    "",
+                    *self._structured_developability_lines(assessment),
+                    f"- Rejection/deprioritization reason: {reason}",
+                ]
+            )
+        if not generated:
+            for assessment in [item for item in legacy if item.origin == "generated"]:
+                lines.extend(
+                    [
+                        "",
+                        f"### {assessment.molecule_name}",
+                        "",
+                        *self._candidate_developability_lines(assessment),
+                    ]
+                )
+        lines.extend(
+            [
+                "",
+                "## Limitations",
+                "",
+                *DEVELOPABILITY_DISCLAIMER_LINES,
+            ]
+        )
+        if self._developability_summary_payload(context)["docking_enabled"]:
+            lines.append(
+                "- Docking scores are weak computational heuristics and do not prove binding."
+            )
+        if legacy and not existing and not generated:
+            for assessment in legacy:
+                lines.extend(
+                    [
+                        "",
+                        f"### Legacy {assessment.molecule_name}",
+                        "",
+                        f"- Origin: {assessment.origin}",
+                        f"- Canonical SMILES: `{assessment.canonical_smiles or 'Unavailable'}`",
+                        *self._candidate_developability_lines(assessment),
+                    ]
+                )
+        return "\n".join(lines) + "\n"
+
+    def _structured_developability_lines(
+        self,
+        assessment: StructuredDevelopabilityAssessment,
+    ) -> list[str]:
+        alerts = self._structured_alert_lines(assessment)
+        admet_flags = [
+            prediction
+            for prediction in assessment.admet_predictions
+            if prediction.risk_level in {"medium", "high"}
+        ]
+        synth = assessment.synthesizability
+        docking = assessment.docking
+        physchem = assessment.physchem
+        lines = [
+            f"- Developability score: {assessment.overall_developability_score:.3f}",
+            f"- Risk level: {assessment.risk_level}",
+            f"- Recommendation: {assessment.recommendation}",
+            f"- Confidence: {assessment.confidence:.3f}",
+            f"- Canonical SMILES: `{assessment.canonical_smiles or 'Unavailable'}`",
+            "- Key physchem descriptors:",
+            *self._physchem_descriptor_lines(physchem),
+            "- Chemistry alerts:",
+            *alerts,
+            "- ADMET risk flags:",
+            *self._admet_flag_lines(admet_flags),
+            "- Synthesizability summary:",
+            *self._synthesizability_lines(synth),
+            "- Structure/docking summary:",
+            *self._docking_lines(docking),
+            "- Warnings:",
+        ]
+        if assessment.warnings:
+            lines.extend(f"  - {warning}" for warning in assessment.warnings)
+        else:
+            lines.append("  - None recorded.")
+        return lines
+
+    def _physchem_descriptor_lines(self, physchem: Any | None) -> list[str]:
+        if physchem is None:
+            return ["  - Unavailable."]
+        fields = [
+            "molecular_weight",
+            "logp",
+            "tpsa",
+            "hbd",
+            "hba",
+            "rotatable_bonds",
+            "aromatic_rings",
+            "formal_charge",
+            "fraction_csp3",
+            "qed",
+        ]
+        return [
+            f"  - {field}: {self._format_value(getattr(physchem, field, None))}"
+            for field in fields
+        ]
+
+    def _structured_alert_lines(
+        self,
+        assessment: StructuredDevelopabilityAssessment,
+    ) -> list[str]:
+        if not assessment.alerts:
+            return ["  - None recorded."]
+        return [
+            (
+                f"  - {alert.alert_name} [{alert.severity.upper()}] "
+                f"({alert.alert_type}; source={alert.source})"
+            )
+            for alert in assessment.alerts
+        ]
+
+    def _admet_flag_lines(self, predictions: list[Any]) -> list[str]:
+        if not predictions:
+            return ["  - None recorded."]
+        return [
+            f"  - {prediction.endpoint}: {prediction.risk_level} ({prediction.prediction_method})"
+            for prediction in predictions
+        ]
+
+    def _synthesizability_lines(self, synth: Any | None) -> list[str]:
+        if synth is None:
+            return ["  - Unavailable."]
+        return [
+            f"  - Method: {synth.method}",
+            f"  - SA score: {self._format_value(synth.sa_score)}",
+            f"  - Estimated complexity: {synth.estimated_complexity}",
+            f"  - Starting material availability: {synth.starting_material_availability}",
+            f"  - Risk level: {synth.risk_level}",
+            f"  - Confidence: {synth.confidence:.3f}",
+        ]
+
+    def _docking_lines(self, docking: list[Any]) -> list[str]:
+        if not docking:
+            return ["  - No structure/docking assessment recorded."]
+        lines: list[str] = []
+        for item in docking:
+            lines.extend(
+                [
+                    f"  - Enabled: {item.enabled}",
+                    f"  - Target: {item.target_symbol}",
+                    f"  - Structure: {item.structure_source or 'Unavailable'} "
+                    f"{item.structure_id or ''}".rstrip(),
+                    f"  - Engine: {item.docking_engine or 'Unavailable'}",
+                    f"  - Score: {self._format_value(item.docking_score)} "
+                    f"{item.score_units or ''}".rstrip(),
+                    f"  - Binding-site method: {item.binding_site_method or 'Unavailable'}",
+                ]
+            )
+            if item.enabled:
+                lines.append("  - Docking score does not prove binding.")
+            for warning in item.warnings:
+                lines.append(f"  - Warning: {warning}")
+        return lines
+
+    def _format_value(self, value: Any) -> str:
+        if value is None:
+            return "Unavailable"
+        if isinstance(value, float):
+            return f"{value:.3f}"
+        return str(value)
+
+    def _structured_from_legacy(
+        self,
+        assessment: DevelopabilityAssessment,
+    ) -> StructuredDevelopabilityAssessment | None:
+        raw = assessment.metadata.get("structured_developability_assessment")
+        if isinstance(raw, StructuredDevelopabilityAssessment):
+            return raw
+        if isinstance(raw, dict):
+            try:
+                return StructuredDevelopabilityAssessment(**raw)
+            except Exception:
+                return None
+        return None
+
+    def _structured_developability_assessments(
+        self,
+        context: PipelineContext,
+    ) -> list[StructuredDevelopabilityAssessment]:
+        run = self._developability_run(context)
+        if run is not None:
+            return list(run.assessments)
+        values: list[StructuredDevelopabilityAssessment] = []
+        seen: set[tuple[str, str]] = set()
+        for candidate in context.candidates:
+            assessment = candidate.developability_assessment
+            if assessment is None:
+                continue
+            structured = self._structured_from_legacy(assessment)
+            if structured is not None:
+                key = (structured.origin, structured.molecule_id)
+                if key not in seen:
+                    seen.add(key)
+                    values.append(structured)
+        generation_run = self._generation_run(context)
+        generated_molecules = (
+            [*generation_run.retained, *generation_run.rejected]
+            if generation_run is not None
+            else []
+        )
+        for molecule in generated_molecules:
+            raw = molecule.metadata.get("developability_assessment")
+            if isinstance(raw, dict):
+                try:
+                    structured = StructuredDevelopabilityAssessment(**raw)
+                except Exception:
+                    continue
+                key = (structured.origin, structured.molecule_id)
+                if key not in seen:
+                    seen.add(key)
+                    values.append(structured)
+        return values
+
+    def _developability_run(self, context: PipelineContext) -> DevelopabilityRun | None:
+        value = context.config.get("developability_run")
+        if isinstance(value, DevelopabilityRun):
+            return value
+        if isinstance(value, dict):
+            try:
+                return DevelopabilityRun(**value)
+            except Exception:
+                return None
+        return None
+
+    def _developability_run_payload(self, context: PipelineContext) -> dict[str, Any] | None:
+        run = self._developability_run(context)
+        return run.model_dump(mode="json") if run is not None else None
+
+    def _developability_output_payload(
+        self,
+        context: PipelineContext,
+        limitations: list[str],
+    ) -> dict[str, Any]:
+        summary = self._developability_summary_payload(context)
+        run_payload = self._developability_run_payload(context)
+        return {
+            "success": bool(summary["enabled"]),
+            "disease": context.disease,
+            "enabled": summary["enabled"],
+            "assessed_existing_count": summary["assessed_existing_count"],
+            "assessed_generated_count": summary["assessed_generated_count"],
+            "retained_count": summary["retained_count"],
+            "deprioritized_count": summary["deprioritized_count"],
+            "rejected_count": summary["rejected_count"],
+            "risk_distribution": summary["risk_levels"],
+            "alert_distribution": summary["alerts"],
+            "admet_endpoint_coverage": summary["admet_endpoints"],
+            "assessments": self._developability_payload(context),
+            "warnings": (run_payload or {}).get("warnings", []),
+            "limitations": [
+                *limitations,
+                "Developability scores are computational triage heuristics.",
+                "They do not establish safety, efficacy, or synthesizability.",
+                "No synthesis routes, protocols, reagents, or procedures are provided.",
+                "No patient-specific clinical recommendations are provided.",
+            ],
+            "config": self._developability_config_payload(context),
+            "generated_at": datetime.now(UTC).isoformat(),
+        }
+
+    def _developability_summary_payload(self, context: PipelineContext) -> dict[str, Any]:
+        run = self._developability_run(context)
+        structured = self._structured_developability_assessments(context)
+        legacy = self._all_legacy_developability_assessments(context)
+        risk_levels: dict[str, int] = {}
+        alerts: dict[str, int] = {}
+        admet: dict[str, int] = {}
+        synth_methods: dict[str, int] = {}
+        structure_docking: dict[str, int] = {}
+        for assessment in structured:
+            self._increment(risk_levels, assessment.risk_level)
+            for alert in assessment.alerts:
+                self._increment(alerts, f"{alert.alert_type}:{alert.severity}")
+            for prediction in assessment.admet_predictions:
+                self._increment(admet, prediction.endpoint)
+            if assessment.synthesizability is not None:
+                self._increment(synth_methods, assessment.synthesizability.method)
+            if assessment.docking:
+                for dock in assessment.docking:
+                    self._increment(
+                        structure_docking,
+                        "docking_enabled" if dock.enabled else "docking_unavailable",
+                    )
+                    if dock.structure_id:
+                        self._increment(structure_docking, "structure_available")
+            else:
+                self._increment(structure_docking, "not_assessed")
+        if not structured:
+            for assessment in legacy:
+                self._increment(
+                    risk_levels,
+                    self._legacy_risk_level(assessment),
+                )
+                for flag in [
+                    *assessment.admet_property_flags,
+                    *assessment.toxicity_risk_flags,
+                    *assessment.medicinal_chemistry_alerts,
+                    *assessment.chemical_liability_flags,
+                ]:
+                    self._increment(alerts, f"{flag.category}:{flag.severity}")
+                if assessment.synthetic_accessibility_score is not None:
+                    self._increment(synth_methods, "legacy_heuristic")
+                self._increment(
+                    structure_docking,
+                    "structure_available" if assessment.structure_available else "not_available",
+                )
+        return {
+            "enabled": bool(run.enabled) if run is not None else bool(
+                context.config.get("enable_developability", True)
+            ),
+            "assessment_count": len(structured) or len(legacy),
+            "assessed_existing_count": (
+                run.assessed_existing_count
+                if run is not None
+                else sum(item.origin == "existing" for item in legacy)
+            ),
+            "assessed_generated_count": (
+                run.assessed_generated_count
+                if run is not None
+                else sum(item.origin == "generated" for item in legacy)
+            ),
+            "retained_count": run.retained_count if run is not None else 0,
+            "deprioritized_count": run.deprioritized_count if run is not None else 0,
+            "rejected_count": run.rejected_count if run is not None else 0,
+            "risk_levels": dict(sorted(risk_levels.items())),
+            "alerts": dict(sorted(alerts.items())),
+            "admet_endpoints": dict(sorted(admet.items())),
+            "synthesizability_methods": dict(sorted(synth_methods.items())),
+            "structure_docking": dict(sorted(structure_docking.items())),
+            "docking_enabled": bool(context.config.get("enable_docking"))
+            or any(dock.enabled for assessment in structured for dock in assessment.docking),
+        }
+
+    def _developability_existing_payload(self, context: PipelineContext) -> list[dict[str, Any]]:
+        return [
+            assessment.model_dump(mode="json")
+            for assessment in self._structured_developability_assessments(context)
+            if assessment.origin == "existing"
+        ]
+
+    def _developability_generated_payload(self, context: PipelineContext) -> list[dict[str, Any]]:
+        return [
+            {
+                "assessment": assessment.model_dump(mode="json"),
+                "rejection_or_deprioritization_reason": (
+                    self._generated_rejection_or_deprioritization_reason(context, assessment)
+                ),
+            }
+            for assessment in self._structured_developability_assessments(context)
+            if assessment.origin == "generated"
+        ]
+
+    def _candidate_payload(self, context: PipelineContext) -> list[dict[str, Any]]:
+        return [
+            {
+                **candidate.model_dump(mode="json"),
+                "developability": self._legacy_candidate_developability_payload(candidate),
+                "developability_summary": self._candidate_developability_summary(candidate),
+            }
+            for candidate in context.candidates
+        ]
+
+    def _generated_hypothesis_payload(self, context: PipelineContext) -> list[dict[str, Any]]:
+        return [
+            {
+                **candidate.model_dump(mode="json"),
+                "developability": (
+                    candidate.developability_assessment.model_dump(mode="json")
+                    if candidate.developability_assessment is not None
+                    else candidate.trace.get("developability_assessment")
+                ),
+                "developability_summary": self._generated_hypothesis_summary(candidate),
+            }
+            for candidate in context.generated_candidates
+        ]
+
+    def _generated_molecule_payload(self, candidate: GeneratedMolecule) -> dict[str, Any]:
+        developability = self._generated_developability_payload(candidate)
+        return {
+            **candidate.model_dump(mode="json"),
+            "developability": developability,
+            "developability_summary": self._developability_summary_from_payload(
+                developability
+            ),
+            "rejection_reasons": self._generated_rejection_reasons(candidate),
+        }
+
+    def _candidate_developability_summary(
+        self,
+        candidate: MoleculeCandidate,
+    ) -> dict[str, Any] | None:
+        return self._developability_summary_from_payload(
+            self._legacy_candidate_developability_payload(candidate)
+        )
+
+    def _generated_hypothesis_developability_payload(
+        self,
+        candidate: GeneratedMoleculeHypothesis,
+    ) -> dict[str, Any] | None:
+        if candidate.developability_assessment is not None:
+            return candidate.developability_assessment.model_dump(mode="json")
+        raw = candidate.trace.get("developability_assessment")
+        return raw if isinstance(raw, dict) else None
+
+    def _generated_hypothesis_summary(
+        self,
+        candidate: GeneratedMoleculeHypothesis,
+    ) -> dict[str, Any] | None:
+        return self._developability_summary_from_payload(
+            self._generated_hypothesis_developability_payload(candidate)
+        )
+
+    def _legacy_candidate_developability_payload(
+        self,
+        candidate: MoleculeCandidate,
+    ) -> dict[str, Any] | None:
+        if candidate.developability_assessment is not None:
+            return candidate.developability_assessment.model_dump(mode="json")
+        raw = candidate.chemical_metadata.get("developability_assessment")
+        return raw if isinstance(raw, dict) else None
+
+    def _generated_developability_payload(
+        self,
+        candidate: GeneratedMolecule,
+    ) -> dict[str, Any] | None:
+        if candidate.developability_assessment is not None:
+            return candidate.developability_assessment.model_dump(mode="json")
+        raw = candidate.metadata.get("developability_assessment")
+        return raw if isinstance(raw, dict) else None
+
+    def _developability_summary_from_payload(
+        self,
+        payload: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        structured = payload.get("structured_developability_assessment")
+        if isinstance(structured, dict):
+            payload = structured
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        raw_alerts = payload.get("alerts")
+        alerts: list[Any] = raw_alerts if isinstance(raw_alerts, list) else []
+        raw_admet = payload.get("admet_predictions")
+        admet: list[Any] = raw_admet if isinstance(raw_admet, list) else []
+        return {
+            "developability_score": payload.get(
+                "overall_developability_score",
+                payload.get("developability_score"),
+            ),
+            "risk_level": payload.get("risk_level") or metadata.get("risk_level"),
+            "recommendation": payload.get("recommendation")
+            or metadata.get("recommendation")
+            or payload.get("triage_recommendation"),
+            "alert_count": len(alerts),
+            "critical_alert_count": sum(
+                1
+                for alert in alerts
+                if isinstance(alert, dict) and alert.get("severity") == "critical"
+            ),
+            "high_alert_count": sum(
+                1
+                for alert in alerts
+                if isinstance(alert, dict) and alert.get("severity") == "high"
+            ),
+            "admet_high_risk_endpoints": [
+                prediction.get("endpoint")
+                for prediction in admet
+                if isinstance(prediction, dict) and prediction.get("risk_level") == "high"
+            ],
+            "warnings": payload.get("warnings", []),
+        }
+
+    def _generated_rejection_or_deprioritization_reason(
+        self,
+        context: PipelineContext,
+        assessment: StructuredDevelopabilityAssessment,
+    ) -> str:
+        generation_run = self._generation_run(context)
+        if generation_run is not None:
+            for molecule in generation_run.rejected:
+                if molecule.generated_id == assessment.molecule_id:
+                    reasons = self._generated_rejection_reasons(molecule)
+                    return ", ".join(reasons)
+        if assessment.recommendation == "reject":
+            return f"rejected: {assessment.risk_level} developability risk"
+        if assessment.recommendation in {"deprioritize", "expert_review_required"}:
+            return f"deprioritized/review: {assessment.risk_level} developability risk"
+        return "retained"
+
+    def _legacy_risk_level(self, assessment: DevelopabilityAssessment) -> str:
+        raw = str(assessment.metadata.get("risk_level") or "").lower()
+        if raw:
+            return raw
+        if assessment.triage_recommendation == "high_risk_flags":
+            return "high"
+        if assessment.triage_recommendation == "review_flags":
+            return "medium"
+        if assessment.triage_recommendation == "insufficient_structure":
+            return "unknown"
+        return "low"
+
+    def _increment(self, payload: dict[str, int], key: str) -> None:
+        payload[key] = payload.get(key, 0) + 1
+
+    def _format_distribution(self, payload: dict[str, int]) -> str:
+        if not payload:
+            return "None recorded"
+        return ", ".join(f"{key}={value}" for key, value in sorted(payload.items()))
+
+    def _developability_config_payload(self, context: PipelineContext) -> dict[str, Any]:
+        config = context.config.get("ranker_config")
+        source = {
+            **(config if isinstance(config, dict) else {}),
+            **context.config,
+        }
+        keys = [
+            "enable_developability",
+            "strict_developability",
+            "assess_existing_molecules",
+            "assess_generated_molecules",
+            "developability_filter_mode",
+            "reject_critical_alerts",
+            "reject_high_toxicity_risk",
+            "alert_mode",
+            "enable_rule_based_admet",
+            "enable_local_admet_models",
+            "allow_rule_based_admet_fallback",
+            "enable_synthesizability",
+            "enable_structure_retrieval",
+            "enable_docking",
+            "strict_structure_mode",
+            "write_docking_artifacts",
+            "max_structures_per_target",
+            "max_docked_molecules",
+        ]
+        return {key: source.get(key) for key in keys if key in source}
+
+    def _flag_labels(self, flags: list[Any]) -> str:
+        if not flags:
+            return ""
+        return ", ".join(f"{flag.label} ({flag.severity})" for flag in flags)
+
     def _artifact_paths(self, output_dir: Path | None) -> dict[str, str]:
         if output_dir is None:
             return {}
@@ -1867,6 +2608,9 @@ class ReportWriterAgent(BaseAgent):
             "generated_candidates_json": str(output_dir / "generated_candidates.json"),
             "generated_molecules_json": str(output_dir / "generated_molecules.json"),
             "generation_trace_json": str(output_dir / "generation_trace.json"),
+            "developability_assessments_json": str(output_dir / "developability_assessments.json"),
+            "developability_json": str(output_dir / "developability.json"),
+            "developability_report_md": str(output_dir / "developability_report.md"),
             "report_md": str(output_dir / "report.md"),
             "trace_json": str(output_dir / "trace.json"),
         }

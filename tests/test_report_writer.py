@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import Literal
 
 import pytest
 
 from molecule_ranker.agents.base import PipelineContext
 from molecule_ranker.agents.report_writer import ReportWriterAgent
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
+from molecule_ranker.developability.schemas import (
+    ADMETPrediction,
+    ChemistryAlert,
+    DevelopabilityRun,
+    DockingAssessment,
+    PhysChemProfile,
+    SynthesizabilityAssessment,
+)
+from molecule_ranker.developability.schemas import (
+    DevelopabilityAssessment as StructuredDevelopabilityAssessment,
+)
 from molecule_ranker.generation.schemas import (
     ChemicalValidationResult,
     GeneratedMolecule,
@@ -25,6 +37,9 @@ from molecule_ranker.schemas import (
     MoleculeCandidate,
     ScoreBreakdown,
     Target,
+)
+from molecule_ranker.schemas import (
+    DevelopabilityAssessment as LegacyDevelopabilityAssessment,
 )
 
 RETRIEVED_AT = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
@@ -84,10 +99,183 @@ def _generation_seed() -> SeedMolecule:
     )
 
 
+def _physchem(smiles: str) -> PhysChemProfile:
+    return PhysChemProfile(
+        canonical_smiles=smiles,
+        inchi_key="TEST-INCHIKEY",
+        molecular_weight=123.1,
+        logp=2.1,
+        tpsa=35.5,
+        hbd=1,
+        hba=2,
+        rotatable_bonds=3,
+        aromatic_rings=1,
+        heavy_atom_count=9,
+        formal_charge=0,
+        fraction_csp3=0.4,
+        qed=0.62,
+        lipinski_violations=0,
+        veber_violations=0,
+        ghose_violations=1,
+        egan_violations=0,
+        muegge_violations=0,
+        metadata={"assumptions": ["RDKit descriptor snapshot for reporting tests."]},
+    )
+
+
+AlertSeverity = Literal["low", "medium", "high", "critical"]
+ADMETRiskLevel = Literal["low", "medium", "high", "unknown"]
+DevelopabilityRiskLevel = Literal["low", "medium", "high", "critical", "unknown"]
+DevelopabilityRecommendation = Literal[
+    "retain",
+    "deprioritize",
+    "reject",
+    "expert_review_required",
+]
+MoleculeOrigin = Literal["existing", "generated"]
+
+
+def _alert(severity: AlertSeverity = "critical") -> ChemistryAlert:
+    return ChemistryAlert(
+        alert_id=f"local-alert-{severity}",
+        alert_type="toxicophore",
+        alert_name="Test toxicophore-like alert",
+        severity=severity,
+        matched_smarts="[N+](=O)[O-]",
+        description="Transparent test alert used as a risk flag, not proof of toxicity.",
+        source="local_smarts_test_alerts",
+        metadata={"risk_flag_only": True},
+    )
+
+
+def _admet(endpoint: str, risk_level: ADMETRiskLevel = "high") -> ADMETPrediction:
+    return ADMETPrediction(
+        endpoint=endpoint,
+        value=None,
+        probability=None,
+        risk_level=risk_level,
+        model_name="rule_based_admet_baseline",
+        model_version="0.4",
+        prediction_method="rule_based",
+        applicability_domain="unknown",
+        confidence=0.45,
+        metadata={
+            "rules_used": ["test reporting risk flag"],
+            "limitations": ["Computational triage only."],
+        },
+    )
+
+
+def _synth(risk_level: ADMETRiskLevel = "medium") -> SynthesizabilityAssessment:
+    return SynthesizabilityAssessment(
+        sa_score=0.58,
+        retrosynthesis_available=False,
+        route_count=None,
+        estimated_complexity="medium",
+        starting_material_availability="unknown",
+        risk_level=risk_level,
+        method="descriptor_based_fallback",
+        confidence=0.35,
+        warnings=["Coarse computational triage only."],
+        metadata={"fallback": True},
+    )
+
+
+def _docking(enabled: bool = True) -> DockingAssessment:
+    return DockingAssessment(
+        enabled=enabled,
+        target_symbol="MAOB",
+        structure_source="RCSB PDB" if enabled else None,
+        structure_id="1GOS" if enabled else None,
+        ligand_id="GEN-MAOB-0001",
+        docking_engine="mock_vina" if enabled else None,
+        docking_score=0.42 if enabled else None,
+        score_units="normalized_test_score" if enabled else None,
+        binding_site_method="known_ligand_site" if enabled else "skipped",
+        pose_file=None,
+        confidence=0.3,
+        warnings=["Docking score is a weak computational heuristic and does not prove binding."]
+        if enabled
+        else ["Docking disabled."],
+        metadata={"artifact": "not_written"},
+    )
+
+
+def _structured_assessment(
+    molecule_id: str,
+    molecule_name: str,
+    *,
+    origin: MoleculeOrigin,
+    risk_level: DevelopabilityRiskLevel,
+    recommendation: DevelopabilityRecommendation,
+    score: float,
+    alerts: list[ChemistryAlert] | None = None,
+    docking: list[DockingAssessment] | None = None,
+) -> StructuredDevelopabilityAssessment:
+    smiles = "CCOc1ccccc1N" if origin == "generated" else "CCO"
+    return StructuredDevelopabilityAssessment(
+        molecule_id=molecule_id,
+        molecule_name=molecule_name,
+        origin=origin,
+        canonical_smiles=smiles,
+        physchem=_physchem(smiles),
+        alerts=alerts or [],
+        admet_predictions=[
+            _admet(
+                "ames_mutagenicity_risk",
+                "high" if risk_level in {"high", "critical"} else "medium",
+            ),
+            _admet("herg_liability_risk", "medium"),
+        ],
+        synthesizability=_synth("high" if risk_level == "critical" else "medium"),
+        docking=docking or [],
+        overall_developability_score=score,
+        risk_summary=f"{risk_level} computational developability risk flags.",
+        risk_level=risk_level,
+        confidence=0.4 if origin == "generated" else 0.55,
+        recommendation=recommendation,
+        warnings=["Requires expert review."],
+        metadata={"reporting_test_data": True},
+    )
+
+
+def _legacy_assessment(
+    structured: StructuredDevelopabilityAssessment,
+) -> LegacyDevelopabilityAssessment:
+    return LegacyDevelopabilityAssessment(
+        molecule_name=structured.molecule_name,
+        origin=structured.origin,
+        structure_available=structured.physchem is not None,
+        canonical_smiles=structured.canonical_smiles,
+        descriptors={
+            "molecular_weight": structured.physchem.molecular_weight or 0.0,
+            "logp": structured.physchem.logp or 0.0,
+        }
+        if structured.physchem
+        else {},
+        synthetic_accessibility_score=structured.synthesizability.sa_score
+        if structured.synthesizability
+        else None,
+        developability_score=structured.overall_developability_score,
+        triage_recommendation=(
+            "high_risk_flags"
+            if structured.risk_level in {"high", "critical"}
+            else "review_flags"
+        ),
+        limitations=["Developability assessment is computational triage only."],
+        metadata={
+            "risk_level": structured.risk_level,
+            "structured_developability_assessment": structured.model_dump(mode="json"),
+        },
+    )
+
+
 def _generated_molecule(
     generated_id: str,
     *,
     rejected: bool = False,
+    developability: LegacyDevelopabilityAssessment | None = None,
+    structured_developability: StructuredDevelopabilityAssessment | None = None,
 ) -> GeneratedMolecule:
     validation = ChemicalValidationResult(
         valid_rdkit_mol=not rejected,
@@ -96,7 +284,9 @@ def _generated_molecule(
         allowed_elements_ok=True,
         descriptor_bounds_ok=True,
         pains_or_alerts=[],
-        rejection_reasons=["rdkit_parse_failed"] if rejected else [],
+        rejection_reasons=(
+            ["rdkit_parse_failed", "developability_filter_failed"] if rejected else []
+        ),
         metadata={},
     )
     novelty = NoveltyAssessment(
@@ -139,14 +329,40 @@ def _generated_molecule(
         diversity_cluster="cluster-1",
         generation_score=0.61,
         score_breakdown=score,
+        developability_assessment=developability,
         warnings=["in_silico_hypothesis_only"],
-        metadata={"operation": "mutation"},
+        metadata={
+            "operation": "mutation",
+            **(
+                {
+                    "developability_assessment": structured_developability.model_dump(
+                        mode="json"
+                    )
+                }
+                if structured_developability is not None
+                else {}
+            ),
+        },
     )
 
 
-def _generation_run() -> GenerationRun:
-    retained = _generated_molecule("GEN-MAOB-0001")
-    rejected = _generated_molecule("GEN-MAOB-REJECTED", rejected=True)
+def _generation_run(
+    retained_developability: LegacyDevelopabilityAssessment | None = None,
+    rejected_developability: LegacyDevelopabilityAssessment | None = None,
+    retained_structured: StructuredDevelopabilityAssessment | None = None,
+    rejected_structured: StructuredDevelopabilityAssessment | None = None,
+) -> GenerationRun:
+    retained = _generated_molecule(
+        "GEN-MAOB-0001",
+        developability=retained_developability,
+        structured_developability=retained_structured,
+    )
+    rejected = _generated_molecule(
+        "GEN-MAOB-REJECTED",
+        rejected=True,
+        developability=rejected_developability,
+        structured_developability=rejected_structured,
+    )
     return GenerationRun(
         objectives=[_generation_objective()],
         seeds=[_generation_seed()],
@@ -163,6 +379,63 @@ def _generation_run() -> GenerationRun:
 
 
 def _scored_context(tmp_path) -> PipelineContext:
+    existing_structured = _structured_assessment(
+        "CHEMBL_TEST",
+        "Evidence-backed candidate",
+        origin="existing",
+        risk_level="critical",
+        recommendation="expert_review_required",
+        score=0.32,
+        alerts=[_alert("critical")],
+        docking=[_docking(True)],
+    )
+    generated_structured = _structured_assessment(
+        "GEN-MAOB-0001",
+        "GEN-MAOB-0001",
+        origin="generated",
+        risk_level="medium",
+        recommendation="deprioritize",
+        score=0.56,
+        alerts=[_alert("medium")],
+        docking=[_docking(True)],
+    )
+    rejected_generated_structured = _structured_assessment(
+        "GEN-MAOB-REJECTED",
+        "GEN-MAOB-REJECTED",
+        origin="generated",
+        risk_level="critical",
+        recommendation="reject",
+        score=0.18,
+        alerts=[_alert("critical")],
+        docking=[_docking(True)],
+    )
+    existing_legacy = _legacy_assessment(existing_structured)
+    generated_legacy = _legacy_assessment(generated_structured)
+    rejected_generated_legacy = _legacy_assessment(rejected_generated_structured)
+    generation_run = _generation_run(
+        generated_legacy,
+        rejected_generated_legacy,
+        generated_structured,
+        rejected_generated_structured,
+    )
+    developability_run = DevelopabilityRun(
+        enabled=True,
+        assessed_existing_count=1,
+        assessed_generated_count=2,
+        retained_count=1,
+        deprioritized_count=1,
+        rejected_count=1,
+        assessments=[
+            existing_structured,
+            generated_structured,
+            rejected_generated_structured,
+        ],
+        warnings=["Developability outputs are computational triage heuristics."],
+        metadata={
+            "alert_counts": {"critical": 2, "medium": 1},
+            "admet_risk_counts": {"high": 2, "medium": 4},
+        },
+    )
     disease = Disease(
         input_name="Parkinson disease",
         canonical_name="Parkinson disease",
@@ -271,6 +544,7 @@ def _scored_context(tmp_path) -> PipelineContext:
         ],
         score=0.835,
         score_breakdown=breakdown,
+        developability_assessment=existing_legacy,
         warnings=[
             "Scores are heuristic and require experimental validation.",
             (
@@ -301,7 +575,11 @@ def _scored_context(tmp_path) -> PipelineContext:
                     "generator": "selfies_mutation_crossover",
                     "operation": "mutation",
                     "parent_smiles": ["CCO"],
+                    "developability_assessment": generated_structured.model_dump(
+                        mode="json"
+                    ),
                 },
+                developability_assessment=generated_legacy,
                 warnings=["hypothesis_only"],
             )
         ],
@@ -337,7 +615,7 @@ def _scored_context(tmp_path) -> PipelineContext:
                 output_summary="Scored one candidate.",
                 warnings=[],
                 metadata={},
-            )
+            ),
         ],
         config={
             "results_dir": str(tmp_path),
@@ -351,7 +629,9 @@ def _scored_context(tmp_path) -> PipelineContext:
                 "generation_method": "selfies_mutation",
             },
             "enable_generation": True,
-            "generation_run": _generation_run(),
+            "enable_docking": True,
+            "generation_run": generation_run,
+            "developability_run": developability_run,
         },
     )
 
@@ -369,14 +649,30 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert (output_dir / "generated_molecules.json").exists()
     assert (output_dir / "generated_candidates.json").exists()
     assert (output_dir / "generation_trace.json").exists()
+    assert (output_dir / "developability_report.md").exists()
+    assert (output_dir / "developability_assessments.json").exists()
+    assert (output_dir / "developability.json").exists()
 
     candidates_payload = json.loads((output_dir / "candidates.json").read_text())
     assert candidates_payload["success"] is True
-    assert (
-        candidates_payload["candidates"][0]["score_breakdown"]["final_score"]
-        == pytest.approx(0.835)
+    assert candidates_payload["candidates"][0]["score_breakdown"]["final_score"] == pytest.approx(
+        0.835
     )
     assert candidates_payload["generated_molecule_hypotheses"][0]["name"] == "GEN-MAOB-0001"
+    assert (
+        candidates_payload["candidates"][0]["developability"]["metadata"]["risk_level"]
+        == "critical"
+    )
+    assert (
+        candidates_payload["candidates"][0]["developability_summary"]["risk_level"]
+        == "critical"
+    )
+    assert (
+        candidates_payload["generated_molecule_hypotheses"][0]["developability"][
+            "metadata"
+        ]["risk_level"]
+        == "medium"
+    )
     generated_payload = json.loads((output_dir / "generated_molecules.json").read_text())
     assert generated_payload["success"] is True
     assert generated_payload["generation_enabled"] is True
@@ -387,11 +683,25 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert generated_payload["seeds"][0]["name"] == "Evidence-backed candidate"
     assert generated_payload["retained_generated_molecules"][0]["canonical_smiles"]
     assert generated_payload["retained_generated_molecules"][0]["inchi_key"]
+    assert (
+        generated_payload["retained_generated_molecules"][0]["developability_summary"][
+            "risk_level"
+        ]
+        == "medium"
+    )
     assert generated_payload["rejected_generated_molecules"][0]["rejection_reasons"] == [
-        "rdkit_parse_failed"
+        "developability_filter_failed",
+        "rdkit_parse_failed",
     ]
+    assert (
+        generated_payload["rejected_generated_molecules"][0]["developability"]["metadata"][
+            "risk_level"
+        ]
+        == "critical"
+    )
     assert generated_payload["generation_config"]["generation_method"] == "selfies_mutation"
-    assert "synthesis" not in json.dumps(generated_payload).lower()
+    assert "synthesis routes" not in json.dumps(generated_payload).lower()
+    assert "procedures" not in json.dumps(generated_payload).lower()
 
     generated_candidates_payload = json.loads(
         (output_dir / "generated_candidates.json").read_text()
@@ -412,6 +722,10 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert generation_trace_payload["generator_method"] == "selfies_mutation"
     assert generation_trace_payload["generator_version"] == "v0.3"
     assert generation_trace_payload["run_timestamp"] == "2026-01-02T03:04:05+00:00"
+    assert generation_trace_payload["developability_filtering_trace"][
+        "assessed_generated_count"
+    ] == 2
+    assert generation_trace_payload["developability_filtering_trace"]["rejected_count"] == 1
 
     trace_payload = json.loads((output_dir / "trace.json").read_text())
     assert trace_payload["traces"][-1]["agent_name"] == "ReportWriterAgent"
@@ -422,9 +736,35 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert trace_payload["artifacts"]["generated_candidates_json"].endswith(
         "generated_candidates.json"
     )
-    assert trace_payload["artifacts"]["generation_trace_json"].endswith(
-        "generation_trace.json"
+    assert trace_payload["artifacts"]["generation_trace_json"].endswith("generation_trace.json")
+    assert trace_payload["artifacts"]["developability_report_md"].endswith(
+        "developability_report.md"
     )
+    assert trace_payload["artifacts"]["developability_assessments_json"].endswith(
+        "developability_assessments.json"
+    )
+    assert trace_payload["artifacts"]["developability_json"].endswith("developability.json")
+    assert trace_payload["developability_run"]["assessed_existing_count"] == 1
+    assert trace_payload["developability_run"]["assessed_generated_count"] == 2
+
+    developability_payload = json.loads((output_dir / "developability.json").read_text())
+    assert developability_payload["success"] is True
+    assert developability_payload["enabled"] is True
+    assert developability_payload["assessed_existing_count"] == 1
+    assert developability_payload["assessed_generated_count"] == 2
+    assert developability_payload["retained_count"] == 1
+    assert developability_payload["deprioritized_count"] == 1
+    assert developability_payload["rejected_count"] == 1
+    assert developability_payload["risk_distribution"]["critical"] == 2
+    assert "toxicophore:critical" in developability_payload["alert_distribution"]
+    assert "ames_mutagenicity_risk" in developability_payload["admet_endpoint_coverage"]
+    assert developability_payload["assessments"][1]["molecule_id"] == "GEN-MAOB-0001"
+    assert developability_payload["warnings"] == [
+        "Developability outputs are computational triage heuristics."
+    ]
+    assert "No synthesis routes" in " ".join(developability_payload["limitations"])
+    assert developability_payload["config"]["enable_docking"] is True
+    assert "generated_at" in developability_payload
 
     report = (output_dir / "report.md").read_text()
     assert "# Molecule Ranking Report: Parkinson disease" in report
@@ -447,6 +787,17 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert "Mapping confidence: 0.950" in report
     assert "Molecules found: yes" in report
     assert "## Evidence Coverage" in report
+    assert "## Developability Summary" in report
+    assert "Developability scores are computational triage heuristics." in report
+    assert "They do not establish safety, efficacy, or synthesizability." in report
+    assert "medicinal chemistry, toxicology, pharmacology" in report
+    assert "No synthesis instructions are provided." in report
+    assert "Risk-level distribution" in report
+    assert "Alert distribution" in report
+    assert "ADMET endpoint coverage" in report
+    assert "Synthesizability method coverage" in report
+    assert "Structure/docking availability" in report
+    assert "Docking scores, when present, are weak computational heuristics" in report
     assert "Disease-target evidence count: 1" in report
     assert "Mechanism evidence count: 1" in report
     assert "Activity evidence count: 1" in report
@@ -496,6 +847,7 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert "Descriptor table" in generated_section
     assert "Novelty assessment" in generated_section
     assert "Validation status" in generated_section
+    assert "Developability triage" in generated_section
     assert "Explanation:" in generated_section
     forbidden_generated_phrases = (
         " active",
@@ -528,6 +880,36 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert "cache_key=cache-test-key" in report
     assert "fixture" not in report.lower()
 
+    developability_report = (output_dir / "developability_report.md").read_text()
+    assert "## Developability Summary" in developability_report
+    assert "Assessed existing molecules: 1" in developability_report
+    assert "Assessed generated molecules: 2" in developability_report
+    assert "Test toxicophore-like alert [CRITICAL]" in developability_report
+    rejection_reason = (
+        "Rejection/deprioritization reason: "
+        "developability_filter_failed, rdkit_parse_failed"
+    )
+    assert rejection_reason in developability_report
+    assert "Docking score does not prove binding." in developability_report
+    assert "Docking scores are weak computational heuristics and do not prove binding." in (
+        developability_report
+    )
+    forbidden_developability_phrases = (
+        "synthesis route",
+        "synthetic route",
+        "retrosynthesis route",
+        "add reagent",
+        "stir at",
+        "reflux",
+        "reaction temperature",
+        "laboratory protocol",
+    )
+    lowered_developability_report = developability_report.lower()
+    assert not any(
+        phrase in lowered_developability_report
+        for phrase in forbidden_developability_phrases
+    )
+
 
 def test_report_writer_failed_run_does_not_create_success_report(tmp_path):
     context = PipelineContext(
@@ -554,6 +936,9 @@ def test_report_writer_failed_run_does_not_create_success_report(tmp_path):
     assert not (tmp_path / "parkinson-disease" / "generated_molecules.json").exists()
     assert not (tmp_path / "parkinson-disease" / "generated_candidates.json").exists()
     assert not (tmp_path / "parkinson-disease" / "generation_trace.json").exists()
+    assert not (tmp_path / "parkinson-disease" / "developability_report.md").exists()
+    assert not (tmp_path / "parkinson-disease" / "developability_assessments.json").exists()
+    assert not (tmp_path / "parkinson-disease" / "developability.json").exists()
 
 
 def test_report_writer_does_not_create_generation_artifacts_when_generation_disabled(
@@ -564,9 +949,7 @@ def test_report_writer_does_not_create_generation_artifacts_when_generation_disa
     context.config.pop("generation_run")
     context.config["enable_generation"] = False
     context.config["ranker_config"]["enable_generation"] = False
-    context.traces = [
-        trace for trace in context.traces if trace.agent_name != "NovelMoleculeAgent"
-    ]
+    context.traces = [trace for trace in context.traces if trace.agent_name != "NovelMoleculeAgent"]
 
     ReportWriterAgent().run(context)
 
@@ -574,5 +957,32 @@ def test_report_writer_does_not_create_generation_artifacts_when_generation_disa
     assert (output_dir / "candidates.json").exists()
     assert (output_dir / "report.md").exists()
     assert (output_dir / "trace.json").exists()
+    assert (output_dir / "developability_report.md").exists()
+    assert (output_dir / "developability_assessments.json").exists()
+    assert (output_dir / "developability.json").exists()
     assert not (output_dir / "generated_candidates.json").exists()
     assert not (output_dir / "generation_trace.json").exists()
+
+
+def test_report_writer_developability_artifact_marks_disabled(tmp_path):
+    context = _scored_context(tmp_path)
+    context.config["enable_developability"] = False
+    context.config["developability_run"] = DevelopabilityRun(
+        enabled=False,
+        assessed_existing_count=0,
+        assessed_generated_count=0,
+        retained_count=0,
+        deprioritized_count=0,
+        rejected_count=0,
+        assessments=[],
+        warnings=["Developability assessment disabled by configuration."],
+        metadata={"enabled": False},
+    )
+
+    ReportWriterAgent().run(context)
+
+    output_dir = tmp_path / "parkinson-disease"
+    payload = json.loads((output_dir / "developability.json").read_text())
+    assert payload["success"] is False
+    assert payload["enabled"] is False
+    assert payload["warnings"] == ["Developability assessment disabled by configuration."]

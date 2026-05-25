@@ -9,6 +9,7 @@ from molecule_ranker.generation.schemas import (
     SeedMolecule,
 )
 from molecule_ranker.generation.scoring import GeneratedMoleculeScorer
+from molecule_ranker.schemas import DevelopabilityAssessment
 
 
 def _objective(literature_score: float = 0.6) -> GenerationObjective:
@@ -94,6 +95,7 @@ def _generated(
     validation: ChemicalValidationResult | None = None,
     descriptors: dict[str, float] | None = None,
     diversity_cluster: str | None = "cluster-1",
+    developability_assessment: DevelopabilityAssessment | None = None,
 ) -> GeneratedMolecule:
     return GeneratedMolecule(
         generated_id=generated_id,
@@ -110,8 +112,26 @@ def _generated(
         validation=validation or _validation(),
         novelty=_novelty(novelty_class),
         diversity_cluster=diversity_cluster,
+        developability_assessment=developability_assessment,
         warnings=["in_silico_hypothesis_only"],
         metadata={},
+    )
+
+
+def _developability(
+    *,
+    score: float,
+    risk_level: str = "low",
+    recommendation: str = "favorable_hypothesis",
+) -> DevelopabilityAssessment:
+    return DevelopabilityAssessment(
+        molecule_name="generated",
+        origin="generated",
+        structure_available=True,
+        canonical_smiles="CCO",
+        developability_score=score,
+        triage_recommendation=recommendation,  # type: ignore[arg-type]
+        metadata={"risk_level": risk_level},
     )
 
 
@@ -128,6 +148,55 @@ def test_generated_molecule_scores_are_bounded():
     for key, value in breakdown.model_dump(exclude={"explanation"}).items():
         assert 0.0 <= value <= 1.0, key
     assert scored[0].generation_score == breakdown.final_generation_score
+
+
+def test_low_developability_reduces_generated_ranking():
+    low = _generated(
+        generated_id="low-dev",
+        developability_assessment=_developability(
+            score=0.1,
+            risk_level="high",
+            recommendation="high_risk_flags",
+        ),
+    )
+    high = _generated(
+        generated_id="high-dev",
+        developability_assessment=_developability(score=0.9),
+    )
+
+    scored = GeneratedMoleculeScorer().score(
+        [low, high],
+        objectives=[_objective()],
+        seeds=[_seed()],
+        retained_generated=[],
+    )
+
+    assert [candidate.generated_id for candidate in scored] == ["high-dev", "low-dev"]
+    assert scored[0].score_breakdown is not None
+    assert scored[0].score_breakdown.developability_score == 0.9
+    assert scored[1].generation_score is not None
+    assert scored[1].generation_score <= 0.45
+
+
+def test_critical_developability_rejects_generated_molecule():
+    critical = _generated(
+        developability_assessment=_developability(
+            score=0.1,
+            risk_level="critical",
+            recommendation="high_risk_flags",
+        )
+    )
+
+    scored = GeneratedMoleculeScorer().score(
+        [critical],
+        objectives=[_objective()],
+        seeds=[_seed()],
+        retained_generated=[],
+    )
+
+    assert "developability_critical_risk" in scored[0].validation.rejection_reasons
+    assert scored[0].generation_score is not None
+    assert 0.0 <= scored[0].generation_score <= 1.0
 
 
 def test_duplicate_molecules_score_low():

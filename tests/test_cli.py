@@ -192,6 +192,21 @@ def test_help_commands_work():
         "--generated-per-objective",
         "--max-retained-generated",
         "--reject-basic-alerts",
+        "--enable-developability",
+        "--disable-developability",
+        "--strict-developability",
+        "--no-strict-developability",
+        "--developability-filter-mode",
+        "--reject-critical-alerts",
+        "--no-reject-critical-alerts",
+        "--reject-high-toxicity-risk",
+        "--enable-local-admet-models",
+        "--disable-rule-based-admet",
+        "--enable-structure-retrieval",
+        "--enable-docking",
+        "--strict-structure-mode",
+        "--max-structures-per-target",
+        "--max-docked-molecules",
     } <= options
 
 
@@ -203,6 +218,8 @@ def test_generate_command_help_is_registered():
     assert generate.exit_code == 0
     benchmark = runner.invoke(app, ["benchmark-generation", "--help"])
     assert benchmark.exit_code == 0
+    developability_benchmark = runner.invoke(app, ["benchmark-developability", "--help"])
+    assert developability_benchmark.exit_code == 0
     command_group = get_command(app)
     assert isinstance(command_group, click.Group)
     command = command_group.commands["generate"]
@@ -217,6 +234,44 @@ def test_generate_command_help_is_registered():
     }
     assert "--max-retained-generated" in options
     assert "--top" in options
+
+
+def test_assess_developability_command_help_is_registered():
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["assess-developability", "--help"])
+
+    assert result.exit_code == 0
+    command_group = get_command(app)
+    assert isinstance(command_group, click.Group)
+    command = command_group.commands["assess-developability"]
+    options = {
+        option
+        for parameter in command.params
+        for option in [
+            *getattr(parameter, "opts", []),
+            *getattr(parameter, "secondary_opts", []),
+        ]
+        if option.startswith("--")
+    }
+    assert {
+        "--input",
+        "--enable-developability",
+        "--disable-developability",
+        "--strict-developability",
+        "--no-strict-developability",
+        "--developability-filter-mode",
+        "--reject-critical-alerts",
+        "--no-reject-critical-alerts",
+        "--reject-high-toxicity-risk",
+        "--enable-local-admet-models",
+        "--disable-rule-based-admet",
+        "--enable-structure-retrieval",
+        "--enable-docking",
+        "--strict-structure-mode",
+        "--max-structures-per-target",
+        "--max-docked-molecules",
+    } <= options
 
 
 def test_benchmark_generation_command_prints_summary(tmp_path):
@@ -257,6 +312,50 @@ def test_benchmark_generation_command_prints_summary(tmp_path):
     assert "Generation benchmark summary" in result.stdout
     assert "Validity rate: 1.000" in result.stdout
     assert '"validity_rate": 1.0' in result.stdout
+
+
+def test_benchmark_developability_command_prints_summary(tmp_path):
+    input_path = tmp_path / "developability.json"
+    input_path.write_text(
+        cli.json.dumps(
+            {
+                "success": True,
+                "enabled": True,
+                "assessed_existing_count": 0,
+                "assessed_generated_count": 1,
+                "retained_count": 1,
+                "deprioritized_count": 0,
+                "rejected_count": 0,
+                "assessments": [
+                    {
+                        "molecule_id": "GEN-1",
+                        "molecule_name": "GEN-1",
+                        "origin": "generated",
+                        "canonical_smiles": "CCO",
+                        "physchem": {"molecular_weight": 46.1, "logp": -0.1},
+                        "alerts": [],
+                        "admet_predictions": [
+                            {"endpoint": "solubility_risk", "risk_level": "low"}
+                        ],
+                        "synthesizability": {"estimated_complexity": "low"},
+                        "overall_developability_score": 0.8,
+                        "risk_level": "low",
+                        "recommendation": "retain",
+                    }
+                ],
+                "warnings": [],
+            }
+        )
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["benchmark-developability", "--input", str(input_path)])
+
+    assert result.exit_code == 0
+    assert "Developability benchmark summary" in result.stdout
+    assert "Descriptor coverage: 1.000" in result.stdout
+    assert '"descriptor_coverage": 1.0' in result.stdout
+    assert '"solubility_risk": 1' in result.stdout
 
 
 class HealthyAdapter:
@@ -413,6 +512,20 @@ def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_pat
             "--generation-random-seed",
             "123",
             "--reject-basic-alerts",
+            "--strict-developability",
+            "--developability-filter-mode",
+            "filter_all",
+            "--no-reject-critical-alerts",
+            "--reject-high-toxicity-risk",
+            "--enable-local-admet-models",
+            "--disable-rule-based-admet",
+            "--enable-structure-retrieval",
+            "--enable-docking",
+            "--strict-structure-mode",
+            "--max-structures-per-target",
+            "9",
+            "--max-docked-molecules",
+            "4",
         ],
     )
 
@@ -462,6 +575,18 @@ def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_pat
     assert FakeOrchestrator.last_config.max_retained_generated == 7
     assert FakeOrchestrator.last_config.generation_random_seed == 123
     assert FakeOrchestrator.last_config.reject_basic_alerts is True
+    assert FakeOrchestrator.last_config.enable_developability is True
+    assert FakeOrchestrator.last_config.strict_developability is True
+    assert FakeOrchestrator.last_config.developability_filter_mode == "filter_all"
+    assert FakeOrchestrator.last_config.reject_critical_alerts is False
+    assert FakeOrchestrator.last_config.reject_high_toxicity_risk is True
+    assert FakeOrchestrator.last_config.enable_local_admet_models is True
+    assert FakeOrchestrator.last_config.enable_rule_based_admet is False
+    assert FakeOrchestrator.last_config.enable_structure_retrieval is True
+    assert FakeOrchestrator.last_config.enable_docking is True
+    assert FakeOrchestrator.last_config.strict_structure_mode is True
+    assert FakeOrchestrator.last_config.max_structures_per_target == 9
+    assert FakeOrchestrator.last_config.max_docked_molecules == 4
 
 
 def test_generation_command_enables_generation(tmp_path, monkeypatch):
@@ -507,6 +632,26 @@ def test_rank_command_keeps_generation_disabled_by_default(tmp_path, monkeypatch
     assert result.exit_code == 0
     assert FakeOrchestrator.last_config is not None
     assert FakeOrchestrator.last_config.enable_generation is False
+
+
+def test_rank_command_can_disable_developability(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "MoleculeRankerOrchestrator", FakeOrchestrator)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "rank",
+            "Alzheimer disease",
+            "--output-dir",
+            str(tmp_path),
+            "--disable-developability",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert FakeOrchestrator.last_config is not None
+    assert FakeOrchestrator.last_config.enable_developability is False
 
 
 def test_rank_command_reads_ncbi_api_key_from_named_env(tmp_path, monkeypatch):
@@ -669,3 +814,162 @@ def test_rank_command_prints_clear_ambiguous_disease_message(tmp_path, monkeypat
     assert "Disease input was ambiguous. Top matches:" in result.stderr
     assert "Alpha condition" in result.stderr
     assert "Beta condition" in result.stderr
+
+
+def test_assess_developability_command_reads_generated_artifact(tmp_path):
+    input_path = tmp_path / "generated_candidates.json"
+    input_path.write_text(
+        cli.json.dumps(
+            {
+                "success": True,
+                "disease": {
+                    "input_name": "Parkinson disease",
+                    "canonical_name": "Parkinson disease",
+                    "synonyms": [],
+                    "identifiers": {"open_targets": "MONDO_TEST"},
+                    "description": None,
+                },
+                "retained_generated_molecules": [
+                    {
+                        "generated_id": "GEN-1",
+                        "smiles": "CCO",
+                        "canonical_smiles": "CCO",
+                        "selfies": None,
+                        "inchi_key": "TEST-INCHIKEY",
+                        "origin": "generated",
+                        "generation_method": "selfies_mutation",
+                        "parent_seed_ids": ["seed-1"],
+                        "conditioned_targets": ["MAOB"],
+                        "objective_id": "objective-1",
+                        "generation_round": 1,
+                        "descriptors": {"molecular_weight": 46.1},
+                        "fingerprints": {},
+                        "validation": {
+                            "valid_rdkit_mol": True,
+                            "sanitization_ok": True,
+                            "canonicalization_ok": True,
+                            "allowed_elements_ok": True,
+                            "descriptor_bounds_ok": True,
+                            "pains_or_alerts": [],
+                            "rejection_reasons": [],
+                            "metadata": {},
+                        },
+                        "novelty": None,
+                        "diversity_cluster": None,
+                        "generation_score": 0.7,
+                        "score_breakdown": None,
+                        "developability_assessment": None,
+                        "warnings": [],
+                        "metadata": {},
+                    }
+                ],
+                "rejected_generated_molecules": [],
+                "warnings": [],
+            }
+        )
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["assess-developability", "--input", str(input_path)])
+
+    assert result.exit_code == 0
+    output_path = tmp_path / "developability.json"
+    assert output_path.exists()
+    payload = cli.json.loads(output_path.read_text())
+    assert payload["success"] is True
+    assert payload["enabled"] is True
+    assert payload["assessed_existing_count"] == 0
+    assert payload["assessed_generated_count"] == 1
+    assert payload["developability_run"]["enabled"] is True
+    assert payload["risk_distribution"]
+    assert "solubility_risk" in payload["admet_endpoint_coverage"]
+    assert payload["assessments"][0]["molecule_id"] == "GEN-1"
+    assert "No synthesis instructions" in payload["limitations"][3]
+    assert "Developability assessment summary" in result.stdout
+
+
+def test_assess_developability_disabled_writes_disabled_artifact(tmp_path):
+    input_path = _write_generated_developability_input(tmp_path, smiles="CCO")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "assess-developability",
+            "--input",
+            str(input_path),
+            "--disable-developability",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = cli.json.loads((tmp_path / "developability.json").read_text())
+    assert payload["success"] is False
+    assert payload["enabled"] is False
+    assert payload["warnings"] == ["Developability assessment disabled by configuration."]
+
+
+def test_assess_developability_strict_failure_does_not_write_success_artifact(tmp_path):
+    input_path = _write_generated_developability_input(tmp_path, smiles="not-a-smiles")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "assess-developability",
+            "--input",
+            str(input_path),
+            "--strict-developability",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert not (tmp_path / "developability.json").exists()
+
+
+def _write_generated_developability_input(tmp_path, *, smiles: str) -> Path:
+    input_path = tmp_path / "generated_candidates.json"
+    input_path.write_text(
+        cli.json.dumps(
+            {
+                "success": True,
+                "retained_generated_molecules": [
+                    {
+                        "generated_id": "GEN-STRICT",
+                        "smiles": smiles,
+                        "canonical_smiles": smiles,
+                        "selfies": None,
+                        "inchi_key": "TEST-INCHIKEY",
+                        "origin": "generated",
+                        "generation_method": "selfies_mutation",
+                        "parent_seed_ids": ["seed-1"],
+                        "conditioned_targets": ["MAOB"],
+                        "objective_id": "objective-1",
+                        "generation_round": 1,
+                        "descriptors": {},
+                        "fingerprints": {},
+                        "validation": {
+                            "valid_rdkit_mol": True,
+                            "sanitization_ok": True,
+                            "canonicalization_ok": True,
+                            "allowed_elements_ok": True,
+                            "descriptor_bounds_ok": True,
+                            "pains_or_alerts": [],
+                            "rejection_reasons": [],
+                            "metadata": {},
+                        },
+                        "novelty": None,
+                        "diversity_cluster": None,
+                        "generation_score": 0.7,
+                        "score_breakdown": None,
+                        "developability_assessment": None,
+                        "warnings": [],
+                        "metadata": {},
+                    }
+                ],
+                "rejected_generated_molecules": [],
+                "warnings": [],
+            }
+        )
+    )
+    return input_path

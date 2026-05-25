@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from molecule_ranker.agents import (
+    DevelopabilityAssessmentAgent,
     DiseaseResolverAgent,
     EvidenceScoringAgent,
     LiteratureEvidenceAgent,
@@ -124,13 +125,15 @@ class MoleculeRankerOrchestrator:
                 metadata_source,
             )
         self.evidence_scoring = EvidenceScoringAgent()
+        self.developability_assessment = DevelopabilityAssessmentAgent()
         self.report_writer = ReportWriterAgent()
         self.agents: list[BaseAgent] = [
             self.disease_resolver,
             self.target_discovery,
             self.molecule_retrieval,
-            self.evidence_scoring,
             self.novel_molecule,
+            self.developability_assessment,
+            self.evidence_scoring,
             self.report_writer,
         ]
         if self.literature_evidence is not None:
@@ -180,8 +183,7 @@ class MoleculeRankerOrchestrator:
         missing_evidence = [
             candidate.name
             for candidate in context.candidates
-            if not self._has_real_retrieved_evidence(candidate)
-            and candidate.origin != "generated"
+            if not self._has_real_retrieved_evidence(candidate) and candidate.origin != "generated"
         ]
         if missing_evidence:
             raise NoCandidatesFoundError(

@@ -66,6 +66,30 @@ class RankerConfig(BaseModel):
     distant_similarity_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
     reject_distant_generated: bool = True
     reject_basic_alerts: bool = False
+    enable_structure_filtering: bool = False
+    filter_developability_failures: bool = False
+    min_developability_score: float = Field(default=0.25, ge=0.0, le=1.0)
+    enable_developability: bool = True
+    strict_developability: bool = False
+    assess_existing_molecules: bool = True
+    assess_generated_molecules: bool = True
+    developability_filter_mode: str = "filter_generated_only"
+    reject_critical_alerts: bool = True
+    reject_high_toxicity_risk: bool = False
+    alert_mode: str = "deprioritize"
+    enable_rule_based_admet: bool = True
+    enable_local_admet_models: bool = False
+    allow_rule_based_admet_fallback: bool = True
+    enable_synthesizability: bool = True
+    enable_structure_retrieval: bool = False
+    require_developability_for_generated: bool = True
+    enable_docking: bool = False
+    strict_structure_mode: bool = False
+    write_docking_artifacts: bool = False
+    max_structures_per_target: int = Field(default=5, ge=1)
+    max_docked_molecules: int = Field(default=20, ge=0)
+    enable_tdc_benchmark: bool = False
+    tdc_data_dir: Path = Path(".cache/molecule-ranker/tdc")
     allowed_generation_elements: list[str] = Field(
         default_factory=lambda: list(DEFAULT_GENERATION_ELEMENTS)
     )
@@ -146,15 +170,39 @@ class RankerConfig(BaseModel):
             "enable_crossover": self.enable_crossover,
             "min_seed_score": self.min_seed_score,
             "min_seed_target_relevance": self.min_seed_target_relevance,
-            "min_target_relevance_for_generation": (
-                self.min_target_relevance_for_generation
-            ),
+            "min_target_relevance_for_generation": (self.min_target_relevance_for_generation),
             "duplicate_similarity_threshold": self.duplicate_similarity_threshold,
             "near_duplicate_similarity_threshold": self.near_duplicate_similarity_threshold,
             "distant_similarity_threshold": self.distant_similarity_threshold,
             "reject_distant_generated": self.reject_distant_generated,
             "reject_distant_generated_molecules": self.reject_distant_generated,
             "reject_basic_alerts": self.reject_basic_alerts,
+            "enable_structure_filtering": self.enable_structure_filtering,
+            "filter_developability_failures": self.filter_developability_failures,
+            "min_developability_score": self.min_developability_score,
+            "enable_developability": self.enable_developability,
+            "strict_developability": self.strict_developability,
+            "assess_existing_molecules": self.assess_existing_molecules,
+            "assess_generated_molecules": self.assess_generated_molecules,
+            "developability_filter_mode": self.developability_filter_mode,
+            "reject_critical_alerts": self.reject_critical_alerts,
+            "reject_high_toxicity_risk": self.reject_high_toxicity_risk,
+            "alert_mode": self.alert_mode,
+            "enable_rule_based_admet": self.enable_rule_based_admet,
+            "enable_local_admet_models": self.enable_local_admet_models,
+            "allow_rule_based_admet_fallback": self.allow_rule_based_admet_fallback,
+            "enable_synthesizability": self.enable_synthesizability,
+            "enable_structure_retrieval": self.enable_structure_retrieval,
+            "require_developability_for_generated": (
+                self.require_developability_for_generated
+            ),
+            "enable_docking": self.enable_docking,
+            "strict_structure_mode": self.strict_structure_mode,
+            "write_docking_artifacts": self.write_docking_artifacts,
+            "max_structures_per_target": self.max_structures_per_target,
+            "max_docked_molecules": self.max_docked_molecules,
+            "enable_tdc_benchmark": self.enable_tdc_benchmark,
+            "tdc_data_dir": str(self.tdc_data_dir),
             "basic_alerts_warning_only": not self.reject_basic_alerts,
             "allowed_generation_elements": list(self.allowed_generation_elements),
             "generated_candidate_limit": self.max_retained_generated,

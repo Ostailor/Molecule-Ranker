@@ -57,6 +57,26 @@ def test_ranker_config_defaults_are_sensible_for_first_real_run():
     assert config.distant_similarity_threshold == 0.25
     assert config.reject_distant_generated is True
     assert config.reject_basic_alerts is False
+    assert config.enable_developability is True
+    assert config.strict_developability is False
+    assert config.assess_existing_molecules is True
+    assert config.assess_generated_molecules is True
+    assert config.developability_filter_mode == "filter_generated_only"
+    assert config.reject_critical_alerts is True
+    assert config.reject_high_toxicity_risk is False
+    assert config.alert_mode == "deprioritize"
+    assert config.enable_rule_based_admet is True
+    assert config.enable_local_admet_models is False
+    assert config.allow_rule_based_admet_fallback is True
+    assert config.enable_synthesizability is True
+    assert config.enable_structure_retrieval is False
+    assert config.enable_docking is False
+    assert config.strict_structure_mode is False
+    assert config.write_docking_artifacts is False
+    assert config.max_structures_per_target == 5
+    assert config.max_docked_molecules == 20
+    assert config.enable_tdc_benchmark is False
+    assert config.tdc_data_dir.as_posix() == ".cache/molecule-ranker/tdc"
     assert config.allowed_generation_elements == [
         "C",
         "H",
@@ -80,3 +100,7 @@ def test_ranker_config_trace_metadata_is_json_serializable():
     assert metadata["enable_literature"] is True
     assert metadata["literature_sources"] == ["pubmed"]
     assert metadata["enable_generation"] is False
+    assert metadata["enable_developability"] is True
+    assert metadata["enable_docking"] is False
+    assert metadata["enable_tdc_benchmark"] is False
+    assert metadata["tdc_data_dir"] == ".cache/molecule-ranker/tdc"

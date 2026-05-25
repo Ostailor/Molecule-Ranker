@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
+from pydantic import BaseModel
 
 from molecule_ranker import __version__
-from molecule_ranker.agents.base import AgentExecutionError
+from molecule_ranker.agents.base import AgentExecutionError, PipelineContext
+from molecule_ranker.agents.developability_assessment import DevelopabilityAssessmentAgent
 from molecule_ranker.config import RankerConfig
 from molecule_ranker.data_sources import (
     ChEMBLAdapter,
@@ -23,11 +26,21 @@ from molecule_ranker.data_sources.errors import (
     NoCandidatesFoundError,
     TargetDiscoveryError,
 )
+from molecule_ranker.developability.benchmark import (
+    DevelopabilityBenchmarkError,
+    benchmark_developability_file,
+)
 from molecule_ranker.generation.benchmark import (
     GenerationBenchmarkError,
     benchmark_generated_file,
 )
 from molecule_ranker.generation.errors import GenerationError
+from molecule_ranker.generation.schemas import (
+    GeneratedMolecule,
+    GenerationObjective,
+    GenerationRun,
+    SeedMolecule,
+)
 from molecule_ranker.literature.adapters.openalex_adapter import (
     OpenAlexAdapter as LiteratureOpenAlexAdapter,
 )
@@ -35,7 +48,12 @@ from molecule_ranker.literature.adapters.pubmed_adapter import (
     PubMedAdapter as LiteraturePubMedAdapter,
 )
 from molecule_ranker.orchestrator import MoleculeRankerOrchestrator
-from molecule_ranker.schemas import RankingRun
+from molecule_ranker.schemas import (
+    Disease,
+    GeneratedMoleculeHypothesis,
+    MoleculeCandidate,
+    RankingRun,
+)
 from molecule_ranker.utils import slugify
 
 PIPELINE_ERRORS = (
@@ -93,9 +111,7 @@ def health(
         state = "OK" if status.ok else "FAIL"
         latency = f"{status.latency_ms:.1f} ms" if status.latency_ms is not None else "n/a"
         error = status.error or ""
-        typer.echo(
-            f"{status.source_name}\t{state}\t{latency}\t{status.endpoint}\t{error}"
-        )
+        typer.echo(f"{status.source_name}\t{state}\t{latency}\t{status.endpoint}\t{error}")
 
     if not all(status.ok for status in statuses):
         raise typer.Exit(code=1)
@@ -388,8 +404,123 @@ def rank(
             help="Reject generated structures with coarse chemistry alerts.",
         ),
     ] = False,
+    enable_structure_filtering: Annotated[
+        bool,
+        typer.Option(
+            "--enable-structure-filtering/--disable-structure-filtering",
+            help="Record structure-aware developability filter pass/fail fields.",
+        ),
+    ] = False,
+    filter_developability_failures: Annotated[
+        bool,
+        typer.Option(
+            "--filter-developability-failures",
+            help="Remove candidates that fail the configured developability filter threshold.",
+        ),
+    ] = False,
+    min_developability_score: Annotated[
+        float,
+        typer.Option(
+            "--min-developability-score",
+            min=0.0,
+            max=1.0,
+            help="Minimum heuristic developability score for optional filtering.",
+        ),
+    ] = 0.25,
+    enable_developability: Annotated[
+        bool,
+        typer.Option(
+            "--enable-developability/--disable-developability",
+            help="Enable or skip V0.4 developability triage.",
+        ),
+    ] = True,
+    strict_developability: Annotated[
+        bool,
+        typer.Option(
+            "--strict-developability/--no-strict-developability",
+            help="Fail the run when developability assessment fails for a molecule.",
+        ),
+    ] = False,
+    developability_filter_mode: Annotated[
+        str,
+        typer.Option(
+            "--developability-filter-mode",
+            help=(
+                "Developability action mode: report_only, deprioritize, "
+                "filter_generated_only, or filter_all."
+            ),
+        ),
+    ] = "filter_generated_only",
+    reject_critical_alerts: Annotated[
+        bool,
+        typer.Option(
+            "--reject-critical-alerts/--no-reject-critical-alerts",
+            help="Reject molecules with critical developability alerts when filtering applies.",
+        ),
+    ] = True,
+    reject_high_toxicity_risk: Annotated[
+        bool,
+        typer.Option(
+            "--reject-high-toxicity-risk",
+            help="Reject molecules with high toxicity-risk flags when filtering applies.",
+        ),
+    ] = False,
+    enable_local_admet_models: Annotated[
+        bool,
+        typer.Option(
+            "--enable-local-admet-models",
+            help="Enable configured local ADMET model adapters when available.",
+        ),
+    ] = False,
+    disable_rule_based_admet: Annotated[
+        bool,
+        typer.Option(
+            "--disable-rule-based-admet",
+            help="Disable the rule-based ADMET baseline triage.",
+        ),
+    ] = False,
+    enable_structure_retrieval: Annotated[
+        bool,
+        typer.Option(
+            "--enable-structure-retrieval",
+            help="Enable optional target structure metadata retrieval.",
+        ),
+    ] = False,
+    enable_docking: Annotated[
+        bool,
+        typer.Option(
+            "--enable-docking",
+            help=(
+                "Enable optional docking plugin path when explicit structure inputs are "
+                "available."
+            ),
+        ),
+    ] = False,
+    strict_structure_mode: Annotated[
+        bool,
+        typer.Option(
+            "--strict-structure-mode",
+            help="Fail optional structure/docking steps instead of warning when unavailable.",
+        ),
+    ] = False,
+    max_structures_per_target: Annotated[
+        int,
+        typer.Option(
+            "--max-structures-per-target",
+            min=1,
+            help="Maximum target structures considered per target for optional structure metadata.",
+        ),
+    ] = 5,
+    max_docked_molecules: Annotated[
+        int,
+        typer.Option(
+            "--max-docked-molecules",
+            min=0,
+            help="Maximum molecules sent to optional docking when docking is enabled.",
+        ),
+    ] = 20,
 ) -> None:
-    """Run the V0.3 ranking pipeline with optional generated molecule hypotheses."""
+    """Run the V0.4 ranking pipeline with developability triage."""
     defaults = RankerConfig()
     config = RankerConfig(
         results_dir=output_dir,
@@ -400,9 +531,7 @@ def rank(
         cache_ttl_seconds=cache_ttl_hours * 60 * 60,
         default_target_limit=max_targets or defaults.default_target_limit,
         target_source_limit=defaults.target_source_limit,
-        max_molecules_per_target=(
-            max_molecules_per_target or defaults.max_molecules_per_target
-        ),
+        max_molecules_per_target=(max_molecules_per_target or defaults.max_molecules_per_target),
         max_activity_records_per_target=(
             max_activity_records_per_target or defaults.max_activity_records_per_target
         ),
@@ -440,6 +569,21 @@ def rank(
         generated_per_objective=generated_per_objective,
         max_retained_generated=max_retained_generated,
         reject_basic_alerts=reject_basic_alerts,
+        enable_structure_filtering=enable_structure_filtering,
+        filter_developability_failures=filter_developability_failures,
+        min_developability_score=min_developability_score,
+        enable_developability=enable_developability,
+        strict_developability=strict_developability,
+        developability_filter_mode=developability_filter_mode,
+        reject_critical_alerts=reject_critical_alerts,
+        reject_high_toxicity_risk=reject_high_toxicity_risk,
+        enable_local_admet_models=enable_local_admet_models,
+        enable_rule_based_admet=not disable_rule_based_admet,
+        enable_structure_retrieval=enable_structure_retrieval,
+        enable_docking=enable_docking,
+        strict_structure_mode=strict_structure_mode,
+        max_structures_per_target=max_structures_per_target,
+        max_docked_molecules=max_docked_molecules,
     )
 
     try:
@@ -527,6 +671,13 @@ def generate(
             help="Reject generated structures with coarse chemistry alerts.",
         ),
     ] = False,
+    enable_structure_filtering: Annotated[
+        bool,
+        typer.Option(
+            "--enable-structure-filtering/--disable-structure-filtering",
+            help="Record structure-aware developability filter pass/fail fields.",
+        ),
+    ] = False,
 ) -> None:
     """Run the full retrieval pipeline and focus output on generated molecules."""
     config = RankerConfig(
@@ -539,6 +690,7 @@ def generate(
         generation_random_seed=generation_random_seed,
         max_retained_generated=max_retained_generated,
         reject_basic_alerts=reject_basic_alerts,
+        enable_structure_filtering=enable_structure_filtering,
     )
 
     try:
@@ -590,6 +742,418 @@ def benchmark_generation(
     typer.echo(json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True))
 
 
+@app.command("benchmark-developability")
+def benchmark_developability(
+    input_path: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to developability.json.",
+        ),
+    ],
+    enable_tdc_benchmark: Annotated[
+        bool,
+        typer.Option(
+            "--enable-tdc-benchmark",
+            help="Enable optional TDC ADMET benchmark checks when tdc is installed.",
+        ),
+    ] = False,
+    tdc_data_dir: Annotated[
+        Path,
+        typer.Option(
+            "--tdc-data-dir",
+            file_okay=False,
+            dir_okay=True,
+            help="Directory for optional TDC datasets when benchmark mode is enabled.",
+        ),
+    ] = Path(".cache/molecule-ranker/tdc"),
+) -> None:
+    """Benchmark V0.4 developability artifact coverage and calibration signals."""
+    try:
+        result = benchmark_developability_file(
+            input_path,
+            enable_tdc_benchmark=enable_tdc_benchmark,
+            tdc_data_dir=tdc_data_dir,
+        )
+    except DevelopabilityBenchmarkError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("Developability benchmark summary")
+    typer.echo(f"Input: {input_path}")
+    typer.echo(f"Assessments: {result.assessment_count}")
+    typer.echo(f"Descriptor coverage: {result.descriptor_coverage:.3f}")
+    typer.echo(f"Alert rate: {result.alert_rate:.3f}")
+    typer.echo(f"Critical alert rate: {result.critical_alert_rate:.3f}")
+    typer.echo(f"High-risk ADMET rate: {result.high_risk_admet_rate:.3f}")
+    typer.echo(
+        "Generated retention after developability: "
+        f"{result.generated_retention_rate_after_developability:.3f}"
+    )
+    typer.echo(f"Risk levels: {result.risk_level_distribution}")
+    typer.echo(f"Endpoint coverage: {result.endpoint_coverage}")
+    if result.tdc_benchmark_enabled:
+        typer.echo(f"TDC benchmark available: {result.tdc_benchmark_available}")
+    typer.echo("")
+    typer.echo("JSON summary:")
+    typer.echo(json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True))
+
+
+@app.command("assess-developability")
+def assess_developability(
+    input_path: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to generated_candidates.json or candidates.json.",
+        ),
+    ],
+    output_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Path for developability.json. Defaults next to the input artifact.",
+        ),
+    ] = None,
+    enable_developability: Annotated[
+        bool,
+        typer.Option(
+            "--enable-developability/--disable-developability",
+            help="Enable or skip V0.4 developability triage.",
+        ),
+    ] = True,
+    strict_developability: Annotated[
+        bool,
+        typer.Option(
+            "--strict-developability/--no-strict-developability",
+            help="Fail the command when developability assessment fails for a molecule.",
+        ),
+    ] = False,
+    developability_filter_mode: Annotated[
+        str,
+        typer.Option(
+            "--developability-filter-mode",
+            help="Developability action mode for generated molecules.",
+        ),
+    ] = "filter_generated_only",
+    reject_critical_alerts: Annotated[
+        bool,
+        typer.Option(
+            "--reject-critical-alerts/--no-reject-critical-alerts",
+            help="Reject generated molecules with critical alerts when filtering applies.",
+        ),
+    ] = True,
+    reject_high_toxicity_risk: Annotated[
+        bool,
+        typer.Option(
+            "--reject-high-toxicity-risk",
+            help="Reject molecules with high toxicity-risk flags when filtering applies.",
+        ),
+    ] = False,
+    enable_local_admet_models: Annotated[
+        bool,
+        typer.Option(
+            "--enable-local-admet-models",
+            help="Enable configured local ADMET model adapters when available.",
+        ),
+    ] = False,
+    disable_rule_based_admet: Annotated[
+        bool,
+        typer.Option(
+            "--disable-rule-based-admet",
+            help="Disable the rule-based ADMET baseline triage.",
+        ),
+    ] = False,
+    enable_structure_retrieval: Annotated[
+        bool,
+        typer.Option(
+            "--enable-structure-retrieval",
+            help="Enable optional target structure metadata retrieval.",
+        ),
+    ] = False,
+    enable_docking: Annotated[
+        bool,
+        typer.Option(
+            "--enable-docking",
+            help=(
+                "Enable optional docking plugin path when explicit structure inputs are "
+                "available."
+            ),
+        ),
+    ] = False,
+    strict_structure_mode: Annotated[
+        bool,
+        typer.Option(
+            "--strict-structure-mode",
+            help="Fail optional structure/docking steps instead of warning when unavailable.",
+        ),
+    ] = False,
+    max_structures_per_target: Annotated[
+        int,
+        typer.Option(
+            "--max-structures-per-target",
+            min=1,
+            help="Maximum target structures considered per target.",
+        ),
+    ] = 5,
+    max_docked_molecules: Annotated[
+        int,
+        typer.Option(
+            "--max-docked-molecules",
+            min=0,
+            help="Maximum molecules sent to optional docking when docking is enabled.",
+        ),
+    ] = 20,
+) -> None:
+    """Run developability triage from saved candidate artifacts only."""
+    config = RankerConfig(
+        enable_developability=enable_developability,
+        strict_developability=strict_developability,
+        developability_filter_mode=developability_filter_mode,
+        reject_critical_alerts=reject_critical_alerts,
+        reject_high_toxicity_risk=reject_high_toxicity_risk,
+        enable_local_admet_models=enable_local_admet_models,
+        enable_rule_based_admet=not disable_rule_based_admet,
+        enable_structure_retrieval=enable_structure_retrieval,
+        enable_docking=enable_docking,
+        strict_structure_mode=strict_structure_mode,
+        max_structures_per_target=max_structures_per_target,
+        max_docked_molecules=max_docked_molecules,
+    )
+    output = output_path or input_path.parent / "developability.json"
+    try:
+        payload = _assess_developability_artifact(input_path, output, config)
+    except (OSError, ValueError, AgentExecutionError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("Developability assessment summary")
+    typer.echo(f"Input: {input_path}")
+    typer.echo(f"Assessed existing molecules: {payload['assessed_existing_count']}")
+    typer.echo(f"Assessed generated molecules: {payload['assessed_generated_count']}")
+    typer.echo(f"Rejected molecules: {payload['rejected_count']}")
+    typer.echo(f"Output: {output}")
+
+
+def _assess_developability_artifact(
+    input_path: Path,
+    output_path: Path,
+    config: RankerConfig,
+) -> dict[str, Any]:
+    payload = json.loads(input_path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("Input artifact must contain a JSON object.")
+
+    context = _context_from_candidate_artifact(payload, config)
+    if not context.candidates and "generation_run" not in context.config:
+        raise ValueError("Input artifact did not contain existing or generated molecules.")
+
+    context = DevelopabilityAssessmentAgent().run(context)
+    run = context.config.get("developability_run")
+    run_payload = run.model_dump(mode="json") if isinstance(run, BaseModel) else run
+    if not isinstance(run_payload, dict):
+        raise ValueError("Developability assessment did not produce a run payload.")
+
+    output_payload = {
+        "success": bool(run_payload.get("enabled", False)),
+        "input": str(input_path),
+        "disease": context.disease.model_dump(mode="json") if context.disease else None,
+        "enabled": run_payload.get("enabled", False),
+        "assessed_existing_count": run_payload.get("assessed_existing_count", 0),
+        "assessed_generated_count": run_payload.get("assessed_generated_count", 0),
+        "retained_count": run_payload.get("retained_count", 0),
+        "deprioritized_count": run_payload.get("deprioritized_count", 0),
+        "rejected_count": run_payload.get("rejected_count", 0),
+        "risk_distribution": _risk_distribution(run_payload),
+        "alert_distribution": run_payload.get("metadata", {}).get("alert_counts", {}),
+        "admet_endpoint_coverage": _admet_endpoint_coverage(run_payload),
+        "assessments": run_payload.get("assessments", []),
+        "warnings": run_payload.get("warnings", []),
+        "limitations": [
+            "Developability scores are computational triage heuristics.",
+            "They do not establish safety, efficacy, or synthesizability.",
+            (
+                "They require medicinal chemistry, toxicology, pharmacology, and synthesis "
+                "expert review."
+            ),
+            "No synthesis instructions are provided.",
+            "No synthesis routes, protocols, reagents, or procedures are provided.",
+            "No patient-specific clinical recommendations are provided.",
+        ],
+        "config": _standalone_developability_config(config),
+        "generated_at": datetime.now(UTC).isoformat(),
+        "developability_run": run_payload,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(output_payload, indent=2, sort_keys=True) + "\n")
+    return output_payload
+
+
+def _context_from_candidate_artifact(
+    payload: dict[str, Any],
+    config: RankerConfig,
+) -> PipelineContext:
+    runtime_config = config.runtime_agent_config(
+        top=config.default_top,
+        results_dir=config.results_dir,
+    )
+    disease = _parse_optional_model(payload.get("disease"), Disease)
+    candidates = [
+        candidate
+        for raw in payload.get("candidates", [])
+        if (candidate := _parse_optional_model(raw, MoleculeCandidate)) is not None
+    ]
+    generated_hypotheses = [
+        hypothesis
+        for raw in payload.get("generated_molecule_hypotheses", [])
+        if (hypothesis := _parse_optional_model(raw, GeneratedMoleculeHypothesis)) is not None
+    ]
+    generation_run = _generation_run_from_artifact(payload)
+    if generation_run is not None:
+        runtime_config["generation_run"] = generation_run
+        runtime_config["enable_generation"] = True
+        runtime_config["enable_novel_generation"] = True
+    return PipelineContext(
+        disease_input=(disease.input_name if disease is not None else "artifact"),
+        disease=disease,
+        candidates=candidates,
+        generated_candidates=generated_hypotheses,
+        config=runtime_config,
+    )
+
+
+def _risk_distribution(run_payload: dict[str, Any]) -> dict[str, int]:
+    distribution: dict[str, int] = {}
+    assessments = run_payload.get("assessments", [])
+    if not isinstance(assessments, list):
+        return distribution
+    for assessment in assessments:
+        if isinstance(assessment, dict):
+            risk = str(assessment.get("risk_level") or "unknown")
+            distribution[risk] = distribution.get(risk, 0) + 1
+    return dict(sorted(distribution.items()))
+
+
+def _admet_endpoint_coverage(run_payload: dict[str, Any]) -> dict[str, int]:
+    coverage: dict[str, int] = {}
+    assessments = run_payload.get("assessments", [])
+    if not isinstance(assessments, list):
+        return coverage
+    for assessment in assessments:
+        if not isinstance(assessment, dict):
+            continue
+        predictions = assessment.get("admet_predictions", [])
+        if not isinstance(predictions, list):
+            continue
+        for prediction in predictions:
+            if isinstance(prediction, dict):
+                endpoint = str(prediction.get("endpoint") or "unknown")
+                coverage[endpoint] = coverage.get(endpoint, 0) + 1
+    return dict(sorted(coverage.items()))
+
+
+def _standalone_developability_config(config: RankerConfig) -> dict[str, Any]:
+    metadata = config.trace_metadata()
+    return {
+        key: metadata[key]
+        for key in [
+            "enable_developability",
+            "strict_developability",
+            "assess_existing_molecules",
+            "assess_generated_molecules",
+            "developability_filter_mode",
+            "reject_critical_alerts",
+            "reject_high_toxicity_risk",
+            "alert_mode",
+            "enable_rule_based_admet",
+            "enable_local_admet_models",
+            "allow_rule_based_admet_fallback",
+            "enable_synthesizability",
+            "enable_structure_retrieval",
+            "enable_docking",
+            "strict_structure_mode",
+            "write_docking_artifacts",
+            "max_structures_per_target",
+            "max_docked_molecules",
+        ]
+        if key in metadata
+    }
+
+
+def _generation_run_from_artifact(payload: dict[str, Any]) -> GenerationRun | None:
+    retained = _generated_molecules_from_list(payload.get("retained_generated_molecules", []))
+    rejected = _rejected_generated_molecules_from_list(
+        payload.get("rejected_generated_molecules", [])
+    )
+    generated = _generated_molecules_from_list(payload.get("generated_molecules", []))
+    if not generated:
+        generated = [*retained, *rejected]
+    if not retained and not rejected and not generated:
+        return None
+    objectives = [
+        objective
+        for raw in payload.get("objectives", [])
+        if (objective := _parse_optional_model(raw, GenerationObjective)) is not None
+    ]
+    seeds = [
+        seed
+        for raw in payload.get("seeds", [])
+        if (seed := _parse_optional_model(raw, SeedMolecule)) is not None
+    ]
+    return GenerationRun(
+        objectives=objectives,
+        seeds=seeds,
+        generated=generated,
+        retained=retained,
+        rejected=rejected,
+        warnings=list(payload.get("warnings", [])),
+        metadata={"source_artifact": "generated_candidates.json"},
+    )
+
+
+def _generated_molecules_from_list(raw_items: Any) -> list[GeneratedMolecule]:
+    if not isinstance(raw_items, list):
+        return []
+    return [
+        molecule
+        for raw in raw_items
+        if (molecule := _parse_optional_model(raw, GeneratedMolecule)) is not None
+    ]
+
+
+def _rejected_generated_molecules_from_list(raw_items: Any) -> list[GeneratedMolecule]:
+    if not isinstance(raw_items, list):
+        return []
+    molecules: list[GeneratedMolecule] = []
+    for raw in raw_items:
+        if isinstance(raw, dict) and "generated_molecule" in raw:
+            raw = raw["generated_molecule"]
+        molecule = _parse_optional_model(raw, GeneratedMolecule)
+        if molecule is not None:
+            molecules.append(molecule)
+    return molecules
+
+
+def _parse_optional_model(raw: Any, model: type[Any]) -> Any | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return model.model_validate(raw)
+    except Exception:
+        return None
+
+
 def _print_human_summary(result: RankingRun, output_dir: Path, *, verbose: bool) -> None:
     artifact_dir = output_dir / slugify(result.disease.canonical_name)
     generation = _generation_summary_from_traces(result)
@@ -601,28 +1165,28 @@ def _print_human_summary(result: RankingRun, output_dir: Path, *, verbose: bool)
     typer.echo(f"Generated molecules retained: {generation['retained']}")
     typer.echo(f"Generated molecules rejected: {generation['rejected']}")
     literature = _literature_summary_from_traces(result)
-    typer.echo(
-        f"Literature papers retrieved: {literature['literature_papers_retrieved']}"
-    )
-    typer.echo(
-        f"Literature claims extracted: {literature['literature_claims_extracted']}"
-    )
+    typer.echo(f"Literature papers retrieved: {literature['literature_papers_retrieved']}")
+    typer.echo(f"Literature claims extracted: {literature['literature_claims_extracted']}")
     typer.echo(f"Literature warnings: {literature['literature_warnings_count']}")
+    developability = _developability_summary_from_traces(result)
+    typer.echo(f"Developability assessments: {developability['developability_assessment_count']}")
+    typer.echo(
+        f"Developability high-risk flags: {developability['developability_high_risk_count']}"
+    )
     typer.echo("")
     typer.echo("Top candidates:")
     for index, candidate in enumerate(result.candidates, start=1):
-        confidence = (
-            candidate.score_breakdown.confidence if candidate.score_breakdown else 0.0
-        )
+        confidence = candidate.score_breakdown.confidence if candidate.score_breakdown else 0.0
         score = candidate.score or 0.0
-        typer.echo(
-            f"{index}. {candidate.name} - score {score:.2f}, confidence {confidence:.2f}"
-        )
+        typer.echo(f"{index}. {candidate.name} - score {score:.2f}, confidence {confidence:.2f}")
     typer.echo("")
     typer.echo("Files written:")
     typer.echo(str(artifact_dir / "report.md"))
     typer.echo(str(artifact_dir / "candidates.json"))
     typer.echo(str(artifact_dir / "generated_candidates.json"))
+    typer.echo(str(artifact_dir / "developability_report.md"))
+    typer.echo(str(artifact_dir / "developability_assessments.json"))
+    typer.echo(str(artifact_dir / "developability.json"))
     typer.echo(str(artifact_dir / "trace.json"))
     if verbose:
         typer.echo("")
@@ -665,15 +1229,14 @@ def _summary_payload(result: RankingRun, output_dir: Path, *, verbose: bool) -> 
         "generated_molecules_retained": generation["retained"],
         "generated_molecules_rejected": generation["rejected"],
         **_literature_summary_from_traces(result),
+        **_developability_summary_from_traces(result),
         "top_candidates": [
             {
                 "rank": index,
                 "name": candidate.name,
                 "score": candidate.score,
                 "confidence": (
-                    candidate.score_breakdown.confidence
-                    if candidate.score_breakdown
-                    else None
+                    candidate.score_breakdown.confidence if candidate.score_breakdown else None
                 ),
             }
             for index, candidate in enumerate(result.candidates, start=1)
@@ -683,6 +1246,11 @@ def _summary_payload(result: RankingRun, output_dir: Path, *, verbose: bool) -> 
             "report_md": str(artifact_dir / "report.md"),
             "candidates_json": str(artifact_dir / "candidates.json"),
             "generated_candidates_json": str(artifact_dir / "generated_candidates.json"),
+            "developability_report_md": str(artifact_dir / "developability_report.md"),
+            "developability_assessments_json": str(
+                artifact_dir / "developability_assessments.json"
+            ),
+            "developability_json": str(artifact_dir / "developability.json"),
             "trace_json": str(artifact_dir / "trace.json"),
         },
     }
@@ -736,6 +1304,27 @@ def _literature_summary_from_traces(result: RankingRun) -> dict[str, int]:
         "literature_papers_retrieved": 0,
         "literature_claims_extracted": 0,
         "literature_warnings_count": 0,
+    }
+
+
+def _developability_summary_from_traces(result: RankingRun) -> dict[str, int]:
+    for trace in result.traces:
+        if trace.agent_name != "DevelopabilityAssessmentAgent":
+            continue
+        metadata = trace.metadata
+        return {
+            "developability_assessment_count": int(metadata.get("assessment_count", 0) or 0),
+            "developability_high_risk_count": int(metadata.get("high_risk_count", 0) or 0),
+            "developability_review_flag_count": int(metadata.get("review_flag_count", 0) or 0),
+            "developability_insufficient_structure_count": int(
+                metadata.get("insufficient_structure_count", 0) or 0
+            ),
+        }
+    return {
+        "developability_assessment_count": 0,
+        "developability_high_risk_count": 0,
+        "developability_review_flag_count": 0,
+        "developability_insufficient_structure_count": 0,
     }
 
 

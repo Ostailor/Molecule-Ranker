@@ -31,7 +31,7 @@ class ChEMBLTargetMapper:
     source_name = "ChEMBL"
     request_headers = {
         "Accept": "application/json",
-        "User-Agent": "molecule-ranker/0.3",
+        "User-Agent": "molecule-ranker/0.4",
     }
 
     def __init__(

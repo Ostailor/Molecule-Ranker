@@ -5,7 +5,12 @@ from typing import Any
 import pytest
 
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
-from molecule_ranker.schemas import EvidenceItem, MoleculeCandidate, Target
+from molecule_ranker.schemas import (
+    DevelopabilityAssessment,
+    EvidenceItem,
+    MoleculeCandidate,
+    Target,
+)
 from molecule_ranker.scoring.scorer import TransparentEvidenceScorer
 
 
@@ -49,6 +54,23 @@ def _candidate(
         score=None,
         score_breakdown=None,
         warnings=[],
+    )
+
+
+def _developability(
+    *,
+    score: float,
+    risk_level: str = "low",
+    recommendation: str = "favorable_hypothesis",
+) -> DevelopabilityAssessment:
+    return DevelopabilityAssessment(
+        molecule_name="candidate",
+        origin="existing",
+        structure_available=True,
+        canonical_smiles="CCO",
+        developability_score=score,
+        triage_recommendation=recommendation,  # type: ignore[arg-type]
+        metadata={"risk_level": risk_level},
     )
 
 
@@ -154,6 +176,81 @@ def test_scoring_formula_uses_real_retrieved_evidence_components():
     assert scored.score == breakdown.final_score
     assert "heuristic" in " ".join(scored.warnings).lower()
     assert "LRRK2" in breakdown.explanation
+
+
+def test_existing_developability_is_bounded_modifier_not_evidence_replacement():
+    targets = [_target("LRRK2", 0.8, mechanism="kinase signaling")]
+    candidate = _candidate(
+        name="Developability qualified",
+        known_targets=["LRRK2"],
+        development_status="phase 2",
+        mechanism_of_action="LRRK2 kinase inhibitor",
+        evidence=[
+            _mechanism_evidence("mec-1", "LRRK2", 0.8),
+            _annotation_evidence("123", 0.6),
+        ],
+        identifiers={"chembl": "CHEMBL1", "pubchem_cid": "123"},
+    )
+    baseline = TransparentEvidenceScorer().score([candidate], targets, top=1)[0]
+    with_developability = candidate.model_copy(
+        update={"developability_assessment": _developability(score=0.2)}
+    )
+
+    scored = TransparentEvidenceScorer().score([with_developability], targets, top=1)[0]
+
+    assert baseline.score is not None
+    assert scored.score_breakdown is not None
+    assert scored.score == pytest.approx(round(baseline.score * (0.85 + 0.15 * 0.2), 3))
+    assert (
+        "Disease/target evidence remains separate from developability risk."
+        in scored.score_breakdown.explanation
+    )
+
+
+def test_critical_developability_caps_existing_score_and_high_risk_reduces_confidence():
+    targets = [_target("LRRK2", 0.95, mechanism="kinase signaling")]
+    candidate = _candidate(
+        name="Critical risk",
+        known_targets=["LRRK2"],
+        development_status="approved",
+        mechanism_of_action="LRRK2 kinase inhibitor",
+        evidence=[
+            _mechanism_evidence("mec-1", "LRRK2", 0.95),
+            _activity_evidence("act-1", confidence=0.95),
+        ],
+        identifiers={"chembl": "CHEMBL1", "pubchem_cid": "123", "inchikey": "KEY"},
+    )
+    high_risk = candidate.model_copy(
+        update={
+            "developability_assessment": _developability(
+                score=0.8,
+                risk_level="high",
+                recommendation="high_risk_flags",
+            )
+        }
+    )
+    critical = candidate.model_copy(
+        update={
+            "developability_assessment": _developability(
+                score=0.8,
+                risk_level="critical",
+                recommendation="high_risk_flags",
+            )
+        }
+    )
+
+    baseline = TransparentEvidenceScorer().score([candidate], targets, top=1)[0]
+    high_scored = TransparentEvidenceScorer().score([high_risk], targets, top=1)[0]
+    critical_scored = TransparentEvidenceScorer().score([critical], targets, top=1)[0]
+
+    assert baseline.score_breakdown is not None
+    assert high_scored.score_breakdown is not None
+    assert high_scored.score is not None
+    assert critical_scored.score is not None
+    assert critical_scored.score <= 0.35
+    assert high_scored.score_breakdown.confidence <= baseline.score_breakdown.confidence - 0.15
+    assert 0.0 <= high_scored.score <= 1.0
+    assert 0.0 <= critical_scored.score <= 1.0
 
 
 def test_scoring_sorts_by_final_score_and_all_scores_stay_in_range():

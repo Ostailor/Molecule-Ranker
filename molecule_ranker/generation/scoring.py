@@ -7,8 +7,10 @@ from molecule_ranker.generation.schemas import (
     GenerationObjective,
     SeedMolecule,
 )
+from molecule_ranker.schemas import DevelopabilityAssessment
 
 CONFIDENCE_CAP_V0_3 = 0.45
+DEVELOPABILITY_ADJUSTMENT_METADATA_KEY = "developability_adjusted_generation_score"
 
 
 class GeneratedMoleculeScorer:
@@ -50,10 +52,78 @@ class GeneratedMoleculeScorer:
                     },
                 }
             )
+            updated = self.apply_developability_modifier(updated)
             scored.append(updated)
             retained.append(updated)
         scored.sort(key=lambda item: item.generation_score or 0.0, reverse=True)
         return scored
+
+    def apply_developability_modifier(self, candidate: GeneratedMolecule) -> GeneratedMolecule:
+        """Apply post-assessment developability scoring to an already scored molecule."""
+
+        assessment = candidate.developability_assessment
+        breakdown = candidate.score_breakdown
+        if assessment is None or breakdown is None:
+            return candidate
+        if candidate.metadata.get(DEVELOPABILITY_ADJUSTMENT_METADATA_KEY) is True:
+            return candidate
+
+        original_score = self._clamp(breakdown.final_generation_score)
+        developability_score = self._developability_score(assessment)
+        adjusted_score = self._clamp(0.70 * original_score + 0.30 * developability_score)
+        risk_level = self._developability_risk_level(assessment)
+        warnings = list(candidate.warnings)
+        validation = candidate.validation
+
+        if risk_level == "critical":
+            adjusted_score = min(adjusted_score, 0.20)
+            validation = validation.model_copy(
+                update={
+                    "rejection_reasons": sorted(
+                        set([*validation.rejection_reasons, "developability_critical_risk"])
+                    )
+                }
+            )
+            warnings.append("Generated molecule rejected by critical developability risk flag.")
+        elif risk_level == "high":
+            adjusted_score = min(adjusted_score, 0.45)
+            warnings.append("Generated molecule deprioritized by high developability risk flag.")
+
+        confidence = breakdown.confidence
+        if risk_level == "critical":
+            confidence = max(0.0, confidence - 0.25)
+        elif risk_level == "high":
+            confidence = max(0.0, confidence - 0.15)
+
+        explanation = (
+            f"{breakdown.explanation} Developability modifier applied as "
+            "0.70 * original generation score + 0.30 * developability score. "
+            "Critical developability risk flags reject generated molecules by default; "
+            "high risk caps generated score at 0.45."
+        )
+        updated_breakdown = breakdown.model_copy(
+            update={
+                "developability_score": round(developability_score, 3),
+                "final_generation_score": round(adjusted_score, 3),
+                "confidence": round(self._clamp(confidence), 3),
+                "explanation": explanation,
+            }
+        )
+        return candidate.model_copy(
+            update={
+                "generation_score": updated_breakdown.final_generation_score,
+                "score_breakdown": updated_breakdown,
+                "validation": validation,
+                "warnings": sorted(set(warnings)),
+                "metadata": {
+                    **candidate.metadata,
+                    DEVELOPABILITY_ADJUSTMENT_METADATA_KEY: True,
+                    "original_generation_score": round(original_score, 3),
+                    "developability_score": round(developability_score, 3),
+                    "developability_risk_level": risk_level,
+                },
+            }
+        )
 
     def _score_candidate(
         self,
@@ -106,6 +176,7 @@ class GeneratedMoleculeScorer:
             chemical_validity_score=round(chemical_validity_score, 3),
             property_profile_score=round(property_profile_score, 3),
             literature_context_score=round(literature_context_score, 3),
+            developability_score=0.0,
             final_generation_score=round(final_score, 3),
             confidence=round(confidence, 3),
             explanation=self._explanation(candidate),
@@ -261,6 +332,19 @@ class GeneratedMoleculeScorer:
             "comes from parent seed or target context only; the generated molecule has no "
             "direct experimental evidence."
         )
+
+    def _developability_score(self, assessment: DevelopabilityAssessment) -> float:
+        return self._clamp(assessment.developability_score)
+
+    def _developability_risk_level(self, assessment: DevelopabilityAssessment) -> str:
+        risk_level = str(assessment.metadata.get("risk_level") or "").lower()
+        if risk_level in {"critical", "high", "medium", "low", "unknown"}:
+            return risk_level
+        if assessment.triage_recommendation == "high_risk_flags":
+            return "high"
+        if assessment.triage_recommendation in {"review_flags", "insufficient_structure"}:
+            return "medium"
+        return "low"
 
     def _seed_id(self, seed: SeedMolecule) -> str:
         for key in ("chembl", "pubchem_cid", "cid", "inchikey"):

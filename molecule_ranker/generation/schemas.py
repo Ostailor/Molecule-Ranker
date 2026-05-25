@@ -4,6 +4,8 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
+from molecule_ranker.schemas import DevelopabilityAssessment
+
 GenerationObjectiveType = Literal[
     "target_conditioned_analog_generation",
     "scaffold_hopping",
@@ -126,6 +128,7 @@ class GeneratedMoleculeScoreBreakdown(BaseModel):
     chemical_validity_score: float = Field(ge=0.0, le=1.0)
     property_profile_score: float = Field(ge=0.0, le=1.0)
     literature_context_score: float = Field(ge=0.0, le=1.0)
+    developability_score: float = Field(default=0.0, ge=0.0, le=1.0)
     final_generation_score: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str
@@ -152,6 +155,7 @@ class GeneratedMolecule(BaseModel):
     diversity_cluster: str | None = None
     generation_score: float | None = Field(default=None, ge=0.0, le=1.0)
     score_breakdown: GeneratedMoleculeScoreBreakdown | None = None
+    developability_assessment: DevelopabilityAssessment | None = None
     warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

@@ -167,6 +167,50 @@ class Target(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class DevelopabilityFlag(BaseModel):
+    """Cautious computational risk flag from heuristic developability triage."""
+
+    category: Literal[
+        "admet_property",
+        "toxicity_risk",
+        "medicinal_chemistry_alert",
+        "synthetic_accessibility",
+        "chemical_liability",
+        "structure_quality",
+    ]
+    severity: Literal["info", "low", "medium", "high"]
+    label: str
+    description: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DevelopabilityAssessment(BaseModel):
+    """Computational developability triage; not an experimental safety claim."""
+
+    molecule_name: str
+    origin: Literal["existing", "generated"] = "existing"
+    structure_available: bool = False
+    canonical_smiles: str | None = None
+    descriptors: dict[str, float] = Field(default_factory=dict)
+    admet_properties: dict[str, Any] = Field(default_factory=dict)
+    admet_property_flags: list[DevelopabilityFlag] = Field(default_factory=list)
+    toxicity_risk_flags: list[DevelopabilityFlag] = Field(default_factory=list)
+    medicinal_chemistry_alerts: list[DevelopabilityFlag] = Field(default_factory=list)
+    synthetic_accessibility_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    chemical_liability_flags: list[DevelopabilityFlag] = Field(default_factory=list)
+    structure_quality_flags: list[DevelopabilityFlag] = Field(default_factory=list)
+    structure_filter_pass: bool | None = None
+    developability_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    triage_recommendation: Literal[
+        "favorable_hypothesis",
+        "review_flags",
+        "high_risk_flags",
+        "insufficient_structure",
+    ] = "insufficient_structure"
+    limitations: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class ScoreBreakdown(BaseModel):
     """Transparent score components for a molecule ranking decision."""
 
@@ -178,6 +222,7 @@ class ScoreBreakdown(BaseModel):
     data_quality: float = Field(ge=0.0, le=1.0)
     novelty_or_repurposing_value: float = Field(ge=0.0, le=1.0)
     literature_quality: float = Field(default=0.0, ge=0.0, le=1.0)
+    developability_score: float = Field(default=0.0, ge=0.0, le=1.0)
     final_score: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str
@@ -198,6 +243,7 @@ class MoleculeCandidate(BaseModel):
     direct_evidence_available: bool = True
     evidence: list[EvidenceItem] = Field(default_factory=list)
     literature_evidence: LiteratureEvidenceBundle | None = None
+    developability_assessment: DevelopabilityAssessment | None = None
     score: float | None = Field(default=None, ge=0.0, le=1.0)
     score_breakdown: ScoreBreakdown | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -231,6 +277,7 @@ class GeneratedMoleculeHypothesis(BaseModel):
     max_seed_similarity: float = Field(ge=0.0, le=1.0)
     mean_seed_similarity: float = Field(ge=0.0, le=1.0)
     descriptors: dict[str, Any] = Field(default_factory=dict)
+    developability_assessment: DevelopabilityAssessment | None = None
     trace: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)

@@ -54,6 +54,7 @@ class TransparentEvidenceScorer:
         data_quality = self._data_quality(candidate)
         novelty_or_repurposing_value = self._novelty_or_repurposing_value(candidate)
         literature_quality = self._literature_quality(candidate)
+        developability_score = self._developability_score(candidate)
         confidence = self._confidence(candidate, matched_targets, molecule_target_evidence)
         completeness = evidence_completeness(candidate, targets)
 
@@ -115,8 +116,16 @@ class TransparentEvidenceScorer:
             warnings.append("Retrieved drug warning evidence lowers the safety prior.")
         if self._literature_safety_or_contradictory_items(literature_items):
             warnings.append("Literature safety or contradictory evidence lowers confidence.")
+        developability_risk = self._developability_risk_level(candidate)
+        if candidate.developability_assessment is not None and developability_risk in {
+            "medium",
+            "high",
+            "critical",
+            "unknown",
+        }:
+            warnings.append("Developability risk flags lower or qualify the ranking score.")
 
-        base_score = (
+        evidence_score = (
             0.25 * disease_target_relevance
             + 0.20 * molecule_target_evidence
             + 0.20 * mechanism_plausibility
@@ -126,8 +135,18 @@ class TransparentEvidenceScorer:
             + 0.05 * novelty_or_repurposing_value
         )
         if literature_quality > 0:
-            base_score = base_score + 0.1 * max(0.0, literature_quality - base_score)
-        final_score = round(base_score, 3)
+            evidence_score = evidence_score + 0.1 * max(0.0, literature_quality - evidence_score)
+        if candidate.developability_assessment is not None:
+            evidence_score = self._apply_developability_modifier(
+                evidence_score,
+                developability_score,
+                developability_risk,
+            )
+            confidence = self._apply_developability_confidence_modifier(
+                confidence,
+                developability_risk,
+            )
+        final_score = round(self._clamp(evidence_score), 3)
         target_text = ", ".join(target.symbol for target in matched_targets) or "no matched target"
         score = ScoreBreakdown(
             disease_target_relevance=round(disease_target_relevance, 3),
@@ -138,6 +157,7 @@ class TransparentEvidenceScorer:
             data_quality=round(data_quality, 3),
             novelty_or_repurposing_value=round(novelty_or_repurposing_value, 3),
             literature_quality=round(literature_quality, 3),
+            developability_score=round(developability_score, 3),
             final_score=final_score,
             confidence=round(confidence, 3),
             explanation=self._explanation(
@@ -154,6 +174,51 @@ class TransparentEvidenceScorer:
                 "warnings": warnings,
             }
         )
+
+    def _developability_score(self, candidate: MoleculeCandidate) -> float:
+        assessment = candidate.developability_assessment
+        if assessment is None:
+            return 0.0
+        return self._clamp(assessment.developability_score)
+
+    def _developability_risk_level(self, candidate: MoleculeCandidate) -> str:
+        assessment = candidate.developability_assessment
+        if assessment is None:
+            return "none"
+        risk_level = str(assessment.metadata.get("risk_level") or "").lower()
+        if risk_level in {"critical", "high", "medium", "low", "unknown"}:
+            return risk_level
+        if assessment.triage_recommendation == "high_risk_flags":
+            return "high"
+        if assessment.triage_recommendation == "insufficient_structure":
+            return "unknown"
+        if assessment.triage_recommendation == "review_flags":
+            return "medium"
+        return "low"
+
+    def _apply_developability_modifier(
+        self,
+        evidence_score: float,
+        developability_score: float,
+        risk_level: str,
+    ) -> float:
+        adjusted = evidence_score * (0.85 + 0.15 * self._clamp(developability_score))
+        if risk_level == "critical":
+            adjusted = min(adjusted, 0.35)
+        return self._clamp(adjusted)
+
+    def _apply_developability_confidence_modifier(
+        self,
+        confidence: float,
+        risk_level: str,
+    ) -> float:
+        if risk_level == "critical":
+            return self._clamp(confidence - 0.25)
+        if risk_level == "high":
+            return self._clamp(confidence - 0.15)
+        if risk_level in {"medium", "unknown"}:
+            return self._clamp(confidence - 0.05)
+        return self._clamp(confidence)
 
     def _matched_targets(
         self, candidate: MoleculeCandidate, targets: list[Target]
@@ -894,6 +959,8 @@ class TransparentEvidenceScorer:
             literature_summary = self._legacy_literature_explanation(candidate)
         if literature_summary:
             dimensions.append("literature evidence from retrieved paper records")
+        if candidate.developability_assessment is not None:
+            dimensions.append("V0.4 computational developability triage")
         missing = []
         if not completeness["has_molecule_target_evidence"]:
             missing.append("missing molecule-target evidence")
@@ -902,10 +969,15 @@ class TransparentEvidenceScorer:
         if not completeness["has_identifier"]:
             missing.append("missing stable identifiers")
         missing_text = f" Limitations: {', '.join(missing)}." if missing else ""
+        developability_text = (
+            " Disease/target evidence remains separate from developability risk."
+            if candidate.developability_assessment is not None
+            else ""
+        )
         return (
             f"{candidate.name} was scored using retrieved evidence for targets {target_text}. "
             f"Evidence dimensions used: {', '.join(dimensions)}.{literature_summary}"
-            f"{missing_text} "
+            f"{missing_text}{developability_text} "
             "This is a research prioritization heuristic, not a therapeutic claim."
         )
 

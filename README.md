@@ -1,11 +1,12 @@
 # molecule-ranker
 
 `molecule-ranker` is an agent-first drug discovery research prototype. Given a
-disease name, V0.3 resolves the disease through public biomedical data sources,
+disease name, V0.4 resolves the disease through public biomedical data sources,
 discovers evidence-backed targets, retrieves existing molecules linked to those
 targets, retrieves real literature evidence, ranks the molecules as transparent
 research hypotheses, and can optionally generate target-conditioned in-silico
-molecule hypotheses from those retrieved structures.
+molecule hypotheses from those retrieved structures. V0.4 adds computational
+developability triage for existing and generated molecules.
 
 The app does not discover cures, does not claim generated molecules treat or are
 active against a disease, does not provide medical advice, and does not provide
@@ -15,9 +16,10 @@ Generated molecules are computational hypotheses only: they are not known
 actives, have no direct experimental evidence, and are ranked separately from
 existing evidence-backed molecules unless explicitly requested otherwise.
 
-## V0.3 Scope
+## V0.4 Scope
 
-V0.3 implements existing-molecule ranking plus opt-in generated hypotheses:
+V0.4 implements existing-molecule ranking, opt-in generated hypotheses, and
+developability-aware computational triage:
 
 - Resolve disease names to public biomedical disease entities with ambiguity handling.
 - Retrieve real disease-associated targets with richer target identifiers and metadata.
@@ -38,13 +40,24 @@ V0.3 implements existing-molecule ranking plus opt-in generated hypotheses:
   retrieved seed molecules.
 - Use RDKit for generated-structure validation, canonicalization, descriptors,
   fingerprints, similarity, and coarse chemistry filters.
+- Assess physicochemical descriptors, drug-likeness heuristics, chemistry
+  alerts, rule-based ADMET triage, toxicity-risk flags, synthetic-accessibility
+  heuristics, synthesizability scoring, and chemical liability flags for
+  existing and generated molecules when parseable structures are available.
+- Apply a bounded developability adjustment to evidence-backed ranking scores.
+- Optionally retrieve target structure metadata and optionally run docking only
+  when explicitly enabled. Docking is disabled by default.
+- Record optional structure-aware filter pass/fail state without claiming that a
+  molecule is safe, binds a target, or is practically synthesizable.
 - Rank generated structures separately from evidence-backed molecules.
 - Write `candidates.json`, `generated_candidates.json`,
-  `generation_trace.json`, `report.md`, and `trace.json`.
+  `generation_trace.json`, `developability.json`,
+  `developability_assessments.json`, `developability_report.md`, `report.md`,
+  and `trace.json`.
 - Cache real public API responses with source provenance and TTL.
 - Provide adapter health checks and opt-in live smoke tests.
 
-V0.3 does not:
+V0.4 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -53,15 +66,17 @@ V0.3 does not:
 - Invent evidence for generated molecules.
 - Use LLMs to invent citations, paper claims, or biomedical relationships.
 - Create fake citations or placeholder papers.
-- Create synthesis protocols, retrosynthesis, synthesis planning, full ADMET,
-  docking, wet-lab, dosage, patient-treatment, or clinical guidance.
+- Create synthesis protocols, retrosynthesis, synthesis planning, wet-lab,
+  dosage, patient-treatment, or clinical guidance.
+- Run docking unless it is explicitly enabled.
 - Store full copyrighted articles.
 - Claim that a molecule cures, treats, or is active against a disease.
+- Claim ADMET predictions prove clinical safety.
+- Claim docking scores prove binding.
+- Claim synthetic-accessibility heuristics prove practical synthesizability.
+- Provide synthesis routes, reagents, reaction conditions, or synthesis
+  instructions.
 - Make patient-specific recommendations.
-
-V0.4 is planned to add stronger ADMET, toxicity, synthesizability, and
-structure-aware filters. V0.3 uses only coarse sanity filters and does not
-provide synthesis instructions.
 
 Unit tests use mocked data only to test behavior deterministically. Production
 code uses real public biomedical data adapters and fails if required data cannot
@@ -84,7 +99,7 @@ uv run molecule-ranker rank --help
 
 ## CLI Usage
 
-Run normal V0.2-style ranking without generated molecules:
+Run normal ranking without generated molecules:
 
 ```bash
 uv run molecule-ranker rank "Alzheimer disease" \
@@ -99,7 +114,8 @@ generation option is supplied:
 uv run molecule-ranker rank "Alzheimer disease" --top 10
 ```
 
-Normal V0.3 ranking includes PubMed literature retrieval by default:
+Normal V0.4 ranking includes PubMed literature retrieval and developability
+triage by default:
 
 ```bash
 uv run molecule-ranker rank "Alzheimer disease" \
@@ -109,12 +125,31 @@ uv run molecule-ranker rank "Alzheimer disease" \
   --openalex-enrichment
 ```
 
+Run normal ranking with developability controls made explicit:
+
+```bash
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --enable-developability \
+  --developability-filter-mode filter_generated_only \
+  --reject-critical-alerts
+```
+
 Run without literature evidence when you only want database-derived ranking:
 
 ```bash
 uv run molecule-ranker rank "Alzheimer disease" \
   --top 10 \
   --disable-literature
+```
+
+Disable developability triage when you only want the V0.1-V0.3 evidence and
+generation behavior:
+
+```bash
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --disable-developability
 ```
 
 Use strict literature mode when PubMed availability is required for the run:
@@ -139,6 +174,7 @@ Run ranking with target-conditioned generated molecule hypotheses:
 uv run molecule-ranker rank "Alzheimer disease" \
   --top 10 \
   --enable-generation \
+  --enable-developability \
   --max-generation-objectives 3 \
   --generated-per-objective 10 \
   --max-retained-generated 10 \
@@ -154,6 +190,14 @@ uv run molecule-ranker generate "Alzheimer disease" \
   --top 10 \
   --max-retained-generated 25 \
   --generation-random-seed 123
+```
+
+Run developability assessment later from an existing candidate artifact without
+rerunning disease, target, molecule, or literature retrieval:
+
+```bash
+uv run molecule-ranker assess-developability \
+  --input results/alzheimer-disease/generated_candidates.json
 ```
 
 Print a JSON CLI summary for a run that includes generated molecules. The
@@ -180,6 +224,36 @@ Benchmark a generated-molecule artifact with internal V0.3 quality metrics:
 ```bash
 uv run molecule-ranker benchmark-generation \
   --input results/alzheimer-disease/generated_candidates.json
+```
+
+Benchmark a V0.4 developability artifact with internal coverage and calibration
+metrics:
+
+```bash
+uv run molecule-ranker benchmark-developability \
+  --input results/alzheimer-disease/developability.json
+```
+
+Enable optional target structure metadata retrieval. This retrieves structure
+metadata for computational triage; it does not require docking:
+
+```bash
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --enable-structure-retrieval \
+  --max-structures-per-target 5
+```
+
+Enable optional docking only when you explicitly want the docking plugin path.
+Docking is disabled by default, docking inputs must be reviewed, and docking
+scores do not prove binding:
+
+```bash
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --enable-structure-retrieval \
+  --enable-docking \
+  --max-docked-molecules 5
 ```
 
 Useful options:
@@ -210,6 +284,13 @@ uv run molecule-ranker rank "Alzheimer disease" \
   --generation-random-seed 123 \
   --include-generated-in-main-ranking \
   --reject-basic-alerts \
+  --enable-developability \
+  --strict-developability \
+  --developability-filter-mode filter_generated_only \
+  --reject-critical-alerts \
+  --reject-high-toxicity-risk \
+  --enable-structure-retrieval \
+  --max-structures-per-target 5 \
   --ncbi-email researcher@example.org \
   --ncbi-api-key-env NCBI_API_KEY \
   --max-retries 3 \
@@ -223,7 +304,7 @@ read as an offline substitute unless `--use-cache` is explicitly passed; that
 mode is a cached-real-data fallback for previously retrieved successful
 responses. Use `--no-cache` to bypass cache reads and writes.
 
-Important V0.3 configuration options map to typed `RankerConfig` fields:
+Important V0.4 configuration options map to typed `RankerConfig` fields:
 
 - `results_dir`, `cache_dir`: output and successful-real-response cache locations.
 - `use_cache`: enables cache writes; disabled by `--no-cache`.
@@ -266,6 +347,36 @@ Important V0.3 configuration options map to typed `RankerConfig` fields:
   target-conditioning filters using Morgan-fingerprint Tanimoto similarity.
 - `reject_basic_alerts`, `allowed_generation_elements`: coarse chemistry sanity
   filters for generated structures.
+- `enable_developability`: enables V0.4 developability assessment by default.
+- `strict_developability`: fails the run when developability assessment fails
+  for a molecule instead of recording an unknown-risk assessment.
+- `assess_existing_molecules`, `assess_generated_molecules`: choose which
+  molecule classes receive developability triage.
+- `developability_filter_mode`: action mode; existing evidence-backed
+  molecules are not silently removed by default, while generated molecules may
+  be filtered more aggressively.
+- `reject_critical_alerts`, `reject_high_toxicity_risk`, `alert_mode`: control
+  how chemistry alerts and toxicity-risk flags affect recommendations and
+  filtering.
+- `enable_rule_based_admet`, `enable_local_admet_models`,
+  `allow_rule_based_admet_fallback`: ADMET triage controls. The default
+  rule-based ADMET baseline is a computational triage heuristic and does not
+  prove safety.
+- `enable_synthesizability`: enables coarse synthesizability scoring. It does
+  not provide synthesis routes or practical synthesis instructions.
+- `enable_structure_retrieval`: optionally retrieves target structure metadata.
+- `enable_docking`: optionally runs docking plugin paths. It is disabled by
+  default and docking scores do not prove binding.
+- `strict_structure_mode`, `write_docking_artifacts`,
+  `max_structures_per_target`, `max_docked_molecules`: optional
+  structure/docking behavior controls.
+- `enable_structure_filtering`: records structure-aware developability filter
+  pass/fail fields.
+- `filter_developability_failures`: optionally removes candidates that fail the
+  configured developability threshold.
+- `min_developability_score`: threshold for optional structure-aware filtering.
+- `enable_tdc_benchmark`, `tdc_data_dir`: optional benchmark controls for local
+  ADMET model evaluation if TDC is installed and explicitly enabled.
 
 The effective config is serialized into `trace.json` so a run can be audited
 with the limits, cache policy, and request policy that produced it. Defaults are
@@ -282,10 +393,10 @@ The health command probes Open Targets, ChEMBL, PubChem, PubMed, and OpenAlex wi
 timeouts and prints source, status, latency, endpoint, and any error. Health
 checks are only run when this command is requested.
 
-Run live literature smoke tests explicitly:
+Run live public API smoke tests explicitly:
 
 ```bash
-uv run pytest -m live tests_live/test_live_literature.py
+MOLECULE_RANKER_RUN_LIVE=1 uv run pytest -m live tests_live/
 ```
 
 JSON summary output:
@@ -302,6 +413,9 @@ results/<disease_slug>/candidates.json
 results/<disease_slug>/generated_candidates.json
 results/<disease_slug>/generated_molecules.json
 results/<disease_slug>/generation_trace.json
+results/<disease_slug>/developability.json
+results/<disease_slug>/developability_report.md
+results/<disease_slug>/developability_assessments.json
 results/<disease_slug>/trace.json
 ```
 
@@ -312,6 +426,14 @@ rejected generated molecules with rejection reasons, generation warnings,
 generation config, and limitations. Generated structures include SMILES and
 InChIKey when available, but no synthesis instructions and no generated
 `EvidenceItem` claims.
+
+`developability.json` is written when developability is enabled or explicitly
+disabled. When disabled it clearly reports `enabled=false` and `success=false`.
+When enabled, it includes assessed counts, retained/deprioritized/rejected
+counts, risk distribution, alert distribution, ADMET endpoint coverage,
+individual assessments, warnings, limitations, config, and generation time.
+Candidate artifacts include compact developability summaries; generated
+candidate artifacts also include rejection reasons.
 
 No static example biomedical result is included in this README because example
 rankings should only be copied from an actual successful live run with its
@@ -339,6 +461,9 @@ Production adapters are isolated under `molecule_ranker/data_sources/`:
 - PubChem: molecule identifier and chemical metadata enrichment where available.
 - PubMed: real paper records and abstracts via NCBI E-utilities.
 - OpenAlex: optional citation count, open-access, and retraction metadata.
+- RCSB PDB: optional target structure metadata when explicitly enabled.
+- AlphaFold DB: optional predicted target structure metadata when explicitly
+  enabled.
 
 HTTP requests are made only inside adapter classes. Tests may mock adapter
 responses, but production code does not import test fixtures or ship fixture
@@ -346,7 +471,7 @@ biomedical knowledge.
 
 ## Generated Molecule Hypotheses
 
-V0.3 adds target-conditioned novel molecule generation as an opt-in workflow.
+V0.3 added target-conditioned novel molecule generation as an opt-in workflow.
 Generation is off for ordinary ranking runs unless the user passes
 `--enable-generation` or uses `molecule-ranker generate`.
 
@@ -360,7 +485,7 @@ The generation pipeline:
 5. Canonicalizes SMILES, computes InChIKey when possible, descriptors,
    fingerprints, and Tanimoto similarity.
 6. Filters invalid, duplicate, near-duplicate, distant, and chemically
-   unreasonable structures using coarse V0.3 rules.
+   unreasonable structures using coarse generation rules.
 7. Scores retained generated molecules separately from existing
    evidence-backed molecules.
 
@@ -370,15 +495,32 @@ claimed to bind targets, modulate targets, treat disease, or be safe. Their
 scores are generation-prioritization scores based on seed and target context,
 not efficacy predictions. No fake evidence is generated for them.
 
-V0.3 does not implement full ADMET, toxicity prediction, docking,
-retrosynthesis, synthesizability prediction, synthesis planning, wet-lab
-prediction, dosage, patient treatment, or clinical guidance. No synthesis
-instructions are provided. V0.4 is planned to add stronger ADMET, toxicity,
-synthesizability, and structure-aware filters.
+V0.4 adds developability triage after generation and before evidence scoring.
+The triage uses physicochemical descriptors, drug-likeness heuristics,
+chemistry alerts, rule-based ADMET triage, toxicity-risk flags,
+synthetic-accessibility heuristics, synthesizability scoring, chemical liability
+flags, and optional structure-aware filter state. These outputs are
+computational risk flags only and require medicinal chemistry, toxicology,
+pharmacology, synthesis, and domain expert review. ADMET predictions do not
+prove safety. Synthesizability scoring does not provide synthesis routes and
+does not prove practical synthesizability. V0.4 does not implement
+retrosynthesis, synthesis planning, wet-lab prediction, dosage, patient
+treatment, or clinical guidance. No synthesis instructions are provided.
+
+Structure retrieval and docking are optional. Structure retrieval is metadata
+only unless additional structure-aware filtering is enabled. Docking is disabled
+by default, must be explicitly requested, and docking scores do not prove
+binding. Docking results are weak computational heuristics, not experimental
+evidence.
+
+Existing evidence-backed molecules are not silently removed by default because
+disease/target evidence remains separate from developability risk. Generated
+molecules may be filtered more aggressively because they have no direct
+experimental evidence unless future real evidence is retrieved.
 
 ## Literature Evidence Policy
 
-PubMed is the primary V0.3 literature source. The literature module searches
+PubMed is the primary literature source. The literature module searches
 PubMed, retrieves paper metadata and source-provided abstracts through NCBI
 E-utilities, deduplicates papers, extracts citations, and applies conservative
 rule-based claim extraction. OpenAlex enrichment is optional and is used for
@@ -414,8 +556,9 @@ The orchestrator runs agents in this order:
 3. `MoleculeRetrievalAgent`
 4. `LiteratureEvidenceAgent`
 5. `NovelMoleculeAgent`
-6. `EvidenceScoringAgent`
-7. `ReportWriterAgent`
+6. `DevelopabilityAssessmentAgent`
+7. `EvidenceScoringAgent`
+8. `ReportWriterAgent`
 
 Each successful agent appends an `AgentTrace`. Critical data failures stop the
 pipeline and prevent a normal success report from being written.
@@ -439,8 +582,8 @@ Core schemas are Pydantic models:
 
 ## Scoring Formula
 
-V0.3 uses a deterministic transparent heuristic over retrieved evidence. Without
-supported literature evidence, the V0.1 formula is preserved:
+V0.4 uses a deterministic transparent heuristic over retrieved evidence. Without
+supported literature evidence or developability assessment, the base formula is:
 
 ```text
 final_score =
@@ -469,12 +612,17 @@ they act as bounded modifiers to existing components:
 - Safety or contradictory literature can lower safety prior and confidence.
 - Retracted records do not improve scores.
 
+When developability assessment is available, V0.4 applies a bounded adjustment
+using the heuristic developability score and conservative penalties for
+review/high-risk/insufficient-structure flags. This is a computational
+triage adjustment, not a safety conclusion.
+
 Scores are prioritization aids, not validated predictions of efficacy or safety.
 
 Generated molecule hypotheses are scored separately by seed similarity,
 target-relevance context, and basic RDKit descriptor fit. This score is a
 generation-prioritization heuristic only. It is not evidence of disease
-activity, target engagement, safety, efficacy, synthesizability, or clinical
+activity, target engagement, safety, efficacy, practical synthesizability, or clinical
 utility. Generated molecules have no direct experimental evidence attached, and
 no fake evidence records are created for them.
 
@@ -523,9 +671,9 @@ does not write a normal `report.md` that looks successful.
   invented evidence.
 - Generated molecule hypotheses are not known actives and are ranked separately
   from existing molecules by default.
-- V0.3 does not implement full ADMET, toxicity prediction, docking,
-  retrosynthesis, synthesizability prediction, synthesis planning, or wet-lab
-  prediction.
+- V0.4 implements heuristic developability triage and rule-based ADMET risk
+  flags, not validated ADMET prediction, default docking, retrosynthesis,
+  synthesis planning, or wet-lab prediction.
 - No synthesis instructions are provided.
 
 ## Roadmap
@@ -533,8 +681,9 @@ does not write a normal `report.md` that looks successful.
 - V0.1: stronger live biomedical adapters and source normalization.
 - V0.2: literature evidence retrieval and citation extraction.
 - V0.3: target-conditioned novel molecule generation.
-- V0.4: ADMET, toxicity, synthesizability, docking/structure-aware filters.
-- V0.5: expert review workflow.
+- V0.4: developability, ADMET, toxicity, synthesizability, and optional
+  structure-aware filters.
+- V0.5: expert review workflow and human-in-the-loop triage.
 
 ## Development
 

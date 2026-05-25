@@ -195,18 +195,21 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
     assert result.disease.canonical_name == "Parkinson disease"
     assert [candidate.name for candidate in result.candidates] == ["Levodopa", "Rasagiline"]
     assert [trace.agent_name for trace in result.traces] == [
-            "DiseaseResolverAgent",
-            "TargetDiscoveryAgent",
-            "MoleculeRetrievalAgent",
-            "LiteratureEvidenceAgent",
-            "EvidenceScoringAgent",
-            "NovelMoleculeAgent",
-            "ReportWriterAgent",
+        "DiseaseResolverAgent",
+        "TargetDiscoveryAgent",
+        "MoleculeRetrievalAgent",
+        "LiteratureEvidenceAgent",
+        "NovelMoleculeAgent",
+        "DevelopabilityAssessmentAgent",
+        "EvidenceScoringAgent",
+        "ReportWriterAgent",
     ]
 
     output_dir = tmp_path / "parkinson-disease"
     assert (output_dir / "candidates.json").exists()
     assert (output_dir / "report.md").exists()
+    assert (output_dir / "developability_report.md").exists()
+    assert (output_dir / "developability_assessments.json").exists()
     assert (output_dir / "trace.json").exists()
     assert not (output_dir / "generated_candidates.json").exists()
     assert not (output_dir / "generation_trace.json").exists()
@@ -285,9 +288,7 @@ def test_orchestrator_can_disable_literature_agent(tmp_path):
 
     result = orchestrator.rank("Parkinson disease", top=1)
 
-    assert "LiteratureEvidenceAgent" not in [
-        trace.agent_name for trace in result.traces
-    ]
+    assert "LiteratureEvidenceAgent" not in [trace.agent_name for trace in result.traces]
     assert result.candidates[0].score is not None
 
 
@@ -303,9 +304,7 @@ def test_orchestrator_default_literature_failure_continues_with_warning(tmp_path
 
     result = orchestrator.rank("Parkinson disease", top=1)
 
-    trace = next(
-        trace for trace in result.traces if trace.agent_name == "LiteratureEvidenceAgent"
-    )
+    trace = next(trace for trace in result.traces if trace.agent_name == "LiteratureEvidenceAgent")
     assert result.candidates[0].score is not None
     assert trace.metadata["failures"]
 
