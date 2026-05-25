@@ -29,6 +29,10 @@ class ChEMBLTargetMapper:
     """Map local targets to ChEMBL target IDs using stable identifiers first."""
 
     source_name = "ChEMBL"
+    request_headers = {
+        "Accept": "application/json",
+        "User-Agent": "molecule-ranker/0.2",
+    }
 
     def __init__(
         self,
@@ -177,7 +181,12 @@ class ChEMBLTargetMapper:
         url = f"{self.base_url}/{path.lstrip('/')}"
         try:
             response, retry_metadata = request_with_retries(
-                lambda: self.session.get(url, params=params, timeout=self.timeout_seconds),
+                lambda: self.session.get(
+                    url,
+                    params=params,
+                    timeout=self.timeout_seconds,
+                    headers=self.request_headers,
+                ),
                 RetryPolicy(
                     max_retries=self.max_retries,
                     backoff_seconds=self.retry_delay_seconds,

@@ -14,6 +14,7 @@ from molecule_ranker.data_sources.errors import (
     NoCandidatesFoundError,
     TargetDiscoveryError,
 )
+from molecule_ranker.literature.errors import LiteratureParsingError, LiteratureRetrievalError
 from molecule_ranker.schemas import AgentTrace, Disease, MoleculeCandidate, Target
 from molecule_ranker.utils.logging import get_logger
 
@@ -28,6 +29,8 @@ DOMAIN_ERRORS = (
     TargetDiscoveryError,
     MoleculeRetrievalError,
     EvidenceRetrievalError,
+    LiteratureRetrievalError,
+    LiteratureParsingError,
     NoCandidatesFoundError,
     AgentExecutionError,
 )

@@ -19,6 +19,24 @@ class RankerConfig(BaseModel):
     max_activity_records_per_target: int = Field(default=10, ge=1)
     max_indications_per_molecule: int = Field(default=20, ge=1)
     max_warnings_per_molecule: int = Field(default=20, ge=1)
+    enable_literature: bool = True
+    strict_literature: bool = False
+    literature_sources: list[str] = Field(default_factory=lambda: ["pubmed"])
+    enable_openalex_enrichment: bool = True
+    max_literature_queries: int = Field(default=100, ge=1)
+    max_papers_per_query: int = Field(default=10, ge=1)
+    max_targets_for_literature: int = Field(default=10, ge=1)
+    max_candidates_for_literature: int = Field(default=20, ge=1)
+    ncbi_tool: str = "molecule-ranker"
+    ncbi_email: str | None = None
+    ncbi_api_key: str | None = None
+    literature_request_timeout_seconds: float = Field(default=20.0, gt=0)
+    literature_max_retries: int = Field(default=3, ge=0)
+    literature_cache_ttl_seconds: int = Field(default=24 * 60 * 60, ge=1)
+    max_literature_queries_per_candidate: int = Field(default=3, ge=1)
+    max_literature_results_per_query: int = Field(default=5, ge=1)
+    literature_failure_policy: str = "skip"
+    enable_openalex_metadata: bool = False
     request_timeout_seconds: float = Field(default=20.0, gt=0)
     max_retries: int = Field(default=3, ge=0)
     retry_backoff_seconds: float = Field(default=0.5, ge=0)
@@ -26,7 +44,10 @@ class RankerConfig(BaseModel):
     allow_cached_real_data: bool = False
 
     def trace_metadata(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
+        metadata = self.model_dump(mode="json")
+        if metadata.get("ncbi_api_key"):
+            metadata["ncbi_api_key"] = "***"
+        return metadata
 
     def runtime_agent_config(self, *, top: int, results_dir: Path) -> dict[str, Any]:
         trace_metadata = {
@@ -43,6 +64,25 @@ class RankerConfig(BaseModel):
             "max_activity_records_per_target": self.max_activity_records_per_target,
             "max_indications_per_molecule": self.max_indications_per_molecule,
             "max_warnings_per_molecule": self.max_warnings_per_molecule,
+            "max_literature_queries": self.max_literature_queries,
+            "max_papers_per_query": self.max_papers_per_query,
+            "max_targets_for_literature": self.max_targets_for_literature,
+            "max_candidates_for_literature": self.max_candidates_for_literature,
+            "max_literature_queries_per_candidate": self.max_literature_queries_per_candidate,
+            "max_literature_results_per_query": self.max_literature_results_per_query,
+            "enable_literature": self.enable_literature,
+            "strict_literature": self.strict_literature,
+            "literature_sources": list(self.literature_sources),
+            "literature_failure_policy": (
+                "fail" if self.strict_literature else self.literature_failure_policy
+            ),
+            "enable_openalex_enrichment": self.enable_openalex_enrichment,
+            "enable_openalex_metadata": self.enable_openalex_metadata,
+            "ncbi_tool": self.ncbi_tool,
+            "ncbi_email": self.ncbi_email,
+            "literature_request_timeout_seconds": self.literature_request_timeout_seconds,
+            "literature_max_retries": self.literature_max_retries,
+            "literature_cache_ttl_seconds": self.literature_cache_ttl_seconds,
             "strict_enrichment": self.strict_enrichment,
             "ranker_config": trace_metadata,
         }

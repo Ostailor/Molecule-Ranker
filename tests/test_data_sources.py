@@ -693,6 +693,51 @@ def test_chembl_activity_uses_molecule_max_phase_for_clinical_precedence():
     assert records[0]["development_status"] == "molecule_max_phase_4"
 
 
+def test_chembl_mechanism_failure_still_tries_activity_evidence():
+    session = QueueSession(
+        [
+            MockResponse({"error": "temporary"}, status_code=500),
+            MockResponse(
+                {
+                    "activities": [
+                        {
+                            "activity_id": "ACT1",
+                            "molecule_chembl_id": "CHEMBL_ACTIVITY",
+                            "assay_chembl_id": "ASSAY1",
+                            "standard_type": "IC50",
+                            "standard_value": "10",
+                            "target_chembl_id": "CHEMBL_T1",
+                        }
+                    ]
+                }
+            ),
+            MockResponse({"molecules": [{"pref_name": "Activity fallback"}]}),
+            MockResponse({"assays": [{"assay_chembl_id": "ASSAY1", "confidence_score": 8}]}),
+            MockResponse({"drug_indications": []}),
+            MockResponse({"drug_warnings": []}),
+        ]
+    )
+    adapter = ChEMBLAdapter(
+        session=session,  # type: ignore[arg-type]
+        target_mapper=StaticTargetMapper({"LRRK2": _chembl_mapping("LRRK2", "CHEMBL_T1")}),  # type: ignore[arg-type]
+        max_retries=0,
+        retry_delay_seconds=0,
+    )
+
+    records = adapter.retrieve_molecules(
+        Disease(input_name="Disease", canonical_name="Disease"),
+        [Target(symbol="LRRK2", disease_relevance_score=0.8)],
+        limit_per_target=1,
+    )
+
+    assert records[0]["identifiers"]["chembl"] == "CHEMBL_ACTIVITY"
+    assert records[0]["evidence"][0]["evidence_type"] == "activity"
+    assert any(
+        "mechanism records unavailable" in warning
+        for warning in adapter.last_trace_metadata["warnings"]
+    )
+
+
 def test_chembl_activity_records_are_paginated_normalized_and_provenanced():
     session = QueueSession(
         [

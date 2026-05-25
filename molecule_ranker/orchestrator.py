@@ -6,6 +6,7 @@ from typing import Any
 from molecule_ranker.agents import (
     DiseaseResolverAgent,
     EvidenceScoringAgent,
+    LiteratureEvidenceAgent,
     MoleculeRetrievalAgent,
     NovelMoleculeAgent,
     ReportWriterAgent,
@@ -14,7 +15,11 @@ from molecule_ranker.agents import (
 from molecule_ranker.agents.base import BaseAgent, PipelineContext
 from molecule_ranker.agents.report_writer import DEFAULT_LIMITATIONS
 from molecule_ranker.config import RankerConfig
-from molecule_ranker.data_sources import ChEMBLAdapter, OpenTargetsAdapter, PubChemAdapter
+from molecule_ranker.data_sources import (
+    ChEMBLAdapter,
+    OpenTargetsAdapter,
+    PubChemAdapter,
+)
 from molecule_ranker.data_sources.base import (
     DiseaseResolverDataSource,
     MoleculeAnnotationDataSource,
@@ -22,6 +27,12 @@ from molecule_ranker.data_sources.base import (
     TargetDiscoveryDataSource,
 )
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
+from molecule_ranker.literature.adapters.openalex_adapter import (
+    OpenAlexAdapter as LiteratureOpenAlexAdapter,
+)
+from molecule_ranker.literature.adapters.pubmed_adapter import (
+    PubMedAdapter as LiteraturePubMedAdapter,
+)
 from molecule_ranker.schemas import MoleculeCandidate, RankingRun
 from molecule_ranker.utils.http_cache import HttpResponseCache
 
@@ -35,6 +46,8 @@ class MoleculeRankerOrchestrator:
         target_source: TargetDiscoveryDataSource | None = None,
         molecule_source: MoleculeRetrievalDataSource | None = None,
         molecule_annotation_source: MoleculeAnnotationDataSource | None = None,
+        literature_source: Any | None = None,
+        literature_metadata_source: Any | None = None,
     ) -> None:
         self.config = config or RankerConfig()
         cache = HttpResponseCache(self.config.cache_dir) if self.config.use_cache else None
@@ -73,6 +86,43 @@ class MoleculeRankerOrchestrator:
             ),
         )
         self.novel_molecule = NovelMoleculeAgent()
+        literature_cache_ttl = self.config.literature_cache_ttl_seconds
+        literature_timeout = self.config.literature_request_timeout_seconds
+        literature_retries = self.config.literature_max_retries
+        metadata_source = literature_metadata_source
+        if (
+            metadata_source is None
+            and self.config.enable_literature
+            and self.config.enable_openalex_enrichment
+        ):
+            metadata_source = LiteratureOpenAlexAdapter(
+                timeout_seconds=literature_timeout,
+                max_retries=literature_retries,
+                retry_delay_seconds=self.config.retry_backoff_seconds,
+                cache=cache,
+                use_cache=self.config.allow_cached_real_data,
+                cache_ttl_seconds=literature_cache_ttl,
+                mailto=self.config.ncbi_email,
+                required=self.config.strict_literature,
+            )
+        self.literature_evidence = None
+        literature_sources = {source.lower() for source in self.config.literature_sources}
+        if self.config.enable_literature and "pubmed" in literature_sources:
+            self.literature_evidence = LiteratureEvidenceAgent(
+                literature_source
+                or LiteraturePubMedAdapter(
+                    tool=self.config.ncbi_tool,
+                    email=self.config.ncbi_email,
+                    api_key=self.config.ncbi_api_key,
+                    timeout_seconds=literature_timeout,
+                    max_retries=literature_retries,
+                    retry_delay_seconds=self.config.retry_backoff_seconds,
+                    cache=cache,
+                    use_cache=self.config.allow_cached_real_data,
+                    cache_ttl_seconds=literature_cache_ttl,
+                ),
+                metadata_source,
+            )
         self.evidence_scoring = EvidenceScoringAgent()
         self.report_writer = ReportWriterAgent()
         self.agents: list[BaseAgent] = [
@@ -83,6 +133,8 @@ class MoleculeRankerOrchestrator:
             self.evidence_scoring,
             self.report_writer,
         ]
+        if self.literature_evidence is not None:
+            self.agents.insert(3, self.literature_evidence)
 
     def rank(
         self,

@@ -165,6 +165,20 @@ class NoOpAnnotationSource:
         return molecules
 
 
+class EmptyLiteratureSource:
+    source_name = "Test PubMed"
+
+    def retrieve_papers(self, query: Any) -> list[Any]:
+        return []
+
+
+class FailingLiteratureSource:
+    source_name = "Failing PubMed"
+
+    def search(self, query: Any) -> list[Any]:
+        raise ExternalDataUnavailableError("PubMed unavailable")
+
+
 def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
     orchestrator = MoleculeRankerOrchestrator(
         config=RankerConfig(results_dir=tmp_path),
@@ -172,6 +186,7 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
         target_source=FakeTargetSource(),
         molecule_source=FakeMoleculeSource(),
         molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
     )
 
     result = orchestrator.rank("Parkinson disease", top=2)
@@ -179,12 +194,13 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
     assert result.disease.canonical_name == "Parkinson disease"
     assert [candidate.name for candidate in result.candidates] == ["Levodopa", "Rasagiline"]
     assert [trace.agent_name for trace in result.traces] == [
-        "DiseaseResolverAgent",
-        "TargetDiscoveryAgent",
-        "MoleculeRetrievalAgent",
-        "NovelMoleculeAgent",
-        "EvidenceScoringAgent",
-        "ReportWriterAgent",
+            "DiseaseResolverAgent",
+            "TargetDiscoveryAgent",
+            "MoleculeRetrievalAgent",
+            "LiteratureEvidenceAgent",
+            "NovelMoleculeAgent",
+            "EvidenceScoringAgent",
+            "ReportWriterAgent",
     ]
 
     output_dir = tmp_path / "parkinson-disease"
@@ -207,6 +223,57 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
         assert 0 <= candidate.score_breakdown.confidence <= 1
 
 
+def test_orchestrator_can_disable_literature_agent(tmp_path):
+    orchestrator = MoleculeRankerOrchestrator(
+        config=RankerConfig(results_dir=tmp_path, enable_literature=False),
+        disease_source=FakeDiseaseSource(),
+        target_source=FakeTargetSource(),
+        molecule_source=FakeMoleculeSource(),
+        molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=FailingLiteratureSource(),
+    )
+
+    result = orchestrator.rank("Parkinson disease", top=1)
+
+    assert "LiteratureEvidenceAgent" not in [
+        trace.agent_name for trace in result.traces
+    ]
+    assert result.candidates[0].score is not None
+
+
+def test_orchestrator_default_literature_failure_continues_with_warning(tmp_path):
+    orchestrator = MoleculeRankerOrchestrator(
+        config=RankerConfig(results_dir=tmp_path, strict_literature=False),
+        disease_source=FakeDiseaseSource(),
+        target_source=FakeTargetSource(),
+        molecule_source=FakeMoleculeSource(),
+        molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=FailingLiteratureSource(),
+    )
+
+    result = orchestrator.rank("Parkinson disease", top=1)
+
+    trace = next(
+        trace for trace in result.traces if trace.agent_name == "LiteratureEvidenceAgent"
+    )
+    assert result.candidates[0].score is not None
+    assert trace.metadata["failures"]
+
+
+def test_orchestrator_strict_literature_failure_stops_pipeline(tmp_path):
+    orchestrator = MoleculeRankerOrchestrator(
+        config=RankerConfig(results_dir=tmp_path, strict_literature=True),
+        disease_source=FakeDiseaseSource(),
+        target_source=FakeTargetSource(),
+        molecule_source=FakeMoleculeSource(),
+        molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=FailingLiteratureSource(),
+    )
+
+    with pytest.raises(ExternalDataUnavailableError, match="PubMed unavailable"):
+        orchestrator.rank("Parkinson disease", top=1)
+
+
 def test_orchestrator_accepts_top_n_output_dir_and_runtime_config(tmp_path):
     orchestrator = MoleculeRankerOrchestrator(
         config=RankerConfig(results_dir=tmp_path / "unused"),
@@ -214,6 +281,7 @@ def test_orchestrator_accepts_top_n_output_dir_and_runtime_config(tmp_path):
         target_source=FakeTargetSource(),
         molecule_source=FakeMoleculeSource(),
         molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
     )
 
     result = orchestrator.rank(
@@ -241,6 +309,7 @@ def test_orchestrator_writes_effective_config_to_trace_metadata(tmp_path):
         target_source=FakeTargetSource(),
         molecule_source=FakeMoleculeSource(),
         molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
     )
 
     orchestrator.rank("Parkinson disease", top_n=1)
@@ -263,6 +332,7 @@ def test_disease_resolution_failure_stops_pipeline(tmp_path):
         target_source=target_source,
         molecule_source=molecule_source,
         molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
     )
 
     with pytest.raises(DiseaseResolutionError):
@@ -282,6 +352,7 @@ def test_external_data_unavailable_stops_pipeline(tmp_path):
         target_source=target_source,
         molecule_source=molecule_source,
         molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
     )
 
     with pytest.raises(ExternalDataUnavailableError):
@@ -300,6 +371,7 @@ def test_target_discovery_failure_stops_pipeline(tmp_path):
         target_source=FailingTargetSource(),
         molecule_source=molecule_source,
         molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
     )
 
     with pytest.raises(TargetDiscoveryError):
@@ -317,6 +389,7 @@ def test_molecule_retrieval_failure_stops_pipeline(tmp_path):
         target_source=FakeTargetSource(),
         molecule_source=molecule_source,
         molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
     )
 
     with pytest.raises(MoleculeRetrievalError):
@@ -333,6 +406,7 @@ def test_no_candidates_found_stops_pipeline(tmp_path):
         target_source=FakeTargetSource(),
         molecule_source=EmptyMoleculeSource(),
         molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
     )
 
     with pytest.raises(NoCandidatesFoundError):
@@ -348,6 +422,7 @@ def test_orchestrator_failed_run_does_not_write_success_artifacts(tmp_path):
         target_source=EmptyTargetSource(),
         molecule_source=FakeMoleculeSource(),
         molecule_annotation_source=NoOpAnnotationSource(),
+        literature_source=EmptyLiteratureSource(),
     )
 
     with pytest.raises(TargetDiscoveryError):

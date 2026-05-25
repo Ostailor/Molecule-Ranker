@@ -3,7 +3,7 @@ from __future__ import annotations
 from molecule_ranker.agents.base import BaseAgent, PipelineContext
 
 STUB_MESSAGE = (
-    "Novel molecule generation is not implemented in V0.1. This agent is a "
+    "Novel molecule generation is not implemented in V0.2. This agent is a "
     "placeholder for future target-conditioned molecular generation."
 )
 
@@ -43,7 +43,7 @@ class NovelMoleculeAgent(BaseAgent):
     def trace_metadata(self, context: PipelineContext) -> dict[str, object]:
         return {
             "implemented": False,
-            "v0_1_behavior": "generation disabled; candidate list is left unchanged",
+            "v0_2_behavior": "generation disabled; candidate list is left unchanged",
             "future_interface": {
                 "inputs": FUTURE_INPUTS,
                 "outputs": FUTURE_OUTPUTS,

@@ -136,7 +136,10 @@ def test_help_commands_work():
     options = {
         option
         for parameter in command.params
-        for option in getattr(parameter, "opts", [])
+        for option in [
+            *getattr(parameter, "opts", []),
+            *getattr(parameter, "secondary_opts", []),
+        ]
         if option.startswith("--")
     }
     assert "--fixture-mode" not in options
@@ -160,6 +163,19 @@ def test_help_commands_work():
         "--max-retries",
         "--retry-backoff-seconds",
         "--strict-enrichment",
+        "--enable-literature",
+        "--disable-literature",
+        "--strict-literature",
+        "--no-strict-literature",
+        "--literature-source",
+        "--openalex-enrichment",
+        "--no-openalex-enrichment",
+        "--max-literature-queries",
+        "--max-papers-per-query",
+        "--max-targets-for-literature",
+        "--max-candidates-for-literature",
+        "--ncbi-email",
+        "--ncbi-api-key-env",
     } <= options
 
 
@@ -193,10 +209,24 @@ class FailingHealthAdapter:
         )
 
 
+class HealthyPubMedAdapter(HealthyAdapter):
+    def health_check(self, *, timeout_seconds: float = 10.0) -> AdapterHealthStatus:
+        status = super().health_check(timeout_seconds=timeout_seconds)
+        return status.model_copy(update={"source_name": "PubMed"})
+
+
+class HealthyOpenAlexAdapter(HealthyAdapter):
+    def health_check(self, *, timeout_seconds: float = 10.0) -> AdapterHealthStatus:
+        status = super().health_check(timeout_seconds=timeout_seconds)
+        return status.model_copy(update={"source_name": "OpenAlex"})
+
+
 def test_health_command_prints_adapter_statuses(monkeypatch):
     monkeypatch.setattr(cli, "OpenTargetsAdapter", HealthyAdapter)
     monkeypatch.setattr(cli, "ChEMBLAdapter", HealthyAdapter)
     monkeypatch.setattr(cli, "PubChemAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "LiteraturePubMedAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "LiteratureOpenAlexAdapter", HealthyAdapter)
     runner = CliRunner()
 
     result = runner.invoke(app, ["health", "--timeout", "2"])
@@ -209,10 +239,27 @@ def test_health_command_prints_adapter_statuses(monkeypatch):
     assert "https://example.org/healthy" in result.stdout
 
 
+def test_health_command_includes_literature_adapters(monkeypatch):
+    monkeypatch.setattr(cli, "OpenTargetsAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "ChEMBLAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "PubChemAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "LiteraturePubMedAdapter", HealthyPubMedAdapter)
+    monkeypatch.setattr(cli, "LiteratureOpenAlexAdapter", HealthyOpenAlexAdapter)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["health"])
+
+    assert result.exit_code == 0
+    assert "PubMed" in result.stdout
+    assert "OpenAlex" in result.stdout
+
+
 def test_health_command_returns_nonzero_when_any_adapter_fails(monkeypatch):
     monkeypatch.setattr(cli, "OpenTargetsAdapter", HealthyAdapter)
     monkeypatch.setattr(cli, "ChEMBLAdapter", FailingHealthAdapter)
     monkeypatch.setattr(cli, "PubChemAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "LiteraturePubMedAdapter", HealthyAdapter)
+    monkeypatch.setattr(cli, "LiteratureOpenAlexAdapter", HealthyAdapter)
     runner = CliRunner()
 
     result = runner.invoke(app, ["health"])
@@ -253,6 +300,23 @@ def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_pat
             "--retry-backoff-seconds",
             "0.25",
             "--strict-enrichment",
+            "--disable-literature",
+            "--strict-literature",
+            "--literature-source",
+            "pubmed",
+            "--no-openalex-enrichment",
+            "--max-literature-queries",
+            "11",
+            "--max-papers-per-query",
+            "12",
+            "--max-targets-for-literature",
+            "13",
+            "--max-candidates-for-literature",
+            "14",
+            "--ncbi-email",
+            "ops@example.org",
+            "--ncbi-api-key-env",
+            "NCBI_TEST_KEY",
         ],
     )
 
@@ -277,6 +341,38 @@ def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_pat
     assert FakeOrchestrator.last_config.max_retries == 7
     assert FakeOrchestrator.last_config.retry_backoff_seconds == 0.25
     assert FakeOrchestrator.last_config.strict_enrichment is True
+    assert FakeOrchestrator.last_config.enable_literature is False
+    assert FakeOrchestrator.last_config.strict_literature is True
+    assert FakeOrchestrator.last_config.literature_sources == ["pubmed"]
+    assert FakeOrchestrator.last_config.enable_openalex_enrichment is False
+    assert FakeOrchestrator.last_config.max_literature_queries == 11
+    assert FakeOrchestrator.last_config.max_papers_per_query == 12
+    assert FakeOrchestrator.last_config.max_targets_for_literature == 13
+    assert FakeOrchestrator.last_config.max_candidates_for_literature == 14
+    assert FakeOrchestrator.last_config.ncbi_email == "ops@example.org"
+    assert FakeOrchestrator.last_config.ncbi_api_key is None
+
+
+def test_rank_command_reads_ncbi_api_key_from_named_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("NCBI_TEST_KEY", "secret-key")
+    monkeypatch.setattr(cli, "MoleculeRankerOrchestrator", FakeOrchestrator)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "rank",
+            "Alzheimer disease",
+            "--output-dir",
+            str(tmp_path),
+            "--ncbi-api-key-env",
+            "NCBI_TEST_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert FakeOrchestrator.last_config is not None
+    assert FakeOrchestrator.last_config.ncbi_api_key == "secret-key"
 
 
 def test_rank_command_does_not_override_default_target_limit(tmp_path, monkeypatch):

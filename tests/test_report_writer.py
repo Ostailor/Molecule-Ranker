@@ -256,7 +256,9 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert "## Targets Considered" in report
     assert "## Pipeline Trace" in report
     assert "ReportWriterAgent" in report
-    assert "Novel molecule generation is not implemented in V0.1." in report
+    assert "Novel molecule generation is not implemented in V0.2." in report
+    assert "## Literature Evidence" in report
+    assert "Literature evidence is absent" in report
     assert "Record-level evidence provenance" in report
     assert "response_mode=cached-real-data" in report
     assert "cache_key=cache-test-key" in report

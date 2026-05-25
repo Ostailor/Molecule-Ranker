@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -9,7 +10,11 @@ import typer
 from molecule_ranker import __version__
 from molecule_ranker.agents.base import AgentExecutionError
 from molecule_ranker.config import RankerConfig
-from molecule_ranker.data_sources import ChEMBLAdapter, OpenTargetsAdapter, PubChemAdapter
+from molecule_ranker.data_sources import (
+    ChEMBLAdapter,
+    OpenTargetsAdapter,
+    PubChemAdapter,
+)
 from molecule_ranker.data_sources.errors import (
     DiseaseResolutionError,
     EvidenceRetrievalError,
@@ -17,6 +22,12 @@ from molecule_ranker.data_sources.errors import (
     MoleculeRetrievalError,
     NoCandidatesFoundError,
     TargetDiscoveryError,
+)
+from molecule_ranker.literature.adapters.openalex_adapter import (
+    OpenAlexAdapter as LiteratureOpenAlexAdapter,
+)
+from molecule_ranker.literature.adapters.pubmed_adapter import (
+    PubMedAdapter as LiteraturePubMedAdapter,
 )
 from molecule_ranker.orchestrator import MoleculeRankerOrchestrator
 from molecule_ranker.schemas import RankingRun
@@ -64,8 +75,10 @@ def health(
     """Check public biomedical adapter reachability."""
     adapters = [
         OpenTargetsAdapter(timeout_seconds=timeout),
-        ChEMBLAdapter(timeout_seconds=timeout, max_retries=0, retry_delay_seconds=0),
+        ChEMBLAdapter(timeout_seconds=timeout, max_retries=2, retry_delay_seconds=0.25),
         PubChemAdapter(timeout_seconds=timeout),
+        LiteraturePubMedAdapter(timeout_seconds=timeout, max_retries=0),
+        LiteratureOpenAlexAdapter(timeout_seconds=timeout, max_retries=0),
     ]
     statuses = [adapter.health_check(timeout_seconds=timeout) for adapter in adapters]
 
@@ -194,8 +207,109 @@ def rank(
             help="Record strict enrichment intent in run config for future adapter policy.",
         ),
     ] = False,
+    enable_literature: Annotated[
+        bool,
+        typer.Option(
+            "--enable-literature/--disable-literature",
+            help="Enable or skip PubMed literature evidence retrieval.",
+        ),
+    ] = True,
+    strict_literature: Annotated[
+        bool,
+        typer.Option(
+            "--strict-literature/--no-strict-literature",
+            help="Fail the run when literature retrieval is unavailable.",
+        ),
+    ] = False,
+    literature_source: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--literature-source",
+            help="Literature source to use. Repeatable; currently supports pubmed.",
+        ),
+    ] = None,
+    openalex_enrichment: Annotated[
+        bool,
+        typer.Option(
+            "--openalex-enrichment/--no-openalex-enrichment",
+            help="Enable optional OpenAlex citation/OA/retraction enrichment.",
+        ),
+    ] = True,
+    max_literature_queries: Annotated[
+        int,
+        typer.Option(
+            "--max-literature-queries",
+            min=1,
+            help="Maximum literature queries generated per run.",
+        ),
+    ] = 100,
+    max_papers_per_query: Annotated[
+        int,
+        typer.Option(
+            "--max-papers-per-query",
+            min=1,
+            help="Maximum papers retrieved per literature query.",
+        ),
+    ] = 10,
+    max_targets_for_literature: Annotated[
+        int,
+        typer.Option(
+            "--max-targets-for-literature",
+            min=1,
+            help="Maximum targets used for literature query generation.",
+        ),
+    ] = 10,
+    max_candidates_for_literature: Annotated[
+        int,
+        typer.Option(
+            "--max-candidates-for-literature",
+            min=1,
+            help="Maximum candidates used for literature query generation.",
+        ),
+    ] = 20,
+    ncbi_email: Annotated[
+        str | None,
+        typer.Option("--ncbi-email", help="Email sent to NCBI E-utilities when configured."),
+    ] = None,
+    ncbi_api_key_env: Annotated[
+        str | None,
+        typer.Option(
+            "--ncbi-api-key-env",
+            help="Environment variable name containing the NCBI API key.",
+        ),
+    ] = None,
+    literature_failure_policy: Annotated[
+        str,
+        typer.Option(
+            "--literature-failure-policy",
+            help="Literature source failure policy: skip or fail.",
+        ),
+    ] = "skip",
+    max_literature_queries_per_candidate: Annotated[
+        int,
+        typer.Option(
+            "--max-literature-queries-per-candidate",
+            min=1,
+            help="Maximum PubMed queries generated per candidate.",
+        ),
+    ] = 3,
+    max_literature_results_per_query: Annotated[
+        int,
+        typer.Option(
+            "--max-literature-results-per-query",
+            min=1,
+            help="Maximum PubMed records fetched per generated literature query.",
+        ),
+    ] = 5,
+    enable_openalex_metadata: Annotated[
+        bool,
+        typer.Option(
+            "--enable-openalex-metadata",
+            help="Enrich PubMed records with optional OpenAlex citation/OA/retraction metadata.",
+        ),
+    ] = False,
 ) -> None:
-    """Run the V0.1 existing-molecule ranking pipeline."""
+    """Run the V0.2 existing-molecule ranking pipeline with literature evidence."""
     defaults = RankerConfig()
     config = RankerConfig(
         results_dir=output_dir,
@@ -214,6 +328,24 @@ def rank(
         ),
         max_indications_per_molecule=max_indications_per_molecule,
         max_warnings_per_molecule=max_warnings_per_molecule,
+        enable_literature=enable_literature,
+        strict_literature=strict_literature,
+        literature_sources=literature_source or defaults.literature_sources,
+        enable_openalex_enrichment=openalex_enrichment or enable_openalex_metadata,
+        max_literature_queries=max_literature_queries,
+        max_papers_per_query=max_papers_per_query,
+        max_targets_for_literature=max_targets_for_literature,
+        max_candidates_for_literature=max_candidates_for_literature,
+        ncbi_tool=defaults.ncbi_tool,
+        ncbi_email=ncbi_email,
+        ncbi_api_key=os.getenv(ncbi_api_key_env) if ncbi_api_key_env else None,
+        literature_request_timeout_seconds=timeout,
+        literature_max_retries=max_retries,
+        literature_cache_ttl_seconds=cache_ttl_hours * 60 * 60,
+        max_literature_queries_per_candidate=max_literature_queries_per_candidate,
+        max_literature_results_per_query=max_literature_results_per_query,
+        literature_failure_policy=literature_failure_policy,
+        enable_openalex_metadata=enable_openalex_metadata,
         request_timeout_seconds=timeout,
         max_retries=max_retries,
         retry_backoff_seconds=retry_backoff_seconds,
@@ -250,6 +382,14 @@ def _print_human_summary(result: RankingRun, output_dir: Path, *, verbose: bool)
     typer.echo(f"Disease: {result.disease.canonical_name}")
     typer.echo(f"Targets found: {len(result.targets)}")
     typer.echo(f"Candidates ranked: {len(result.candidates)}")
+    literature = _literature_summary_from_traces(result)
+    typer.echo(
+        f"Literature papers retrieved: {literature['literature_papers_retrieved']}"
+    )
+    typer.echo(
+        f"Literature claims extracted: {literature['literature_claims_extracted']}"
+    )
+    typer.echo(f"Literature warnings: {literature['literature_warnings_count']}")
     typer.echo("")
     typer.echo("Top candidates:")
     for index, candidate in enumerate(result.candidates, start=1):
@@ -280,6 +420,7 @@ def _summary_payload(result: RankingRun, output_dir: Path, *, verbose: bool) -> 
         "disease": result.disease.canonical_name,
         "targets_found": len(result.targets),
         "candidates_ranked": len(result.candidates),
+        **_literature_summary_from_traces(result),
         "top_candidates": [
             {
                 "rank": index,
@@ -310,6 +451,23 @@ def _summary_payload(result: RankingRun, output_dir: Path, *, verbose: bool) -> 
             for trace in result.traces
         ]
     return payload
+
+
+def _literature_summary_from_traces(result: RankingRun) -> dict[str, int]:
+    for trace in result.traces:
+        if trace.agent_name != "LiteratureEvidenceAgent":
+            continue
+        metadata = trace.metadata
+        return {
+            "literature_papers_retrieved": int(metadata.get("papers_retrieved", 0) or 0),
+            "literature_claims_extracted": int(metadata.get("claims_extracted", 0) or 0),
+            "literature_warnings_count": len(metadata.get("warnings", []) or []),
+        }
+    return {
+        "literature_papers_retrieved": 0,
+        "literature_claims_extracted": 0,
+        "literature_warnings_count": 0,
+    }
 
 
 if __name__ == "__main__":

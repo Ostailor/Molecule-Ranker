@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from molecule_ranker.schemas import Disease, Target
+from molecule_ranker.schemas import Disease, LiteraturePaper, LiteratureQuery, Target
 
 
 class DiseaseResolverDataSource(Protocol):
@@ -40,4 +40,24 @@ class MoleculeAnnotationDataSource(Protocol):
 
     def annotate_molecules(self, molecules: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Return enriched molecule records."""
+        ...
+
+
+class LiteratureDataSource(Protocol):
+    """Adapter interface for retrieving real public literature records."""
+
+    source_name: str
+
+    def retrieve_papers(self, query: LiteratureQuery) -> list[LiteraturePaper]:
+        """Retrieve literature records for a generated query."""
+        ...
+
+
+class LiteratureMetadataDataSource(Protocol):
+    """Optional adapter interface for enriching literature metadata."""
+
+    source_name: str
+
+    def enrich_papers(self, papers: list[LiteraturePaper]) -> list[LiteraturePaper]:
+        """Return literature records enriched with public metadata."""
         ...

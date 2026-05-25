@@ -28,8 +28,9 @@ DEFAULT_LIMITATIONS = [
     "Scores are heuristic prioritization aids.",
     "No wet-lab validation has been performed by this software.",
     "No patient-specific recommendation is provided.",
-    "Novel molecule generation is not implemented in V0.1.",
+    "Novel molecule generation is not implemented in V0.2.",
     "Record-level evidence provenance is reported for retrieved public-source records.",
+    "Literature claims are conservative rule-based mentions from retrieved paper records.",
     "Absence of evidence is not evidence of absence.",
 ]
 
@@ -102,7 +103,9 @@ class ReportWriterAgent(BaseAgent):
 
         disease = context.disease
         evidence = list(self._all_evidence(context.targets, context.candidates))
-        sources = sorted({item.source for item in evidence})
+        sources = sorted(
+            {item.source for item in evidence} | set(self._literature_sources(context))
+        )
         source_limitations = self._source_limitations(context)
         top_candidates = context.candidates[:5]
 
@@ -143,6 +146,22 @@ class ReportWriterAgent(BaseAgent):
             "## Evidence Coverage",
             "",
             *self._evidence_coverage_lines(context),
+            "",
+            "## Literature Evidence Summary",
+            "",
+            *self._literature_summary_lines(context),
+            "",
+            "## Literature Query Audit",
+            "",
+            *self._literature_query_audit_lines(context),
+            "",
+            "## Candidate Literature Evidence",
+            "",
+            *self._candidate_literature_evidence_overview_lines(context),
+            "",
+            "## Citations",
+            "",
+            *self._citation_lines(context),
             "",
             "## Summary",
             "",
@@ -199,6 +218,12 @@ class ReportWriterAgent(BaseAgent):
                     "disease": context.disease,
                     "targets": context.targets,
                     "candidates": context.candidates,
+                    "literature_evidence_summary": self._literature_summary_payload(
+                        context
+                    ),
+                    "literature_queries": self._literature_queries_payload(context),
+                    "literature_papers": self._literature_papers_payload(context),
+                    "extracted_claims": self._extracted_claims_payload(context),
                     "summary": {
                         "target_count": len(context.targets),
                         "candidate_count": len(context.candidates),
@@ -280,6 +305,7 @@ class ReportWriterAgent(BaseAgent):
                         "| Novelty or repurposing value | "
                         f"{score.novelty_or_repurposing_value:.3f} |"
                     ),
+                    f"| Literature quality | {score.literature_quality:.3f} |",
                     f"| Final score | {score.final_score:.3f} |",
                     f"| Confidence | {score.confidence:.3f} |",
                     "",
@@ -289,6 +315,8 @@ class ReportWriterAgent(BaseAgent):
 
         lines.extend(["", "Evidence summary:"])
         lines.extend(self._evidence_summary_lines(candidate.evidence))
+        lines.extend(["", "Literature evidence:"])
+        lines.extend(self._candidate_literature_lines(candidate))
         lines.extend(["", "Candidate evidence coverage:"])
         lines.extend(self._candidate_coverage_lines(candidate))
         lines.extend(["", "Known indications and warnings:"])
@@ -312,10 +340,183 @@ class ReportWriterAgent(BaseAgent):
             f"- Open Targets endpoint: {self._source_endpoint(evidence, 'Open Targets')}",
             f"- ChEMBL endpoint: {self._source_endpoint(evidence, 'ChEMBL')}",
             f"- PubChem endpoint: {self._source_endpoint(evidence, 'PubChem')}",
+            f"- PubMed endpoint: {self._literature_source_endpoint(context, 'PubMed')}",
+            f"- OpenAlex endpoint: {self._literature_source_endpoint(context, 'OpenAlex')}",
             f"- Cache usage: {self._cache_usage_text(config)}",
             f"- Retrieval timestamps: {self._retrieval_timestamp_summary(evidence)}",
             "- Source versions/status: unavailable",
         ]
+
+    def _literature_overview_lines(self, context: PipelineContext) -> list[str]:
+        lines: list[str] = []
+        for candidate in context.candidates:
+            lines.append(f"- Candidate: {candidate.name}")
+            for line in self._candidate_literature_lines(candidate):
+                lines.append(f"  {line}" if line.startswith("-") else f"  - {line}")
+        return lines or ["- No molecule candidates available for literature review."]
+
+    def _literature_summary_lines(self, context: PipelineContext) -> list[str]:
+        summary = self._literature_summary_payload(context)
+        warnings = summary.get("warnings", [])
+        lines = [
+            f"- Literature sources used: {', '.join(summary['sources_used']) or 'None recorded'}",
+            f"- Number of queries generated: {summary['queries_generated']}",
+            f"- Number of papers retrieved: {summary['papers_retrieved']}",
+            f"- Number of unique papers retained: {summary['unique_papers_retained']}",
+            f"- Number of claims extracted: {summary['claims_extracted']}",
+            f"- Number of evidence items attached: {summary['evidence_items_attached']}",
+            f"- strict_literature mode: {summary['strict_literature']}",
+            "- Warnings:",
+        ]
+        if warnings:
+            lines.extend(f"  - {warning}" for warning in warnings)
+        else:
+            lines.append("  - None recorded.")
+        return lines
+
+    def _literature_query_audit_lines(self, context: PipelineContext) -> list[str]:
+        queries = self._literature_queries_payload(context)
+        if not queries:
+            return ["- No literature queries recorded."]
+        lines: list[str] = []
+        for query in queries:
+            lines.extend(
+                [
+                    f"- query_id: {query['query_id']}",
+                    f"  - query_type: {query['query_type']}",
+                    f"  - query_text: {query['query_text']}",
+                    f"  - source: {query['source']}",
+                    f"  - papers returned: {query['papers_returned']}",
+                    f"  - claims extracted: {query['claims_extracted']}",
+                ]
+            )
+        return lines
+
+    def _candidate_literature_evidence_overview_lines(
+        self,
+        context: PipelineContext,
+    ) -> list[str]:
+        lines: list[str] = []
+        for candidate in context.candidates:
+            literature = self._candidate_literature_items(candidate)
+            literature_papers = self._candidate_literature_papers_from_config(
+                context, candidate
+            )
+            counts = self._literature_claim_counts(literature)
+            paper_keys = self._paper_keys(literature) | {
+                self._paper_payload_key(paper) for paper in literature_papers
+            }
+            citations = self._top_citations(literature, limit=5)
+            if not citations:
+                citations = self._top_paper_citations(literature_papers, limit=5)
+            lines.extend(
+                [
+                    f"- Candidate: {candidate.name}",
+                    f"  - Total literature papers: {len(paper_keys)}",
+                    f"  - Supportive claims: {counts['supportive']}",
+                    f"  - Clinical claims: {counts['clinical']}",
+                    f"  - Safety claims: {counts['safety']}",
+                    f"  - Contradictory claims: {counts['contradictory']}",
+                    f"  - Mention-only claims: {counts['mention_only']}",
+                    "  - Top citations:",
+                ]
+            )
+            if citations:
+                lines.extend(f"    - {citation}" for citation in citations)
+            else:
+                lines.append("    - None recorded.")
+        return lines or ["- No candidate literature evidence recorded."]
+
+    def _citation_lines(self, context: PipelineContext) -> list[str]:
+        papers = self._literature_papers_payload(context)
+        if not papers:
+            return ["- No cited literature papers recorded."]
+        lines: list[str] = []
+        for paper in papers:
+            identifiers = self._citation_identifier_text(paper)
+            lines.extend(
+                [
+                    f"- {paper['citation']['citation_text']}",
+                    f"  - IDs: {identifiers or 'unavailable'}",
+                    f"  - URL: {paper.get('url') or 'unavailable'}",
+                    f"  - Source: {paper.get('source') or 'unavailable'}",
+                    f"  - Retrieved at: {paper.get('retrieved_at') or 'unavailable'}",
+                    (
+                        "  - Retraction status: "
+                        f"{'retracted' if paper.get('is_retracted') else 'not retracted'}"
+                    ),
+                ]
+            )
+        return lines
+
+    def _candidate_literature_lines(self, candidate: MoleculeCandidate) -> list[str]:
+        normalized_literature = self._candidate_literature_items(candidate)
+        bundle = candidate.literature_evidence
+        if bundle is None and not normalized_literature:
+            return ["- Literature evidence is absent: retrieval was not run."]
+        if bundle is not None and not bundle.items and not normalized_literature:
+            reason = bundle.absent_reason or "No supported literature evidence was retrieved."
+            return [f"- Literature evidence is absent: {reason}"]
+        if normalized_literature:
+            counts = self._literature_claim_counts(normalized_literature)
+            lines = [
+                f"- Total literature papers: {len(self._paper_keys(normalized_literature))}",
+                f"- Supportive claims: {counts['supportive']}",
+                f"- Clinical claims: {counts['clinical']}",
+                f"- Safety claims: {counts['safety']}",
+                f"- Contradictory claims: {counts['contradictory']}",
+                f"- Mention-only claims: {counts['mention_only']}",
+                "- Supporting snippets:",
+                *self._snippet_lines(
+                    [
+                        item
+                        for item in normalized_literature
+                        if item.evidence_type
+                        not in {"literature_safety", "literature_contradictory"}
+                    ],
+                    limit=5,
+                ),
+                "- Safety/contradictory snippets:",
+                *self._snippet_lines(
+                    [
+                        item
+                        for item in normalized_literature
+                        if item.evidence_type
+                        in {"literature_safety", "literature_contradictory"}
+                    ],
+                    limit=5,
+                    contradictory_label=True,
+                ),
+                "- Citation IDs:",
+                *self._citation_id_lines(normalized_literature),
+            ]
+            if bundle is None:
+                return lines
+        else:
+            lines = []
+        if bundle is None:
+            return lines
+        lines = [
+            *lines,
+            f"- Literature quality: {bundle.quality_score:.3f}",
+            f"- Queries run: {bundle.query_count}",
+        ]
+        for item in bundle.items:
+            citation = item.citation
+            citation_text = citation.formatted or citation.title
+            if citation.url:
+                citation_text = f"{citation_text} ({citation.url})"
+            lines.extend(
+                [
+                    f"- Citation: {citation_text}",
+                    f"- Study type: {item.claims[0].study_type if item.claims else 'unknown'}",
+                    f"- Paper quality: {item.quality_score:.3f}",
+                ]
+            )
+            for claim in item.claims:
+                lines.append(f"- Claim: {claim.text}")
+            lines.append(f"- Query: {item.query.query_text}")
+        return lines
 
     def _disease_resolution_lines(self, context: PipelineContext) -> list[str]:
         disease = context.disease
@@ -598,6 +799,53 @@ class ReportWriterAgent(BaseAgent):
                 return item.url
         return "unavailable"
 
+    def _literature_source_endpoint(self, context: PipelineContext, source: str) -> str:
+        config = self._literature_config(context)
+        bundles = config.get("bundles", [])
+        if isinstance(bundles, list):
+            for bundle in bundles:
+                if not isinstance(bundle, dict):
+                    continue
+                for paper in bundle.get("papers", []):
+                    if not isinstance(paper, dict) or paper.get("source") != source:
+                        continue
+                    metadata = paper.get("metadata")
+                    if isinstance(metadata, dict):
+                        response_provenance = metadata.get("response_provenance")
+                        if isinstance(response_provenance, dict):
+                            endpoint = response_provenance.get("endpoint")
+                            if endpoint:
+                                return str(endpoint)
+                        openalex = metadata.get("openalex_response_provenance")
+                        if source == "OpenAlex" and isinstance(openalex, dict):
+                            endpoint = openalex.get("endpoint")
+                            if endpoint:
+                                return str(endpoint)
+        for candidate in context.candidates:
+            bundle = candidate.literature_evidence
+            if bundle is None:
+                continue
+            for item in bundle.items:
+                paper = item.paper
+                response_provenance = paper.metadata.get("response_provenance")
+                if paper.source == source and isinstance(response_provenance, dict):
+                    endpoint = response_provenance.get("endpoint")
+                    if endpoint:
+                        return str(endpoint)
+                if paper.source == source and paper.url:
+                    return paper.url
+                openalex = paper.metadata.get("openalex_response_provenance")
+                if source == "OpenAlex" and isinstance(openalex, dict):
+                    endpoint = openalex.get("endpoint")
+                    if endpoint:
+                        return str(endpoint)
+        sources = set(self._literature_sources(context))
+        if source == "PubMed" and "PubMed" in sources:
+            return "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+        if source == "OpenAlex" and "OpenAlex" in sources:
+            return "https://api.openalex.org/works"
+        return "unavailable"
+
     def _cache_usage_text(self, config: dict[str, Any]) -> str:
         use_cache = bool(config.get("use_cache"))
         allow_cached = bool(config.get("allow_cached_real_data"))
@@ -710,6 +958,415 @@ class ReportWriterAgent(BaseAgent):
             for source, timestamps in sorted(by_source.items())
         ]
         return "; ".join(parts)
+
+    def _literature_sources(self, context: PipelineContext) -> list[str]:
+        sources: set[str] = set()
+        sources.update(
+            str(source)
+            for source in self._literature_config(context).get("sources_used", [])
+        )
+        for candidate in context.candidates:
+            bundle = candidate.literature_evidence
+            if bundle is None:
+                continue
+            for item in bundle.items:
+                sources.add(item.paper.source)
+                if item.paper.metadata.get("openalex_id"):
+                    sources.add("OpenAlex")
+            for item in self._candidate_literature_items(candidate):
+                sources.add(item.source)
+                if item.metadata.get("openalex_id"):
+                    sources.add("OpenAlex")
+        return sorted(sources)
+
+    def _literature_config(self, context: PipelineContext) -> dict[str, Any]:
+        value = context.config.get("literature_evidence", {})
+        return dict(value) if isinstance(value, dict) else {}
+
+    def _candidate_literature_items(self, candidate: MoleculeCandidate) -> list[EvidenceItem]:
+        return [
+            item
+            for item in candidate.evidence
+            if item.evidence_type.startswith("literature_")
+        ]
+
+    def _all_literature_items(self, context: PipelineContext) -> list[EvidenceItem]:
+        items: list[EvidenceItem] = []
+        for candidate in context.candidates:
+            items.extend(self._candidate_literature_items(candidate))
+        for target in context.targets:
+            items.extend(
+                item
+                for item in target.evidence
+                if item.evidence_type.startswith("literature_")
+            )
+        return items
+
+    def _literature_summary_payload(self, context: PipelineContext) -> dict[str, Any]:
+        config = self._literature_config(context)
+        items = self._all_literature_items(context)
+        warnings = list(config.get("warnings", []))
+        sources = set(str(source) for source in config.get("sources_used", []))
+        sources.update(item.source for item in items)
+        if any(item.metadata.get("openalex_id") for item in items):
+            sources.add("OpenAlex")
+        return {
+            "sources_used": sorted(source for source in sources if source),
+            "queries_generated": int(config.get("queries_generated", 0) or 0),
+            "queries_executed": int(config.get("queries_executed", 0) or 0),
+            "papers_retrieved": int(config.get("papers_retrieved", 0) or 0),
+            "unique_papers_retained": int(config.get("unique_papers_retained", 0) or 0),
+            "claims_extracted": int(config.get("claims_extracted", 0) or 0),
+            "evidence_items_attached": len(items),
+            "strict_literature": bool(config.get("strict_literature", False)),
+            "warnings": warnings,
+        }
+
+    def _literature_queries_payload(self, context: PipelineContext) -> list[dict[str, Any]]:
+        config = self._literature_config(context)
+        bundles = config.get("bundles", [])
+        if not isinstance(bundles, list):
+            return []
+        queries: list[dict[str, Any]] = []
+        for bundle in bundles:
+            if not isinstance(bundle, dict):
+                continue
+            query = bundle.get("query", {})
+            if not isinstance(query, dict):
+                continue
+            papers = bundle.get("papers", [])
+            claims = bundle.get("claims", [])
+            paper_sources = {
+                str(paper.get("source"))
+                for paper in papers
+                if isinstance(paper, dict) and paper.get("source")
+            }
+            queries.append(
+                {
+                    "query_id": query.get("query_id"),
+                    "query_type": query.get("query_type"),
+                    "query_text": query.get("query_text"),
+                    "source": ", ".join(sorted(paper_sources)) or "PubMed",
+                    "papers_returned": len(papers) if isinstance(papers, list) else 0,
+                    "claims_extracted": len(claims) if isinstance(claims, list) else 0,
+                }
+            )
+        return queries
+
+    def _literature_papers_payload(self, context: PipelineContext) -> list[dict[str, Any]]:
+        papers_by_key: dict[str, dict[str, Any]] = {}
+        for item in self._all_literature_items(context):
+            paper = self._paper_payload_from_evidence(item)
+            papers_by_key.setdefault(self._paper_payload_key(paper), paper)
+        for paper in self._papers_from_config(context):
+            papers_by_key.setdefault(self._paper_payload_key(paper), paper)
+        return list(papers_by_key.values())
+
+    def _extracted_claims_payload(self, context: PipelineContext) -> list[dict[str, Any]]:
+        claims: list[dict[str, Any]] = []
+        for item in self._all_literature_items(context):
+            claims.append(
+                {
+                    "paper_id": item.metadata.get("paper_id"),
+                    "candidate_name": item.metadata.get("candidate_name"),
+                    "target_symbol": item.metadata.get("target_symbol"),
+                    "disease_name": item.metadata.get("disease_name"),
+                    "claim_type": item.metadata.get("claim_type"),
+                    "direction": item.metadata.get("direction"),
+                    "confidence": item.confidence,
+                    "supporting_snippet": self._short_text(
+                        str(item.metadata.get("supporting_snippet") or "")
+                    ),
+                    "query_id": item.metadata.get("query_id"),
+                    "query_text": item.metadata.get("query_text"),
+                    "study_type": item.metadata.get("study_type"),
+                    "evidence_level": item.metadata.get("evidence_level"),
+                    "citation": item.metadata.get("citation"),
+                }
+            )
+        config = self._literature_config(context)
+        bundles = config.get("bundles", [])
+        if isinstance(bundles, list):
+            for bundle in bundles:
+                if not isinstance(bundle, dict):
+                    continue
+                for claim in bundle.get("claims", []):
+                    if not isinstance(claim, dict):
+                        continue
+                    claims.append(
+                        {
+                            "claim_id": claim.get("claim_id"),
+                            "paper_id": claim.get("paper_id"),
+                            "candidate_name": claim.get("candidate_name"),
+                            "target_symbol": claim.get("target_symbol"),
+                            "disease_name": claim.get("disease_name"),
+                            "claim_type": claim.get("claim_type"),
+                            "direction": claim.get("direction"),
+                            "confidence": claim.get("confidence"),
+                            "supporting_snippet": self._short_text(
+                                str(claim.get("supporting_snippet") or "")
+                            ),
+                            "query_id": (claim.get("metadata") or {}).get("query_id")
+                            if isinstance(claim.get("metadata"), dict)
+                            else None,
+                            "study_type": (claim.get("metadata") or {}).get("study_type")
+                            if isinstance(claim.get("metadata"), dict)
+                            else None,
+                        }
+                    )
+        return claims
+
+    def _papers_from_config(self, context: PipelineContext) -> list[dict[str, Any]]:
+        config = self._literature_config(context)
+        bundles = config.get("bundles", [])
+        papers: list[dict[str, Any]] = []
+        if not isinstance(bundles, list):
+            return papers
+        for bundle in bundles:
+            if not isinstance(bundle, dict):
+                continue
+            for paper in bundle.get("papers", []):
+                if isinstance(paper, dict):
+                    papers.append(self._paper_payload_from_mapping(paper))
+        return papers
+
+    def _candidate_literature_papers_from_config(
+        self, context: PipelineContext, candidate: MoleculeCandidate
+    ) -> list[dict[str, Any]]:
+        config = self._literature_config(context)
+        bundles = config.get("bundles", [])
+        papers: list[dict[str, Any]] = []
+        if not isinstance(bundles, list):
+            return papers
+        candidate_name = candidate.name.lower()
+        for bundle in bundles:
+            if not isinstance(bundle, dict):
+                continue
+            query = bundle.get("query", {})
+            if not isinstance(query, dict):
+                continue
+            molecule_name = str(query.get("molecule_name") or "").lower()
+            query_text = str(query.get("query_text") or "").lower()
+            if molecule_name != candidate_name and candidate_name not in query_text:
+                continue
+            for paper in bundle.get("papers", []):
+                if isinstance(paper, dict):
+                    papers.append(self._paper_payload_from_mapping(paper))
+        return papers
+
+    def _paper_payload_from_evidence(self, item: EvidenceItem) -> dict[str, Any]:
+        citation = item.metadata.get("citation")
+        citation_payload = citation if isinstance(citation, dict) else {}
+        return {
+            "paper_id": item.metadata.get("paper_id"),
+            "source": item.source,
+            "title": item.title,
+            "pmid": item.metadata.get("pmid"),
+            "doi": item.metadata.get("doi"),
+            "pmcid": item.metadata.get("pmcid"),
+            "openalex_id": item.metadata.get("openalex_id"),
+            "publication_type": item.metadata.get("publication_type"),
+            "is_retracted": item.metadata.get("is_retracted"),
+            "cited_by_count": item.metadata.get("cited_by_count"),
+            "url": item.url,
+            "retrieved_at": item.retrieval_timestamp.isoformat(),
+            "citation": self._citation_payload(citation_payload, item),
+        }
+
+    def _paper_payload_from_mapping(self, paper: dict[str, Any]) -> dict[str, Any]:
+        item_like = EvidenceItem(
+            source=str(paper.get("source") or "PubMed"),
+            source_record_id=str(
+                paper.get("pmid")
+                or paper.get("doi")
+                or paper.get("openalex_id")
+                or paper.get("paper_id")
+            ),
+            title=str(paper.get("title") or "Untitled literature record"),
+            url=paper.get("url"),
+            evidence_type="literature_mention",
+            summary="Literature paper metadata.",
+            confidence=0.0,
+            metadata={
+                "pmid": paper.get("pmid"),
+                "doi": paper.get("doi"),
+                "pmcid": paper.get("pmcid"),
+                "openalex_id": paper.get("openalex_id"),
+            },
+        )
+        return {
+            "paper_id": paper.get("paper_id"),
+            "source": paper.get("source"),
+            "title": paper.get("title"),
+            "pmid": paper.get("pmid"),
+            "doi": paper.get("doi"),
+            "pmcid": paper.get("pmcid"),
+            "openalex_id": paper.get("openalex_id"),
+            "publication_type": paper.get("publication_type"),
+            "is_retracted": paper.get("is_retracted"),
+            "cited_by_count": paper.get("cited_by_count"),
+            "url": paper.get("url"),
+            "retrieved_at": paper.get("retrieved_at"),
+            "citation": self._citation_payload({}, item_like),
+        }
+
+    def _citation_payload(
+        self,
+        citation: dict[str, Any],
+        item: EvidenceItem,
+    ) -> dict[str, Any]:
+        title = str(citation.get("title") or item.title)
+        pmid = citation.get("pmid") or item.metadata.get("pmid")
+        doi = citation.get("doi") or item.metadata.get("doi")
+        year = citation.get("year")
+        identifiers = []
+        if pmid:
+            identifiers.append(f"PMID:{pmid}")
+        if doi:
+            identifiers.append(f"doi:{doi}")
+        id_text = f" {'; '.join(identifiers)}" if identifiers else ""
+        year_text = f" ({year})" if year else ""
+        return {
+            "title": title,
+            "authors": citation.get("authors", []),
+            "journal": citation.get("journal"),
+            "publication_date": citation.get("publication_date"),
+            "year": year,
+            "doi": doi,
+            "pmid": pmid,
+            "pmcid": citation.get("pmcid") or item.metadata.get("pmcid"),
+            "openalex_id": citation.get("openalex_id") or item.metadata.get("openalex_id"),
+            "url": citation.get("url") or item.url,
+            "citation_text": citation.get("citation_text")
+            or f"{title}.{year_text}{id_text}".strip(),
+        }
+
+    def _paper_payload_key(self, paper: dict[str, Any]) -> str:
+        return str(
+            paper.get("pmid")
+            or paper.get("doi")
+            or paper.get("openalex_id")
+            or paper.get("paper_id")
+            or paper.get("title")
+        )
+
+    def _literature_claim_counts(self, items: list[EvidenceItem]) -> dict[str, int]:
+        counts = {
+            "supportive": 0,
+            "clinical": 0,
+            "safety": 0,
+            "contradictory": 0,
+            "mention_only": 0,
+        }
+        for item in items:
+            claim_type = str(item.metadata.get("claim_type") or "")
+            direction = str(item.metadata.get("direction") or "")
+            if item.evidence_type == "literature_clinical" or claim_type == "clinical_support":
+                counts["clinical"] += 1
+            if item.evidence_type == "literature_safety" or direction == "safety_concern":
+                counts["safety"] += 1
+            if item.evidence_type == "literature_contradictory" or direction == "contradictory":
+                counts["contradictory"] += 1
+            if item.evidence_type == "literature_mention" or claim_type == "mention_only":
+                counts["mention_only"] += 1
+            if (
+                direction == "supportive"
+                and item.evidence_type
+                not in {"literature_safety", "literature_contradictory"}
+            ):
+                counts["supportive"] += 1
+        return counts
+
+    def _paper_keys(self, items: list[EvidenceItem]) -> set[str]:
+        return {
+            str(
+                item.metadata.get("paper_id")
+                or item.metadata.get("pmid")
+                or item.source_record_id
+            )
+            for item in items
+        }
+
+    def _top_citations(self, items: list[EvidenceItem], *, limit: int) -> list[str]:
+        citations: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            citation = item.metadata.get("citation")
+            if not isinstance(citation, dict):
+                continue
+            text = str(citation.get("citation_text") or citation.get("title") or "")
+            key = text or str(item.source_record_id)
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            citations.append(text)
+            if len(citations) >= limit:
+                break
+        return citations
+
+    def _top_paper_citations(self, papers: list[dict[str, Any]], *, limit: int) -> list[str]:
+        citations: list[str] = []
+        seen: set[str] = set()
+        for paper in papers:
+            citation = paper.get("citation")
+            if not isinstance(citation, dict):
+                continue
+            text = str(citation.get("citation_text") or citation.get("title") or "")
+            key = text or self._paper_payload_key(paper)
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            citations.append(text)
+            if len(citations) >= limit:
+                break
+        return citations
+
+    def _snippet_lines(
+        self,
+        items: list[EvidenceItem],
+        *,
+        limit: int,
+        contradictory_label: bool = False,
+    ) -> list[str]:
+        if not items:
+            return ["- None recorded."]
+        lines: list[str] = []
+        for item in items[:limit]:
+            snippet = self._short_text(str(item.metadata.get("supporting_snippet") or ""))
+            if not snippet:
+                continue
+            label = "Contradictory evidence" if contradictory_label else "Snippet"
+            citation_id = self._citation_id(item)
+            lines.append(f"- {label} [{citation_id}]: {snippet}")
+        return lines or ["- None recorded."]
+
+    def _citation_id_lines(self, items: list[EvidenceItem]) -> list[str]:
+        ids = sorted({self._citation_id(item) for item in items if self._citation_id(item)})
+        return [f"- {citation_id}" for citation_id in ids] or ["- None recorded."]
+
+    def _citation_id(self, item: EvidenceItem) -> str:
+        if item.metadata.get("pmid"):
+            return f"PMID:{item.metadata['pmid']}"
+        if item.metadata.get("doi"):
+            return f"doi:{item.metadata['doi']}"
+        if item.metadata.get("openalex_id"):
+            return f"OpenAlex:{item.metadata['openalex_id']}"
+        return str(item.source_record_id or "")
+
+    def _citation_identifier_text(self, paper: dict[str, Any]) -> str:
+        identifiers = []
+        if paper.get("pmid"):
+            identifiers.append(f"PMID:{paper['pmid']}")
+        if paper.get("doi"):
+            identifiers.append(f"doi:{paper['doi']}")
+        if paper.get("pmcid"):
+            identifiers.append(f"PMCID:{paper['pmcid']}")
+        if paper.get("openalex_id"):
+            identifiers.append(f"OpenAlex:{paper['openalex_id']}")
+        return "; ".join(identifiers)
+
+    def _short_text(self, value: str, limit: int = 500) -> str:
+        return " ".join(value.split())[:limit]
 
     def _all_evidence(
         self, targets: Iterable[Target], candidates: Iterable[MoleculeCandidate]

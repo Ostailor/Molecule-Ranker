@@ -47,6 +47,10 @@ class ChEMBLAdapter:
         "INHIBITION",
         "ACTIVITY",
     }
+    request_headers = {
+        "Accept": "application/json",
+        "User-Agent": "molecule-ranker/0.2",
+    }
 
     def __init__(
         self,
@@ -112,19 +116,28 @@ class ChEMBLAdapter:
         activity_limit = self.max_activity_records_per_target or limit_per_target
         for target, mapping in mapped_targets:
             target_id = mapping.chembl_target_id
-            mechanism_result = self._list_endpoint(
-                "mechanism.json",
-                collection_key="mechanisms",
-                base_params={"target_chembl_id": target_id},
-                max_records=mechanism_limit,
-            )
-            mechanisms = mechanism_result.records
+            try:
+                mechanism_result = self._list_endpoint(
+                    "mechanism.json",
+                    collection_key="mechanisms",
+                    base_params={"target_chembl_id": target_id},
+                    max_records=mechanism_limit,
+                )
+                mechanisms = mechanism_result.records
+            except (ExternalDataUnavailableError, MoleculeRetrievalError) as exc:
+                mechanism_result = None
+                mechanisms = []
+                mechanism_warning = (
+                    "ChEMBL mechanism records unavailable for "
+                    f"{target.symbol} ({target_id}); activity evidence was still queried: {exc}"
+                )
+                self.last_trace_metadata["warnings"].append(mechanism_warning)
             for mechanism in mechanisms:
                 molecule_id = mechanism.get("molecule_chembl_id")
                 if not molecule_id:
                     continue
                 warnings: list[str] = []
-                if mechanism_result.metadata.truncated:
+                if mechanism_result is not None and mechanism_result.metadata.truncated:
                     warnings.append(
                         "ChEMBL mechanism records were truncated by configured "
                         f"max_molecules_per_target={mechanism_limit}."
@@ -649,25 +662,36 @@ class ChEMBLAdapter:
         timeout = min(timeout_seconds, self.timeout_seconds)
         started = perf_counter()
         status_error: str | None = None
+        retry_policy = RetryPolicy(
+            max_retries=self.max_retries,
+            backoff_seconds=self.retry_delay_seconds,
+            jitter_seconds=min(max(self.retry_delay_seconds, 0.0), 0.25),
+        )
         try:
-            response = self.session.get(
-                endpoint,
-                params={},
-                timeout=timeout,
+            response, _retry_metadata = request_with_retries(
+                lambda: self.session.get(
+                    endpoint,
+                    params={},
+                    timeout=timeout,
+                    headers=self.request_headers,
+                ),
+                retry_policy,
             )
-            response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, dict):
                 raise MoleculeRetrievalError("ChEMBL returned an unexpected health payload.")
         except Exception as exc:  # pragma: no cover - exact failures are source-dependent
             status_error = str(exc)
             try:
-                response = self.session.get(
-                    fallback_endpoint,
-                    params={"molecule_chembl_id": "CHEMBL25", "limit": 1},
-                    timeout=timeout,
+                response, _retry_metadata = request_with_retries(
+                    lambda: self.session.get(
+                        fallback_endpoint,
+                        params={"molecule_chembl_id": "CHEMBL25", "limit": 1},
+                        timeout=timeout,
+                        headers=self.request_headers,
+                    ),
+                    retry_policy,
                 )
-                response.raise_for_status()
                 payload = response.json()
                 if not isinstance(payload, dict):
                     raise MoleculeRetrievalError(
@@ -719,7 +743,12 @@ class ChEMBLAdapter:
         retry_metadata = RetryMetadata()
         try:
             response, retry_metadata = request_with_retries(
-                lambda: self.session.get(url, params=params, timeout=self.timeout_seconds),
+                lambda: self.session.get(
+                    url,
+                    params=params,
+                    timeout=self.timeout_seconds,
+                    headers=self.request_headers,
+                ),
                 RetryPolicy(
                     max_retries=self.max_retries,
                     backoff_seconds=self.retry_delay_seconds,
@@ -845,6 +874,7 @@ class ChEMBLAdapter:
             "truncated": False,
             "retry_count": 0,
             "rate_limit_retry_count": 0,
+            "warnings": [],
         }
 
     def _empty_pagination_metadata(self) -> PaginationMetadata:
