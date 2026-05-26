@@ -6,6 +6,11 @@ from molecule_ranker.review.dashboard import (
     render_static_review_dashboard,
 )
 from molecule_ranker.review.dossier import DossierWriterAgent
+from molecule_ranker.review.experimental_results import (
+    apply_experimental_results_to_review_workspace,
+    attach_experimental_results_to_review_item,
+    summarize_review_experimental_results,
+)
 from molecule_ranker.review.exporters import (
     ReviewExportResult,
     export_review_package,
@@ -52,6 +57,8 @@ __all__ = [
     "ReviewWorkspaceStore",
     "ReviewWorkspaceSummary",
     "ValidationHandoff",
+    "apply_experimental_results_to_review_workspace",
+    "attach_experimental_results_to_review_item",
     "build_candidate_comparison",
     "build_validation_handoff",
     "compute_review_metrics",
@@ -59,4 +66,5 @@ __all__ = [
     "generate_static_review_dashboard",
     "render_workspace_markdown",
     "render_static_review_dashboard",
+    "summarize_review_experimental_results",
 ]

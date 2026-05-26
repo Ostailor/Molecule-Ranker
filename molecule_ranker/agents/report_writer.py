@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +25,11 @@ from molecule_ranker.evidence import (
     is_molecule_target_evidence,
     is_safety_warning,
     normalize_evidence_item,
+)
+from molecule_ranker.experiments.guardrails import (
+    sanitize_experimental_output_payload,
+    sanitize_experimental_output_text,
+    validate_experimental_output_guardrails,
 )
 from molecule_ranker.generation.schemas import GeneratedMolecule, GenerationRun
 from molecule_ranker.review.schemas import ReviewItem, ReviewWorkspace
@@ -205,6 +211,18 @@ class ReportWriterAgent(BaseAgent):
             "",
             *self._expert_review_workflow_lines(context, review_context),
             "",
+            "## Experimental Evidence Summary",
+            "",
+            *self._experimental_evidence_summary_lines(context),
+            "",
+            "## Candidate Experimental Evidence",
+            "",
+            *self._candidate_experimental_evidence_lines(context),
+            "",
+            "## Active Learning Suggestions",
+            "",
+            *self._active_learning_suggestion_lines(context),
+            "",
             "## Citations",
             "",
             *self._citation_lines(context),
@@ -321,6 +339,7 @@ class ReportWriterAgent(BaseAgent):
         (output_dir / "developability_report.md").write_text(
             self._render_developability_report(context)
         )
+        self._write_experimental_outputs(context, output_dir)
         (output_dir / "trace.json").write_text(
             _json_dumps(
                 {
@@ -2899,6 +2918,303 @@ class ReportWriterAgent(BaseAgent):
             return "None recorded"
         return ", ".join(f"{key}: {value}" for key, value in sorted(payload.items()))
 
+    def _write_experimental_outputs(self, context: PipelineContext, output_dir: Path) -> None:
+        payload = self._experimental_report_payload(context)
+        validate_experimental_output_guardrails(payload, label="report artifacts")
+        report = self._render_experimental_report(context)
+        validate_experimental_output_guardrails(report, label="markdown report")
+        (output_dir / "experimental_results.json").write_text(
+            _json_dumps(payload["experimental_results"])
+        )
+        (output_dir / "experimental_evidence.json").write_text(
+            _json_dumps(payload["experimental_evidence"])
+        )
+        (output_dir / "active_learning_batch.json").write_text(
+            _json_dumps(payload["active_learning_batch"])
+        )
+        (output_dir / "experimental_report.md").write_text(report)
+
+    def _render_experimental_report(self, context: PipelineContext) -> str:
+        lines = [
+            "# Experimental Result Report",
+            "",
+            "## Experimental Evidence Summary",
+            "",
+            *self._experimental_evidence_summary_lines(context),
+            "",
+            "## Candidate Experimental Evidence",
+            "",
+            *self._candidate_experimental_evidence_lines(context),
+            "",
+            "## Active Learning Suggestions",
+            "",
+            *self._active_learning_suggestion_lines(context),
+            "",
+            "## Limitations",
+            "",
+            *self._experimental_limitation_lines(),
+        ]
+        return "\n".join(lines) + "\n"
+
+    def _experimental_evidence_summary_lines(self, context: PipelineContext) -> list[str]:
+        payload = self._experimental_report_payload(context)
+        summary = payload["experimental_results"]["summary"]
+        endpoint_coverage = summary.get("endpoint_coverage", {})
+        candidates = summary.get("candidates_with_direct_assay_evidence", [])
+        generated = summary.get("generated_molecules_with_direct_assay_evidence", [])
+        return [
+            f"- Results loaded: {summary.get('results_loaded', 0)}",
+            f"- Linked results: {summary.get('linked_results', 0)}",
+            f"- Unlinked results: {summary.get('unlinked_results', 0)}",
+            f"- Positive results: {summary.get('positive_count', 0)}",
+            f"- Negative results: {summary.get('negative_count', 0)}",
+            f"- Inconclusive results: {summary.get('inconclusive_count', 0)}",
+            f"- Failed QC results: {summary.get('failed_qc_count', 0)}",
+            f"- Endpoint coverage: {self._format_distribution(endpoint_coverage)}",
+            (
+                "- Candidates with direct assay evidence: "
+                f"{', '.join(candidates) if candidates else 'None recorded'}"
+            ),
+            (
+                "- Generated molecules with direct assay evidence: "
+                f"{', '.join(generated) if generated else 'None recorded'}"
+            ),
+        ]
+
+    def _candidate_experimental_evidence_lines(self, context: PipelineContext) -> list[str]:
+        evidence = self._experimental_report_payload(context)["experimental_evidence"]
+        summaries = {
+            **evidence.get("candidate_summaries", {}),
+            **evidence.get("generated_summaries", {}),
+        }
+        if not summaries:
+            return ["- No linked imported experimental result summaries are recorded."]
+        lines: list[str] = []
+        for candidate_name, summary in sorted(summaries.items()):
+            safety = summary.get("safety_concerns", [])
+            warnings = summary.get("warnings", [])
+            interpretation = self._sanitize_experimental_text(
+                str(summary.get("interpretation", ""))
+            )
+            lines.extend(
+                [
+                    f"### {candidate_name}",
+                    "",
+                    f"- Linked assay result count: {summary.get('result_count', 0)}",
+                    (
+                        "- Endpoint summaries: "
+                        f"{self._endpoint_summary_text(summary.get('endpoint_summaries', {}))}"
+                    ),
+                    (
+                        "- Positive results: "
+                        f"{', '.join(summary.get('best_supporting_results', [])) or 'None'}"
+                    ),
+                    (
+                        "- Negative results: "
+                        f"{', '.join(summary.get('key_negative_results', [])) or 'None'}"
+                    ),
+                    f"- Safety/toxicity results: {', '.join(safety) or 'None'}",
+                    f"- QC failures: {summary.get('failed_qc_count', 0)}",
+                    f"- Interpretation: {interpretation}",
+                    f"- Warnings: {', '.join(warnings) if warnings else 'None recorded'}",
+                    "",
+                ]
+            )
+        return lines
+
+    def _active_learning_suggestion_lines(self, context: PipelineContext) -> list[str]:
+        batch = self._experimental_report_payload(context)["active_learning_batch"]
+        suggestions = batch.get("suggestions", [])
+        lines = [f"- Strategy: {batch.get('strategy') or 'None recorded'}"]
+        if not suggestions:
+            lines.append("- Suggested candidates: none recorded.")
+            return lines
+        lines.extend(
+            [
+                "",
+                "| Candidate | Score | Category | Rationale |",
+                "| --- | ---: | --- | --- |",
+            ]
+        )
+        for suggestion in suggestions:
+            metadata = suggestion.get("metadata", {})
+            category = metadata.get("suggested_validation_category") or metadata.get(
+                "suggested_assay_class",
+                "high_level_expert_review",
+            )
+            rationale = self._markdown_cell(
+                self._sanitize_experimental_text(str(suggestion.get("rationale", "")))
+            )
+            lines.append(
+                "| "
+                f"{suggestion.get('candidate_name', 'Unavailable')} | "
+                f"{float(suggestion.get('acquisition_score') or 0.0):.3f} | "
+                f"{category} | "
+                f"{rationale} "
+                f"(uncertainty={self._optional_score(suggestion.get('uncertainty_score'))}; "
+                f"diversity={self._optional_score(suggestion.get('diversity_score'))}; "
+                f"expected_value={self._optional_score(suggestion.get('expected_value_score'))}; "
+                f"risk_penalty={self._optional_score(suggestion.get('risk_penalty'))}) |"
+            )
+        return lines
+
+    def _experimental_limitation_lines(self) -> list[str]:
+        return [
+            "- Assay results may be incomplete or ambiguous.",
+            "- Assay context may not map to disease context.",
+            "- In-vitro result does not imply clinical efficacy.",
+            "- Generated molecule result applies only to the exact tested structure.",
+            "- Failed QC results are not support.",
+            "- Active-learning suggestions require expert review.",
+        ]
+
+    def _experimental_report_payload(self, context: PipelineContext) -> dict[str, dict[str, Any]]:
+        evidence = self._experimental_evidence_payload(context)
+        results = self._sanitize_experimental_payload(evidence.get("results", []))
+        summary = self._experimental_results_summary(context, evidence, results)
+        active_learning = self._active_learning_payload(context)
+        return {
+            "experimental_results": {
+                "success": True,
+                "summary": summary,
+                "results": results,
+                "limitations": self._experimental_limitation_lines(),
+            },
+            "experimental_evidence": {
+                "success": True,
+                **{
+                    key: value
+                    for key, value in evidence.items()
+                    if key not in {"results"}
+                },
+                "limitations": self._experimental_limitation_lines(),
+            },
+            "active_learning_batch": active_learning,
+        }
+
+    def _experimental_evidence_payload(self, context: PipelineContext) -> dict[str, Any]:
+        payload = context.config.get("experimental_evidence")
+        if isinstance(payload, dict):
+            return self._sanitize_experimental_payload(payload)
+        return {
+            "results": [],
+            "loaded_result_ids": [],
+            "linked_result_ids": [],
+            "candidate_summaries": {},
+            "generated_summaries": {},
+            "unlinked_result_ids": [],
+            "limitations": self._experimental_limitation_lines(),
+        }
+
+    def _experimental_results_summary(
+        self,
+        context: PipelineContext,
+        evidence: dict[str, Any],
+        results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        trace = context.config.get("ExperimentalEvidenceAgent.trace_metadata", {})
+        trace = trace if isinstance(trace, dict) else {}
+        outcome_counts = Counter(str(result.get("outcome_label")) for result in results)
+        endpoints = Counter(
+            str(
+                ((result.get("assay_context") or {}).get("endpoint") or {}).get("name")
+                or "unknown"
+            )
+            for result in results
+        )
+        candidate_summaries = evidence.get("candidate_summaries", {})
+        generated_summaries = evidence.get("generated_summaries", {})
+        linked_ids = evidence.get("linked_result_ids", [])
+        unlinked_ids = evidence.get("unlinked_result_ids", [])
+        return {
+            "results_loaded": int(trace.get("results_loaded", len(results))),
+            "linked_results": int(trace.get("results_linked", len(linked_ids))),
+            "unlinked_results": int(trace.get("results_unlinked", len(unlinked_ids))),
+            "positive_count": int(trace.get("positive_count", outcome_counts.get("positive", 0))),
+            "negative_count": int(trace.get("negative_count", outcome_counts.get("negative", 0))),
+            "inconclusive_count": int(
+                trace.get("inconclusive_count", outcome_counts.get("inconclusive", 0))
+            ),
+            "failed_qc_count": int(
+                trace.get("failed_qc_count", outcome_counts.get("failed_qc", 0))
+            ),
+            "endpoint_coverage": dict(sorted(endpoints.items())),
+            "candidates_with_direct_assay_evidence": sorted(candidate_summaries),
+            "generated_molecules_with_direct_assay_evidence": sorted(generated_summaries),
+            "warnings": list(trace.get("warnings", [])),
+        }
+
+    def _active_learning_payload(self, context: PipelineContext) -> dict[str, Any]:
+        raw = (
+            context.config.get("active_learning_batch")
+            or context.config.get("experimental_active_learning_batch")
+            or context.config.get("active_learning")
+        )
+        if isinstance(raw, BaseModel):
+            payload = raw.model_dump(mode="json")
+        elif isinstance(raw, dict):
+            payload = dict(raw)
+        else:
+            payload = {
+                "success": True,
+                "strategy": None,
+                "suggestions": [],
+                "excluded_candidates": [],
+                "metadata": {},
+            }
+        payload = self._sanitize_experimental_payload(payload)
+        suggestions = payload.get("suggestions", [])
+        if isinstance(suggestions, list):
+            payload["suggestions"] = [
+                self._active_learning_suggestion_payload(suggestion)
+                for suggestion in suggestions
+                if isinstance(suggestion, dict)
+            ]
+        payload["success"] = True
+        payload.setdefault("limitations", self._experimental_limitation_lines())
+        return payload
+
+    def _active_learning_suggestion_payload(self, suggestion: dict[str, Any]) -> dict[str, Any]:
+        payload = self._sanitize_experimental_payload(suggestion)
+        metadata = payload.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            category = metadata.get("suggested_assay_class") or metadata.get(
+                "suggested_validation_category",
+                "high_level_expert_review",
+            )
+            metadata["suggested_validation_category"] = str(category)
+        return payload
+
+    def _sanitize_experimental_payload(self, payload: Any) -> Any:
+        return sanitize_experimental_output_payload(payload)
+
+    def _sanitize_experimental_text(self, value: str) -> str:
+        return sanitize_experimental_output_text(value)
+
+    def _endpoint_summary_text(self, endpoint_summaries: Any) -> str:
+        if not isinstance(endpoint_summaries, dict) or not endpoint_summaries:
+            return "None recorded"
+        chunks: list[str] = []
+        for endpoint, summary in sorted(endpoint_summaries.items()):
+            if isinstance(summary, dict):
+                count = summary.get("result_count", 0)
+                outcomes = summary.get("outcome_counts", {})
+                if isinstance(outcomes, dict):
+                    chunks.append(
+                        f"{endpoint} ({count}; {self._format_distribution(outcomes)})"
+                    )
+                    continue
+            chunks.append(str(endpoint))
+        return "; ".join(chunks)
+
+    def _optional_score(self, value: Any) -> str:
+        if isinstance(value, int | float):
+            return f"{float(value):.3f}"
+        return "n/a"
+
+    def _markdown_cell(self, value: str) -> str:
+        return value.replace("|", "\\|").replace("\n", " ")
+
     def _developability_config_payload(self, context: PipelineContext) -> dict[str, Any]:
         config = context.config.get("ranker_config")
         source = {
@@ -2945,6 +3261,10 @@ class ReportWriterAgent(BaseAgent):
             "developability_report_md": str(output_dir / "developability_report.md"),
             "report_md": str(output_dir / "report.md"),
             "trace_json": str(output_dir / "trace.json"),
+            "experimental_results_json": str(output_dir / "experimental_results.json"),
+            "experimental_evidence_json": str(output_dir / "experimental_evidence.json"),
+            "active_learning_batch_json": str(output_dir / "active_learning_batch.json"),
+            "experimental_report_md": str(output_dir / "experimental_report.md"),
         }
 
 

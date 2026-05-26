@@ -35,6 +35,7 @@ PriorityBucket = Literal[
 ReviewStatus = Literal[
     "pending",
     "in_review",
+    "needs_expert_review",
     "accepted",
     "deprioritized",
     "rejected",
@@ -68,6 +69,11 @@ FollowupRequestType = Literal[
     "analog_generation",
     "expert_review",
     "validation_handoff",
+    "repeat_assay_review",
+    "orthogonal_validation_review",
+    "safety_followup_review",
+    "result_qc_review",
+    "active_learning_batch_review",
 ]
 RequestPriority = Literal["low", "medium", "high"]
 RequestStatus = Literal["open", "completed", "cancelled"]

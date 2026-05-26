@@ -1,27 +1,31 @@
 # molecule-ranker
 
 `molecule-ranker` is an agent-first drug discovery research prototype. Given a
-disease name, V0.5 resolves the disease through public biomedical data sources,
+disease name, V0.6 resolves the disease through public biomedical data sources,
 discovers evidence-backed targets, retrieves existing molecules linked to those
 targets, retrieves real literature evidence, ranks the molecules as transparent
 research hypotheses, and can optionally generate target-conditioned in-silico
 molecule hypotheses from those retrieved structures. V0.4 added computational
-developability triage for existing and generated molecules. V0.5 adds a local
+developability triage for existing and generated molecules. V0.5 added a local
 expert review workspace for human-in-the-loop triage, dossiers, follow-up
-requests, validation handoffs, feedback ingestion, and audit trails.
+requests, validation handoffs, feedback ingestion, and audit trails. V0.6 adds
+an experimental feedback loop and active-learning prioritization from
+user-imported assay result files.
 
 The app does not discover cures, does not claim generated molecules treat or are
 active against a disease, does not provide medical advice, and does not provide
 dosage or patient treatment instructions. Ranked molecules and generated
 structures are research hypotheses that require independent validation.
 Generated molecules are computational hypotheses only: they are not known
-actives, have no direct experimental evidence, and are ranked separately from
-existing evidence-backed molecules unless explicitly requested otherwise.
+actives, gain direct experimental evidence only from exact linked imported
+results for the tested structure, and are ranked separately from existing
+evidence-backed molecules unless explicitly requested otherwise.
 
-## V0.4 Scope
+## Current Scope Through V0.6
 
-V0.4 implements existing-molecule ranking, opt-in generated hypotheses, and
-developability-aware computational triage:
+V0.6 implements existing-molecule ranking, opt-in generated hypotheses,
+developability-aware computational triage, expert review workflows, and an
+experimental feedback loop from user-imported assay result files:
 
 - Resolve disease names to public biomedical disease entities with ambiguity handling.
 - Retrieve real disease-associated targets with richer target identifiers and metadata.
@@ -58,8 +62,12 @@ developability-aware computational triage:
   and `trace.json`.
 - Cache real public API responses with source provenance and TTL.
 - Provide adapter health checks and opt-in live smoke tests.
+- Import user-supplied assay result CSV/JSON files, validate and normalize
+  result records, link results to candidates and exact generated structures,
+  summarize experimental evidence, adjust scores only when linked and
+  QC-appropriate, and suggest active-learning batches for expert triage.
 
-V0.4 does not:
+V0.6 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -79,6 +87,8 @@ V0.4 does not:
 - Provide synthesis routes, reagents, reaction conditions, or synthesis
   instructions.
 - Make patient-specific recommendations.
+- Fabricate assay results, infer assay outcomes from model scores, or treat
+  surrogate model predictions as experimental evidence.
 
 Unit tests use mocked data only to test behavior deterministically. Production
 code uses real public biomedical data adapters and fails if required data cannot
@@ -237,6 +247,122 @@ uv run molecule-ranker review dashboard \
   --output results/alzheimer-disease/review_dashboard/
 ```
 
+## V0.6 Experimental Feedback Loop
+
+V0.6 adds a local experimental feedback loop and active-learning prioritization
+from assay result files. Assay results are imported by the user from CSV or JSON
+files; the software does not fabricate assay results, infer assay outcomes from
+model scores, or treat missing result data as evidence.
+
+Experimental evidence is kept separate from database evidence, literature
+evidence, expert review feedback, and model predictions. Imported assay results
+can affect candidate scores only when they are linked to the candidate or exact
+generated structure and satisfy the configured QC policy. Failed-QC and
+inconclusive results are recorded for provenance, summaries, and audit trails,
+but they do not add score support.
+
+In-vitro, biochemical, cellular, safety, and developability assay results do
+not imply clinical efficacy, clinical safety, cure, treatment, or patient
+benefit. Generated molecules gain direct experimental evidence only from exact
+linked imported results for the tested structure; seed-molecule and analog
+results are not generalized to generated molecules. Active-learning suggestions
+are expert-triage suggestions only, not instructions to run experiments.
+
+V0.6 does not provide lab protocols, synthesis instructions, synthesis routes,
+reagent recipes, animal or human dosing, or patient treatment guidance. Optional
+surrogate models are local estimates for prioritization only and are not
+experimental evidence.
+
+Safe neutral import templates are available under `templates/`:
+
+```bash
+templates/assay_results_template.csv
+templates/assay_results_template.json
+templates/README.md
+```
+
+Import an assay CSV:
+
+```bash
+uv run molecule-ranker experiment import templates/assay_results_template.csv \
+  --db-path .experiments/results.sqlite \
+  --imported-by researcher-1
+```
+
+Dry-run an import without writing the database:
+
+```bash
+uv run molecule-ranker experiment import templates/assay_results_template.csv \
+  --db-path .experiments/results.sqlite \
+  --dry-run \
+  --json
+```
+
+List imported assay results:
+
+```bash
+uv run molecule-ranker experiment list \
+  --db-path .experiments/results.sqlite \
+  --target-symbol EXAMPLE \
+  --outcome-label positive
+```
+
+Summarize imported results for a candidate:
+
+```bash
+uv run molecule-ranker experiment summarize \
+  --candidate-name ExampleCandidateA \
+  --db-path .experiments/results.sqlite
+```
+
+Link imported results to a saved run artifact:
+
+```bash
+uv run molecule-ranker experiment link \
+  --from-run results/example-condition/ \
+  --db-path .experiments/results.sqlite \
+  --json
+```
+
+Rank with experimental evidence enabled:
+
+```bash
+uv run molecule-ranker rank "Example condition" \
+  --top 10 \
+  --enable-experimental-evidence \
+  --experimental-db-path .experiments/results.sqlite \
+  --strict-experimental-linking \
+  --require-qc-passed-for-score
+```
+
+Generate an active-learning batch for expert triage:
+
+```bash
+uv run molecule-ranker experiment active-learning \
+  --from-run results/example-condition/ \
+  --db-path .experiments/results.sqlite \
+  --strategy balanced \
+  --batch-size 10 \
+  --include-generated \
+  --json
+```
+
+Export experimental results:
+
+```bash
+uv run molecule-ranker experiment export \
+  --db-path .experiments/results.sqlite \
+  --output results/example-condition/experimental_results_export.json
+```
+
+Create a high-level experimental report:
+
+```bash
+uv run molecule-ranker experiment report \
+  --db-path .experiments/results.sqlite \
+  --from-run results/example-condition/
+```
+
 ## Install
 
 Python 3.11+ is required. The repository is configured for `uv`:
@@ -269,7 +395,7 @@ generation option is supplied:
 uv run molecule-ranker rank "Alzheimer disease" --top 10
 ```
 
-Normal V0.4 ranking includes PubMed literature retrieval and developability
+Normal V0.6 ranking includes PubMed literature retrieval and developability
 triage by default:
 
 ```bash
@@ -465,6 +591,10 @@ uv run molecule-ranker rank "Alzheimer disease" \
   --max-review-items 100 \
   --include-generated-in-review \
   --generate-review-dashboard \
+  --enable-experimental-evidence \
+  --experimental-db-path .experiments/results.sqlite \
+  --strict-experimental-linking \
+  --require-qc-passed-for-score \
   --ncbi-email researcher@example.org \
   --ncbi-api-key-env NCBI_API_KEY \
   --max-retries 3 \
@@ -478,7 +608,7 @@ read as an offline substitute unless `--use-cache` is explicitly passed; that
 mode is a cached-real-data fallback for previously retrieved successful
 responses. Use `--no-cache` to bypass cache reads and writes.
 
-Important V0.5 configuration options map to typed `RankerConfig` fields:
+Important V0.6 configuration options map to typed `RankerConfig` fields:
 
 - `results_dir`, `cache_dir`: output and successful-real-response cache locations.
 - `use_cache`: enables cache writes; disabled by `--no-cache`.
@@ -570,6 +700,22 @@ Important V0.5 configuration options map to typed `RankerConfig` fields:
   feedback-prior behavior.
 - `generate_review_dashboard`, `review_dashboard_dir`: optional static local
   dashboard generation.
+- `enable_experimental_evidence`: opt-in switch for imported assay result
+  linking and scoring.
+- `experimental_db_path`: local SQLite path for imported assay results.
+- `experimental_result_source_filter`: optional filter for imported result
+  source labels such as `csv_import` or `json_import`.
+- `require_qc_passed_for_score`: requires QC-passed imported results before
+  score support is added. Failed-QC results remain auditable but do not improve
+  scores.
+- `include_inconclusive_results`: records inconclusive imported results in
+  experimental summaries while keeping them non-score-promoting.
+- `strict_experimental_linking`: requires exact candidate, InChIKey, canonical
+  SMILES, generated ID, or review-item links by default.
+- `enable_local_admet_models` and the optional `surrogate` dependency group:
+  local surrogate models may estimate assay outcomes for prioritization, but
+  those estimates are not experimental evidence and are not converted into
+  `EvidenceItem` objects.
 
 The effective config is serialized into `trace.json` so a run can be audited
 with the limits, cache policy, and request policy that produced it. Defaults are
@@ -609,6 +755,10 @@ results/<disease_slug>/generation_trace.json
 results/<disease_slug>/developability.json
 results/<disease_slug>/developability_report.md
 results/<disease_slug>/developability_assessments.json
+results/<disease_slug>/experimental_results.json
+results/<disease_slug>/experimental_evidence.json
+results/<disease_slug>/active_learning_batch.json
+results/<disease_slug>/experimental_report.md
 results/<disease_slug>/trace.json
 ```
 
@@ -883,6 +1033,8 @@ does not write a normal `report.md` that looks successful.
   structure-aware filters.
 - V0.5: expert review workflow and human-in-the-loop triage.
 - V0.6: experimental feedback loop and active learning from assay results.
+- V0.7: workspace/productization layer, API server, and multi-run project
+  management.
 
 ## Development
 

@@ -170,6 +170,8 @@ def _candidate_body(workspace: ReviewWorkspace, item: ReviewItem, dossier: Any) 
         "</section>"
         "<h3>Evidence summary</h3>"
         f"{_json_block(item.evidence_summary)}"
+        "<h3>Linked experimental results</h3>"
+        f"{_json_block(item.evidence_summary.get('experimental_results', {}))}"
         "<h3>Literature citations</h3>"
         f"{'<ul>' + ''.join(citations) + '</ul>' if citations else '<p>None recorded.</p>'}"
         "<h3>Developability summary</h3>"

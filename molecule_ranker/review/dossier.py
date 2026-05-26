@@ -4,6 +4,10 @@ import json
 import re
 from typing import Any
 
+from molecule_ranker.experiments.guardrails import (
+    sanitize_experimental_output_text,
+    should_omit_experimental_output_key,
+)
 from molecule_ranker.review.schemas import REVIEW_LIMITATIONS, CandidateDossier, ReviewWorkspace
 
 GENERATED_DIRECT_EVIDENCE_NOTICE = "Generated molecules have no direct experimental evidence."
@@ -87,6 +91,7 @@ class DossierWriterAgent:
                     "Origin",
                     "Disease and target rationale",
                     "Molecule-target evidence",
+                    "Experimental evidence",
                     "Literature evidence",
                     "Generated molecule provenance",
                     "Source provenance and artifact paths",
@@ -198,6 +203,10 @@ def _build_sections(
             },
         },
         {
+            "title": "Experimental evidence",
+            "content": _experimental_evidence_content(item),
+        },
+        {
             "title": "Literature evidence",
             "content": {
                 "claim_counts": item.evidence_summary.get("literature_claim_counts")
@@ -294,6 +303,34 @@ def _origin_content(item: Any) -> dict[str, Any]:
     }
 
 
+def _experimental_evidence_content(item: Any) -> dict[str, Any]:
+    summary = item.evidence_summary.get("experimental_results")
+    if not isinstance(summary, dict):
+        return {
+            "result_count": 0,
+            "note": "No linked imported experimental results are recorded for this review item.",
+            "boundary_note": (
+                "Reviewer decisions remain separate from imported experimental evidence."
+            ),
+        }
+    return {
+        "result_count": summary.get("result_count", 0),
+        "positive_count": summary.get("positive_count", 0),
+        "negative_count": summary.get("negative_count", 0),
+        "inconclusive_count": summary.get("inconclusive_count", 0),
+        "failed_qc_count": summary.get("failed_qc_count", 0),
+        "safety_concern_count": summary.get("safety_concern_count", 0),
+        "results": _safe_payload(summary.get("results", [])),
+        "review_suggestion": _safe_payload(
+            item.metadata.get("experimental_review_suggestion", {})
+        ),
+        "boundary_note": summary.get(
+            "boundary_note",
+            "Reviewer decisions remain separate from imported experimental evidence.",
+        ),
+    }
+
+
 def _generated_content(item: Any) -> dict[str, Any]:
     if item.candidate_origin != "generated":
         return {
@@ -386,13 +423,15 @@ def _safe_payload(value: Any) -> Any:
             for key, item in value.items()
             if str(key).lower() not in _OMITTED_TEXT_KEYS
             and not _contains_procedural_term(str(key))
+            and not should_omit_experimental_output_key(str(key))
         }
     if isinstance(value, list):
         return [_safe_payload(item) for item in value]
     if isinstance(value, str):
-        if _contains_procedural_term(value):
+        sanitized = sanitize_experimental_output_text(value)
+        if _contains_procedural_term(sanitized):
             return "[omitted procedural or treatment detail]"
-        return value
+        return sanitized
     return value
 
 

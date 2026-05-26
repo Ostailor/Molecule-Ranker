@@ -3,6 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from molecule_ranker.experiments.guardrails import (
+    sanitize_experimental_output_text,
+    should_omit_experimental_output_key,
+)
 from molecule_ranker.review.schemas import ReviewWorkspace, ValidationHandoff
 
 GENERATED_DIRECT_EVIDENCE_NOTICE = "Generated molecules have no direct experimental evidence."
@@ -76,6 +80,7 @@ def build_validation_handoff(
             },
             "key_hypothesis": _key_hypothesis(item),
             "evidence_summary": _evidence_summary(item),
+            "experimental_result_summary": _experimental_result_summary(item),
             "key_uncertainties": _key_uncertainties(item),
             "risk_flags": list(item.risk_flags),
             "supporting_artifact_paths": paths,
@@ -174,7 +179,15 @@ def _evidence_summary(item: Any) -> dict[str, Any]:
         "generated_score": item.evidence_summary.get("generated_score"),
         "priority_bucket": item.priority_bucket,
         "review_status": item.review_status,
+        "experimental_results": _experimental_result_summary(item),
     }
+
+
+def _experimental_result_summary(item: Any) -> dict[str, Any]:
+    summary = item.evidence_summary.get("experimental_results")
+    if not isinstance(summary, dict):
+        return {"result_count": 0, "results": []}
+    return _safe_payload(summary)
 
 
 def _key_uncertainties(item: Any) -> list[str]:
@@ -203,7 +216,10 @@ def _artifact_paths(workspace: ReviewWorkspace, item: Any) -> dict[str, str]:
                 {
                     str(key): str(value)
                     for key, value in raw_paths.items()
-                    if _safe_text(str(key)) and _safe_text(str(value))
+                    if _safe_text(str(key))
+                    and _safe_text(str(value))
+                    and not should_omit_experimental_output_key(str(key))
+                    and not should_omit_experimental_output_key(str(value))
                 }
             )
     return paths
@@ -234,7 +250,7 @@ def _safe_payload(value: Any) -> Any:
         return {
             str(key): _safe_payload(item)
             for key, item in value.items()
-            if _safe_text(str(key))
+            if _safe_text(str(key)) and not should_omit_experimental_output_key(str(key))
         }
     if isinstance(value, list):
         return [_safe_payload(item) for item in value if _safe_payload(item) is not None]
@@ -244,6 +260,7 @@ def _safe_payload(value: Any) -> Any:
 
 
 def _safe_text(value: str) -> str:
+    value = sanitize_experimental_output_text(value)
     lowered = re.sub(r"[_\\/\-]+", " ", value.lower())
     if any(term in lowered for term in _FORBIDDEN_DETAIL_TERMS):
         return ""

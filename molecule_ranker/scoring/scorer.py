@@ -13,6 +13,13 @@ from molecule_ranker.evidence import (
     normalize_evidence_type,
 )
 from molecule_ranker.evidence.types import CHEMICAL_ANNOTATION
+from molecule_ranker.experiments.scoring import (
+    EXPERIMENTAL_FAILED_QC,
+    EXPERIMENTAL_INCONCLUSIVE,
+    EXPERIMENTAL_SAFETY_CONCERN,
+    experimental_score_modifiers,
+    is_experimental_evidence,
+)
 from molecule_ranker.schemas import EvidenceItem, MoleculeCandidate, ScoreBreakdown, Target
 
 
@@ -101,6 +108,18 @@ class TransparentEvidenceScorer:
             literature_items,
         )
         literature_quality = max(literature_quality, self._literature_quality_from_items(candidate))
+        experimental_modifiers = experimental_score_modifiers(
+            candidate.evidence,
+            context_relevant=bool(matched_targets),
+        )
+        if experimental_modifiers.safety_penalty > 0:
+            safety_prior = self._clamp(
+                max(0.05, safety_prior - 0.25 * experimental_modifiers.safety_penalty)
+            )
+        if experimental_modifiers.confidence_modifier:
+            confidence = self._clamp(
+                confidence + experimental_modifiers.confidence_modifier
+            )
 
         if not matched_targets:
             warnings.append("Missing disease-target overlap in retrieved evidence.")
@@ -116,6 +135,20 @@ class TransparentEvidenceScorer:
             warnings.append("Retrieved drug warning evidence lowers the safety prior.")
         if self._literature_safety_or_contradictory_items(literature_items):
             warnings.append("Literature safety or contradictory evidence lowers confidence.")
+        if experimental_modifiers.support_score > 0:
+            warnings.append(
+                "Imported experimental evidence contributes only for the linked molecule "
+                "and assay context."
+            )
+        if (
+            experimental_modifiers.contradiction_score > 0
+            or experimental_modifiers.safety_penalty > 0
+        ):
+            warnings.append("Imported negative or safety assay evidence lowers prioritization.")
+        if experimental_modifiers.counts.get("failed_qc", 0):
+            warnings.append(
+                "Failed-QC imported assay results were recorded but did not add support."
+            )
         developability_risk = self._developability_risk_level(candidate)
         if candidate.developability_assessment is not None and developability_risk in {
             "medium",
@@ -136,6 +169,8 @@ class TransparentEvidenceScorer:
         )
         if literature_quality > 0:
             evidence_score = evidence_score + 0.1 * max(0.0, literature_quality - evidence_score)
+        if experimental_modifiers.score_delta:
+            evidence_score = self._clamp(evidence_score + experimental_modifiers.score_delta)
         if candidate.developability_assessment is not None:
             evidence_score = self._apply_developability_modifier(
                 evidence_score,
@@ -158,6 +193,11 @@ class TransparentEvidenceScorer:
             novelty_or_repurposing_value=round(novelty_or_repurposing_value, 3),
             literature_quality=round(literature_quality, 3),
             developability_score=round(developability_score, 3),
+            experimental_evidence_score=round(experimental_modifiers.score_delta, 3),
+            experimental_evidence_confidence=round(
+                max(0.0, experimental_modifiers.confidence_modifier),
+                3,
+            ),
             final_score=final_score,
             confidence=round(confidence, 3),
             explanation=self._explanation(
@@ -424,7 +464,8 @@ class TransparentEvidenceScorer:
         return [
             item
             for item in candidate.evidence
-            if is_safety_warning(item) or item.evidence_type == "literature_safety"
+            if is_safety_warning(item)
+            or item.evidence_type in {"literature_safety", EXPERIMENTAL_SAFETY_CONCERN}
         ]
 
     def _literature_items(
@@ -454,6 +495,10 @@ class TransparentEvidenceScorer:
                     self._literature_is_retracted(item)
                     or self._literature_evidence_level(item) == "mention_only"
                 )
+            )
+            and not (
+                is_experimental_evidence(item)
+                and item.evidence_type in {EXPERIMENTAL_FAILED_QC, EXPERIMENTAL_INCONCLUSIVE}
             )
         ]
 
@@ -961,6 +1006,8 @@ class TransparentEvidenceScorer:
             dimensions.append("literature evidence from retrieved paper records")
         if candidate.developability_assessment is not None:
             dimensions.append("V0.4 computational developability triage")
+        if any(is_experimental_evidence(item) for item in candidate.evidence):
+            dimensions.append("imported experimental assay results")
         missing = []
         if not completeness["has_molecule_target_evidence"]:
             missing.append("missing molecule-target evidence")

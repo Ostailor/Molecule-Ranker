@@ -223,6 +223,8 @@ class ScoreBreakdown(BaseModel):
     novelty_or_repurposing_value: float = Field(ge=0.0, le=1.0)
     literature_quality: float = Field(default=0.0, ge=0.0, le=1.0)
     developability_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    experimental_evidence_score: float = Field(default=0.0, ge=-1.0, le=1.0)
+    experimental_evidence_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     final_score: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str

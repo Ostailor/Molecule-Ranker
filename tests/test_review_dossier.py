@@ -132,6 +132,7 @@ def test_generated_dossier_has_required_sections_and_direct_evidence_warning():
         "Origin",
         "Disease and target rationale",
         "Molecule-target evidence",
+        "Experimental evidence",
         "Literature evidence",
         "Safety and warning evidence",
         "Developability assessment",
@@ -176,7 +177,12 @@ def test_existing_dossier_filters_article_text_and_avoids_approval_safety_implic
     assert "This existing-molecule dossier does not infer suitability" in markdown
     assert "abstract" not in json.dumps(json_payload).lower()
     assert "full article text" not in markdown.lower()
-    assert json_payload["metadata"]["sections"][5]["content"]["citations"][0] == {
+    literature_section = next(
+        section
+        for section in json_payload["metadata"]["sections"]
+        if section["title"] == "Literature evidence"
+    )
+    assert literature_section["content"]["citations"][0] == {
         "doi": "10.1000/example",
         "journal": "Example Journal",
         "pmid": "12345",

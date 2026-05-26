@@ -7,6 +7,7 @@ from typing import Literal
 import pytest
 
 from molecule_ranker.agents.base import PipelineContext
+from molecule_ranker.agents.experimental_evidence import ExperimentalEvidenceAgent
 from molecule_ranker.agents.report_writer import ReportWriterAgent
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
 from molecule_ranker.developability.schemas import (
@@ -20,6 +21,9 @@ from molecule_ranker.developability.schemas import (
 from molecule_ranker.developability.schemas import (
     DevelopabilityAssessment as StructuredDevelopabilityAssessment,
 )
+from molecule_ranker.experiments.active_learning import suggest_next_experiments
+from molecule_ranker.experiments.schemas import AssayContext, AssayEndpoint, AssayResult
+from molecule_ranker.experiments.store import ExperimentalResultStore
 from molecule_ranker.generation.schemas import (
     ChemicalValidationResult,
     GeneratedMolecule,
@@ -70,6 +74,66 @@ def _evidence(source: str, record_id: str, evidence_type: str) -> EvidenceItem:
                 "endpoint": f"https://example.org/{record_id}",
             },
         },
+    )
+
+
+def _assay_context(
+    *,
+    assay_name: str = "Binding screen",
+    endpoint_name: str = "binding_affinity",
+    endpoint_category: str = "potency",
+) -> AssayContext:
+    return AssayContext(
+        assay_context_id=f"context-{endpoint_name}",
+        assay_name=assay_name,
+        assay_type="biochemical",
+        target_symbol="MAOB",
+        disease_name="Parkinson disease",
+        endpoint=AssayEndpoint(
+            endpoint_id=f"endpoint-{endpoint_name}",
+            name=endpoint_name,
+            endpoint_category=endpoint_category,  # type: ignore[arg-type]
+            unit="nM",
+            directionality="lower_is_better",
+        ),
+    )
+
+
+def _assay_result(
+    result_id: str,
+    *,
+    candidate_id: str | None = "CHEMBL_TEST",
+    candidate_name: str = "Evidence-backed candidate",
+    candidate_origin: str = "existing",
+    canonical_smiles: str | None = "CCO",
+    inchi_key: str | None = "TEST-INCHIKEY",
+    outcome_label: str = "positive",
+    activity_direction: str = "active",
+    qc_status: str = "passed",
+    assay_context: AssayContext | None = None,
+) -> AssayResult:
+    return AssayResult(
+        result_id=result_id,
+        candidate_id=candidate_id,
+        candidate_name=candidate_name,
+        candidate_origin=candidate_origin,  # type: ignore[arg-type]
+        canonical_smiles=canonical_smiles,
+        inchi_key=inchi_key,
+        disease_name="Parkinson disease",
+        target_symbol="MAOB",
+        assay_context=assay_context or _assay_context(),
+        measured_value=12.0,
+        measured_value_numeric=12.0,
+        unit="nM",
+        normalized_value=12.0,
+        normalized_unit="nM",
+        outcome_label=outcome_label,  # type: ignore[arg-type]
+        activity_direction=activity_direction,  # type: ignore[arg-type]
+        confidence=0.8,
+        qc_status=qc_status,  # type: ignore[arg-type]
+        source="csv_import",
+        source_record_id=f"row-{result_id}",
+        imported_at=RETRIEVED_AT,
     )
 
 
@@ -758,6 +822,7 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert developability_payload["assessed_existing_count"] == 1
     assert developability_payload["assessed_generated_count"] == 2
     assert developability_payload["retained_count"] == 1
+
     assert developability_payload["deprioritized_count"] == 1
     assert developability_payload["rejected_count"] == 1
     assert developability_payload["risk_distribution"]["critical"] == 2
@@ -967,6 +1032,99 @@ def test_report_writer_does_not_create_generation_artifacts_when_generation_disa
     assert (output_dir / "developability.json").exists()
     assert not (output_dir / "generated_candidates.json").exists()
     assert not (output_dir / "generation_trace.json").exists()
+
+
+def test_report_writer_creates_experimental_report_artifacts(tmp_path):
+    context = _scored_context(tmp_path)
+    db_path = tmp_path / "experiments.sqlite"
+    store = ExperimentalResultStore(db_path)
+    store.import_results(
+        [
+            _assay_result("existing-positive"),
+            _assay_result(
+                "existing-failed-qc",
+                outcome_label="failed_qc",
+                activity_direction="ambiguous",
+                qc_status="failed",
+            ),
+            _assay_result(
+                "generated-exact",
+                candidate_id="GEN-MAOB-0001",
+                candidate_name="GEN-MAOB-0001",
+                candidate_origin="generated",
+                canonical_smiles="CCOc1ccccc1N",
+                inchi_key=None,
+            ),
+            _assay_result(
+                "unlinked-negative",
+                candidate_id="CHEMBL_UNLINKED",
+                candidate_name="Unlinked candidate",
+                canonical_smiles=None,
+                inchi_key=None,
+                outcome_label="negative",
+                activity_direction="inactive",
+            ),
+        ],
+        actor="test",
+    )
+    context.config.update(
+        {
+            "enable_experimental_evidence": True,
+            "experimental_db_path": str(db_path),
+        }
+    )
+    context = ExperimentalEvidenceAgent().run(context)
+    context.config["active_learning_batch"] = suggest_next_experiments(
+        context.candidates,
+        context.generated_candidates,
+        store.list_results(),
+        [],
+        {"strategy": "balanced", "top_k": 2, "endpoint_name": "binding_affinity"},
+    )
+
+    updated = ReportWriterAgent().run(context)
+
+    output_dir = tmp_path / "parkinson-disease"
+    experimental_results = json.loads((output_dir / "experimental_results.json").read_text())
+    experimental_evidence = json.loads(
+        (output_dir / "experimental_evidence.json").read_text()
+    )
+    active_learning = json.loads((output_dir / "active_learning_batch.json").read_text())
+    report = (output_dir / "experimental_report.md").read_text()
+
+    assert updated.output_dir == output_dir
+    assert "Experimental Evidence Summary" in report
+    assert "Candidate Experimental Evidence" in report
+    assert "Active Learning Suggestions" in report
+    assert "Limitations" in report
+    assert experimental_results["summary"]["results_loaded"] == 4
+    assert experimental_results["summary"]["linked_results"] == 3
+    assert experimental_results["summary"]["unlinked_results"] == 1
+    assert experimental_evidence["candidate_summaries"]["Evidence-backed candidate"][
+        "failed_qc_count"
+    ] == 1
+    assert experimental_evidence["generated_summaries"]["GEN-MAOB-0001"]["metadata"][
+        "direct_evidence_result_ids"
+    ] == ["generated-exact"]
+    assert "generated-exact" not in experimental_evidence["candidate_summaries"][
+        "Evidence-backed candidate"
+    ]["metadata"]["direct_evidence_result_ids"]
+    assert active_learning["strategy"] == "balanced"
+    assert active_learning["suggestions"]
+    assert all(
+        suggestion["metadata"]["suggested_validation_category"].startswith("high_level_")
+        for suggestion in active_learning["suggestions"]
+    )
+    serialized_report_artifacts = (
+        report
+        + json.dumps(experimental_results)
+        + json.dumps(experimental_evidence)
+        + json.dumps(active_learning)
+    ).lower()
+    assert "protocol" not in serialized_report_artifacts
+    assert "dosing" not in serialized_report_artifacts
+    assert "mg/kg" not in serialized_report_artifacts
+    assert "incubat" not in serialized_report_artifacts
 
 
 def test_report_includes_expert_review_workflow_when_enabled(tmp_path):

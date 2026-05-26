@@ -1,0 +1,3 @@
+candidate_name,candidate_id,candidate_origin,canonical_smiles,inchi_key,disease_name,target_symbol,assay_name,assay_type,endpoint_name,endpoint_category,measured_value,unit,relation,outcome_label,activity_direction,replicate_count,replicate_values,uncertainty,qc_status,result_date,source_record_id,notes
+ExampleCandidateA,EXAMPLE-CANDIDATE-A,existing,,,,,Example assay name,other,Example endpoint,other,,,=,inconclusive,ambiguous,0,,0.0,unknown,,example-row-1,Neutral placeholder row for schema validation only.
+ExampleCandidateB,EXAMPLE-CANDIDATE-B,generated,CC,,,,Example assay name,other,Example endpoint,other,example categorical value,,=,not_tested,not_applicable,0,,0.0,unknown,,example-row-2,Neutral generated-placeholder row; not experimental evidence.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -29,6 +30,25 @@ from molecule_ranker.data_sources.errors import (
 from molecule_ranker.developability.benchmark import (
     DevelopabilityBenchmarkError,
     benchmark_developability_file,
+)
+from molecule_ranker.experimental import (
+    ActiveLearningAgent,
+    ExperimentalEvidenceAgent,
+    ExperimentalResultStore,
+    import_assay_results,
+    render_experiment_summary_markdown,
+)
+from molecule_ranker.experiments.active_learning import suggest_next_experiments
+from molecule_ranker.experiments.importers import (
+    import_assay_results_csv,
+    import_assay_results_json,
+)
+from molecule_ranker.experiments.linking import LinkingConfig, link_assay_results
+from molecule_ranker.experiments.schemas import AssayResult
+from molecule_ranker.experiments.store import ExperimentalResultStore as V06ExperimentalResultStore
+from molecule_ranker.experiments.validation import (
+    normalize_assay_result,
+    validate_assay_result,
 )
 from molecule_ranker.generation.benchmark import (
     GenerationBenchmarkError,
@@ -96,7 +116,17 @@ review_app = typer.Typer(
     help="Local expert review workspace and human-in-the-loop triage commands.",
     no_args_is_help=True,
 )
+experimental_app = typer.Typer(
+    help="Import, validate, summarize, and use experimental assay results.",
+    no_args_is_help=True,
+)
+experiment_app = typer.Typer(
+    help="V0.6 experimental assay result import, storage, review, and active learning.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
+app.add_typer(experimental_app, name="experimental")
+app.add_typer(experiment_app, name="experiment")
 
 
 @app.callback()
@@ -140,6 +170,557 @@ def health(
 
     if not all(status.ok for status in statuses):
         raise typer.Exit(code=1)
+
+
+@experiment_app.command("import")
+def experiment_import(
+    input_path: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite experimental result database path."),
+    ] = Path(".experiments/results.sqlite"),
+    input_format: Annotated[
+        str,
+        typer.Option("--format", help="Assay result format: auto, csv, or json."),
+    ] = "auto",
+    imported_by: Annotated[
+        str | None,
+        typer.Option("--imported-by", help="Importer identity for provenance."),
+    ] = None,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict", help="Raise on incomplete or ambiguous result fields."),
+    ] = False,
+    workspace_id: Annotated[
+        str | None,
+        typer.Option("--workspace-id", help="Optional review workspace identifier."),
+    ] = None,
+    run_id: Annotated[
+        str | None,
+        typer.Option("--run-id", help="Optional ranking run identifier."),
+    ] = None,
+    default_disease: Annotated[
+        str | None,
+        typer.Option("--default-disease", help="Disease to apply when rows omit disease."),
+    ] = None,
+    default_target: Annotated[
+        str | None,
+        typer.Option("--default-target", help="Target to apply when rows omit target."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Validate and summarize without writing the DB."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Import CSV or JSON assay results into the V0.6 experimental result store."""
+    try:
+        results = _load_v06_assay_results(
+            input_path,
+            input_format=input_format,
+            imported_by=imported_by,
+        )
+        results = [
+            _prepare_cli_assay_result(
+                result,
+                strict=strict,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                default_disease=default_disease,
+                default_target=default_target,
+            )
+            for result in results
+        ]
+        payload = _experiment_results_summary_payload(results)
+        payload.update(
+            {
+                "db_path": str(db_path),
+                "source_path": str(input_path),
+                "dry_run": dry_run,
+                "imported_count": 0 if dry_run else len(results),
+            }
+        )
+        if not dry_run:
+            V06ExperimentalResultStore(db_path).import_results(results, actor=imported_by or "cli")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo("Experimental assay result import")
+    typer.echo(f"Input: {input_path}")
+    typer.echo(f"Results validated: {payload['result_count']}")
+    typer.echo(f"Imported: {payload['imported_count']}")
+    typer.echo(f"Outcomes: {_format_distribution(payload['outcome_counts'])}")
+    if dry_run:
+        typer.echo("Dry run: database was not written.")
+
+
+@experiment_app.command("list")
+def experiment_list(
+    db_path: Annotated[Path, typer.Option("--db-path")] = Path(".experiments/results.sqlite"),
+    candidate_name: Annotated[str | None, typer.Option("--candidate-name")] = None,
+    target_symbol: Annotated[str | None, typer.Option("--target-symbol")] = None,
+    disease_name: Annotated[str | None, typer.Option("--disease-name")] = None,
+    endpoint_name: Annotated[str | None, typer.Option("--endpoint-name")] = None,
+    outcome_label: Annotated[str | None, typer.Option("--outcome-label")] = None,
+    qc_status: Annotated[str | None, typer.Option("--qc-status")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List imported assay results with optional filters."""
+    try:
+        results = V06ExperimentalResultStore(db_path).list_results(
+            candidate_name=candidate_name,
+            target_symbol=target_symbol,
+            disease_name=disease_name,
+            endpoint_name=endpoint_name,
+            outcome_label=outcome_label,
+            qc_status=qc_status,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "db_path": str(db_path),
+        "result_count": len(results),
+        "results": [result.model_dump(mode="json") for result in results],
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Experimental results: {len(results)}")
+    for result in results:
+        typer.echo(
+            f"- {result.result_id}: {result.candidate_name} "
+            f"{result.assay_context.endpoint.name} {result.outcome_label} "
+            f"QC={result.qc_status}"
+        )
+
+
+@experiment_app.command("summarize")
+def experiment_summarize(
+    candidate_name: Annotated[str, typer.Option("--candidate-name")],
+    db_path: Annotated[Path, typer.Option("--db-path")] = Path(".experiments/results.sqlite"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Summarize imported assay outcomes for a candidate."""
+    try:
+        summary = V06ExperimentalResultStore(db_path).summarize_candidate_results(
+            candidate_name,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(summary.model_dump(mode="json"))
+        return
+    typer.echo(f"Experimental summary for {summary.candidate_name}")
+    typer.echo(f"Results: {summary.result_count}")
+    typer.echo(f"Positive: {summary.positive_count}")
+    typer.echo(f"Negative: {summary.negative_count}")
+    typer.echo(f"Failed QC: {summary.failed_qc_count}")
+    typer.echo(summary.interpretation)
+
+
+@experiment_app.command("link")
+def experiment_link(
+    from_run: Annotated[
+        Path,
+        typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    db_path: Annotated[Path, typer.Option("--db-path")] = Path(".experiments/results.sqlite"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Link stored assay results to candidates, generated hypotheses, and review items."""
+    try:
+        store = V06ExperimentalResultStore(db_path)
+        results = store.list_results()
+        candidates, generated = _load_experiment_run_candidates(from_run, include_generated=True)
+        linked = link_assay_results(
+            results,
+            candidates=candidates,
+            generated_molecules=generated,
+            config=LinkingConfig(),
+        )
+        store.import_results(linked, actor="cli", update=True)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    linked_count = sum(1 for result in linked if result.metadata.get("linked_candidate_id"))
+    payload = {
+        "db_path": str(db_path),
+        "from_run": str(from_run),
+        "result_count": len(linked),
+        "linked_count": linked_count,
+        "unlinked_count": len(linked) - linked_count,
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Linked results: {linked_count}/{len(linked)}")
+
+
+@experiment_app.command("active-learning")
+def experiment_active_learning(
+    from_run: Annotated[
+        Path,
+        typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    db_path: Annotated[Path, typer.Option("--db-path")] = Path(".experiments/results.sqlite"),
+    strategy: Annotated[str, typer.Option("--strategy")] = "balanced",
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 10,
+    endpoint_name: Annotated[str | None, typer.Option("--endpoint-name")] = None,
+    target_symbol: Annotated[str | None, typer.Option("--target-symbol")] = None,
+    include_generated: Annotated[bool, typer.Option("--include-generated")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Suggest next candidates for expert triage using imported result gaps."""
+    try:
+        store = V06ExperimentalResultStore(db_path)
+        candidates, generated = _load_experiment_run_candidates(
+            from_run,
+            include_generated=include_generated,
+        )
+        results = store.list_results(endpoint_name=endpoint_name, target_symbol=target_symbol)
+        batch = suggest_next_experiments(
+            candidates,
+            generated,
+            results,
+            [],
+            {
+                "strategy": strategy,
+                "top_k": batch_size,
+                "endpoint_name": endpoint_name,
+                "target_symbol": target_symbol,
+            },
+        )
+        store.save_active_learning_batch(batch)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(batch.model_dump(mode="json"))
+        return
+    typer.echo(f"Active-learning batch: {batch.batch_id}")
+    for suggestion in batch.suggestions:
+        typer.echo(
+            f"- {suggestion.candidate_name}: {suggestion.acquisition_score:.3f} "
+            f"({suggestion.acquisition_strategy})"
+        )
+
+
+@experiment_app.command("export")
+def experiment_export(
+    output: Annotated[Path, typer.Option("--output", file_okay=True, dir_okay=False)],
+    db_path: Annotated[Path, typer.Option("--db-path")] = Path(".experiments/results.sqlite"),
+) -> None:
+    """Export stored assay results to JSON."""
+    try:
+        path = V06ExperimentalResultStore(db_path).export_results_json(output)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Experimental results exported: {path}")
+
+
+@experiment_app.command("report")
+def experiment_report(
+    from_run: Annotated[
+        Path,
+        typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    db_path: Annotated[Path, typer.Option("--db-path")] = Path(".experiments/results.sqlite"),
+) -> None:
+    """Print a high-level experimental summary report for a run directory."""
+    try:
+        results = V06ExperimentalResultStore(db_path).list_results()
+        candidates, generated = _load_experiment_run_candidates(from_run, include_generated=True)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(_render_experiment_cli_report(results, candidates, generated, from_run))
+
+
+@experimental_app.command("validate")
+def experimental_validate(
+    input_path: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="CSV or JSON assay result file to validate.",
+        ),
+    ],
+    input_format: Annotated[
+        str,
+        typer.Option("--format", help="Assay result format: auto, csv, or json."),
+    ] = "auto",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Validate and normalize assay results without persisting them."""
+    try:
+        imported = import_assay_results(input_path, input_format=input_format)
+        report = imported.validation_report
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(report.model_dump(mode="json"))
+        return
+    typer.echo("Assay result validation")
+    typer.echo(f"Input: {input_path}")
+    typer.echo(f"Total: {report.total_count}")
+    typer.echo(f"Valid: {report.valid_count}")
+    typer.echo(f"Incomplete: {report.incomplete_count}")
+    typer.echo(f"Invalid: {report.invalid_count}")
+    typer.echo(f"Outcomes: {_format_distribution(report.outcome_counts)}")
+    if report.row_issues:
+        typer.echo("Rows with issues:")
+        for issue in report.row_issues:
+            typer.echo(f"- row {issue.get('source_row')}: {', '.join(issue['issues'])}")
+
+
+@experimental_app.command("import-results")
+def experimental_import_results(
+    input_path: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="CSV or JSON assay result file to import.",
+        ),
+    ],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite experimental result database path."),
+    ] = Path(".review/molecule-ranker-experiments.sqlite"),
+    input_format: Annotated[
+        str,
+        typer.Option("--format", help="Assay result format: auto, csv, or json."),
+    ] = "auto",
+    candidates_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidates",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Optional ranking artifact used to link imported results to candidates.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Import assay results into the local experimental result store."""
+    try:
+        imported = import_assay_results(input_path, input_format=input_format)
+        results = imported.results
+        if candidates_path is not None:
+            candidates, generated = _load_experimental_candidates(candidates_path)
+            results = ExperimentalEvidenceAgent().link_results(
+                results,
+                candidates=candidates,
+                generated_candidates=generated,
+            )
+        imported_count = ExperimentalResultStore(db_path).import_results(results, actor="cli")
+        payload = {
+            "db_path": str(db_path),
+            "source_path": str(input_path),
+            "imported_count": imported_count,
+            "validation_report": imported.validation_report.model_dump(mode="json"),
+        }
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Imported assay results: {imported_count}")
+    typer.echo(f"Database: {db_path}")
+    typer.echo("Experimental evidence remains separate from expert review decisions.")
+
+
+@experimental_app.command("summarize")
+def experimental_summarize(
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite experimental result database path."),
+    ] = Path(".review/molecule-ranker-experiments.sqlite"),
+    output_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Optional Markdown summary report path.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Summarize imported experimental assay outcomes over time."""
+    try:
+        summary = ExperimentalResultStore(db_path).summarize()
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(render_experiment_summary_markdown(summary))
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(summary.model_dump(mode="json"))
+        return
+    typer.echo(render_experiment_summary_markdown(summary), nl=False)
+    if output_path is not None:
+        typer.echo(f"Summary written: {output_path}")
+
+
+@experimental_app.command("recalibrate")
+def experimental_recalibrate(
+    candidates_path: Annotated[
+        Path,
+        typer.Option(
+            "--candidates",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Ranking artifact containing candidate records.",
+        ),
+    ],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite experimental result database path."),
+    ] = Path(".review/molecule-ranker-experiments.sqlite"),
+    output_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Optional JSON recalibration report path.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Recalibrate candidate scores using only valid imported assay outcomes."""
+    try:
+        candidates, _generated = _load_experimental_candidates(candidates_path)
+        results = ExperimentalResultStore(db_path).list_results()
+        report = ExperimentalEvidenceAgent().recalibrate_candidates(candidates, results)
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+            )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(report.model_dump(mode="json"))
+        return
+    typer.echo("Candidate score recalibration")
+    for item in report.recalibrations:
+        typer.echo(
+            f"- {item.candidate_name}: {item.original_score} -> "
+            f"{item.recalibrated_score} ({item.experimental_score_delta:+.3f})"
+        )
+    if output_path is not None:
+        typer.echo(f"Report written: {output_path}")
+
+
+@experimental_app.command("prioritize")
+def experimental_prioritize(
+    candidates_path: Annotated[
+        Path,
+        typer.Option(
+            "--candidates",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Ranking artifact containing candidate records.",
+        ),
+    ],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite experimental result database path."),
+    ] = Path(".review/molecule-ranker-experiments.sqlite"),
+    top: Annotated[
+        int,
+        typer.Option("--top", min=1, help="Number of candidates to recommend."),
+    ] = 10,
+    output_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Optional JSON active-learning report path.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Suggest next candidates to test from score uncertainty and imported outcomes."""
+    try:
+        candidates, _generated = _load_experimental_candidates(candidates_path)
+        results = ExperimentalResultStore(db_path).list_results()
+        report = ActiveLearningAgent().recommend_next_candidates(candidates, results, top=top)
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+            )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(report.model_dump(mode="json"))
+        return
+    typer.echo("Active-learning candidate priorities")
+    for recommendation in report.recommendations:
+        typer.echo(
+            f"- {recommendation.candidate_name}: {recommendation.priority_score:.3f} "
+            f"({recommendation.evidence_gap})"
+        )
+    if output_path is not None:
+        typer.echo(f"Report written: {output_path}")
 
 
 @review_app.command("create")
@@ -1434,8 +2015,47 @@ def rank(
             help="Generate a static HTML dashboard for the review workspace.",
         ),
     ] = False,
+    enable_experimental_evidence: Annotated[
+        bool,
+        typer.Option(
+            "--enable-experimental-evidence/--disable-experimental-evidence",
+            help="Use linked imported assay results from the experimental SQLite store.",
+        ),
+    ] = False,
+    experimental_db_path: Annotated[
+        Path,
+        typer.Option("--experimental-db-path", help="SQLite experimental result database path."),
+    ] = Path(".experiments/results.sqlite"),
+    experimental_result_source_filter: Annotated[
+        str | None,
+        typer.Option(
+            "--experimental-result-source-filter",
+            help="Optional result source filter, for example csv_import or json_import.",
+        ),
+    ] = None,
+    require_qc_passed_for_score: Annotated[
+        bool,
+        typer.Option(
+            "--require-qc-passed-for-score/--allow-partial-qc-for-score",
+            help="Require QC-passed experimental results before score support is added.",
+        ),
+    ] = True,
+    include_inconclusive_results: Annotated[
+        bool,
+        typer.Option(
+            "--include-inconclusive-results/--exclude-inconclusive-results",
+            help="Record inconclusive imported results in experimental summaries.",
+        ),
+    ] = True,
+    strict_experimental_linking: Annotated[
+        bool,
+        typer.Option(
+            "--strict-experimental-linking/--allow-fuzzy-experimental-linking",
+            help="Require exact experimental result links by default.",
+        ),
+    ] = True,
 ) -> None:
-    """Run the V0.4 ranking pipeline with developability triage."""
+    """Run the V0.6 ranking pipeline with optional experimental evidence."""
     defaults = RankerConfig()
     config = RankerConfig(
         results_dir=output_dir,
@@ -1510,6 +2130,12 @@ def rank(
         enable_feedback_prior=enable_feedback_prior,
         feedback_db_path=feedback_db_path,
         generate_review_dashboard=generate_review_dashboard,
+        enable_experimental_evidence=enable_experimental_evidence,
+        experimental_db_path=experimental_db_path,
+        experimental_result_source_filter=experimental_result_source_filter,
+        require_qc_passed_for_score=require_qc_passed_for_score,
+        include_inconclusive_results=include_inconclusive_results,
+        strict_experimental_linking=strict_experimental_linking,
     )
 
     try:
@@ -2027,6 +2653,146 @@ def _context_from_candidate_artifact(
         generated_candidates=generated_hypotheses,
         config=runtime_config,
     )
+
+
+def _load_experimental_candidates(
+    input_path: Path,
+) -> tuple[list[MoleculeCandidate], list[GeneratedMoleculeHypothesis]]:
+    payload = json.loads(input_path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("Candidate artifact must contain a JSON object.")
+    candidates = [
+        candidate
+        for raw in payload.get("candidates", [])
+        if (candidate := _parse_optional_model(raw, MoleculeCandidate)) is not None
+    ]
+    generated = [
+        hypothesis
+        for raw in payload.get("generated_molecule_hypotheses", [])
+        if (hypothesis := _parse_optional_model(raw, GeneratedMoleculeHypothesis)) is not None
+    ]
+    if not candidates and not generated:
+        raise ValueError("Candidate artifact did not contain candidates or generated hypotheses.")
+    return candidates, generated
+
+
+def _load_v06_assay_results(
+    input_path: Path,
+    *,
+    input_format: str,
+    imported_by: str | None,
+) -> list[AssayResult]:
+    resolved = input_format.lower()
+    if resolved == "auto":
+        resolved = input_path.suffix.lower().lstrip(".")
+    if resolved == "csv":
+        return import_assay_results_csv(input_path, imported_by=imported_by)
+    if resolved == "json":
+        return import_assay_results_json(input_path, imported_by=imported_by)
+    raise ValueError("--format must be auto, csv, or json")
+
+
+def _prepare_cli_assay_result(
+    result: AssayResult,
+    *,
+    strict: bool,
+    workspace_id: str | None,
+    run_id: str | None,
+    default_disease: str | None,
+    default_target: str | None,
+) -> AssayResult:
+    context_updates: dict[str, Any] = {}
+    result_updates: dict[str, Any] = {
+        "workspace_id": workspace_id or result.workspace_id,
+        "run_id": run_id or result.run_id,
+    }
+    if default_disease and not (result.disease_name or result.assay_context.disease_name):
+        result_updates["disease_name"] = default_disease
+        context_updates["disease_name"] = default_disease
+    if default_target and not (result.target_symbol or result.assay_context.target_symbol):
+        result_updates["target_symbol"] = default_target
+        context_updates["target_symbol"] = default_target
+    if context_updates:
+        result_updates["assay_context"] = result.assay_context.model_copy(update=context_updates)
+    prepared = result.model_copy(update=result_updates)
+    return validate_assay_result(normalize_assay_result(prepared), strict=strict)
+
+
+def _experiment_results_summary_payload(results: list[AssayResult]) -> dict[str, Any]:
+    outcome_counts = Counter(result.outcome_label for result in results)
+    qc_counts = Counter(result.qc_status for result in results)
+    endpoint_counts = Counter(result.assay_context.endpoint.name for result in results)
+    warning_count = sum(len(result.metadata.get("warnings", [])) for result in results)
+    return {
+        "result_count": len(results),
+        "outcome_counts": dict(sorted(outcome_counts.items())),
+        "qc_counts": dict(sorted(qc_counts.items())),
+        "endpoint_counts": dict(sorted(endpoint_counts.items())),
+        "warning_count": warning_count,
+        "result_ids": [result.result_id for result in results],
+    }
+
+
+def _load_experiment_run_candidates(
+    run_dir: Path,
+    *,
+    include_generated: bool,
+) -> tuple[list[MoleculeCandidate], list[Any]]:
+    payload = _load_review_run_artifacts(run_dir, include_generated=include_generated)
+    candidates = [
+        candidate
+        for raw in payload.get("candidates", [])
+        if (candidate := _parse_optional_model(raw, MoleculeCandidate)) is not None
+    ]
+    generated: list[Any] = []
+    if include_generated:
+        for key in ("generated_molecule_hypotheses", "retained_generated_molecules"):
+            raw_items = payload.get(key, [])
+            if not isinstance(raw_items, list):
+                continue
+            for raw in raw_items:
+                parsed = _parse_optional_model(raw, GeneratedMoleculeHypothesis)
+                if parsed is not None:
+                    generated.append(parsed)
+                    continue
+                generated_model = _parse_optional_model(raw, GeneratedMolecule)
+                if generated_model is not None:
+                    generated.append(generated_model)
+    if not candidates and not generated:
+        raise ValueError("Run artifacts did not contain candidates or generated molecules.")
+    return candidates, generated
+
+
+def _render_experiment_cli_report(
+    results: list[AssayResult],
+    candidates: list[MoleculeCandidate],
+    generated: list[Any],
+    from_run: Path,
+) -> str:
+    summary = _experiment_results_summary_payload(results)
+    lines = [
+        "# Experimental Result Summary",
+        "",
+        f"- Source run: {from_run}",
+        f"- Imported result count: {summary['result_count']}",
+        f"- Candidate count in run: {len(candidates)}",
+        f"- Generated molecule count in run: {len(generated)}",
+        f"- Outcomes: {_format_distribution(summary['outcome_counts'])}",
+        f"- QC statuses: {_format_distribution(summary['qc_counts'])}",
+        "",
+        "Reviewer decisions remain separate from imported experimental evidence.",
+        "No assay result is presented as clinical efficacy, safety, cure, or treatment proof.",
+        "",
+        "## Results",
+    ]
+    for result in results:
+        lines.append(
+            f"- {result.result_id}: {result.candidate_name}; "
+            f"{result.assay_context.assay_name}; endpoint "
+            f"{result.assay_context.endpoint.name}; outcome {result.outcome_label}; "
+            f"QC {result.qc_status}"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _risk_distribution(run_payload: dict[str, Any]) -> dict[str, int]:

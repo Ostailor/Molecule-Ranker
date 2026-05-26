@@ -115,6 +115,12 @@ class RankerConfig(BaseModel):
     require_same_disease_for_feedback: bool = True
     generate_review_dashboard: bool = False
     review_dashboard_dir: Path | None = None
+    enable_experimental_evidence: bool = False
+    experimental_db_path: Path = Path(".review/molecule-ranker-experiments.sqlite")
+    experimental_result_source_filter: str | list[str] | None = None
+    require_qc_passed_for_score: bool = True
+    include_inconclusive_results: bool = True
+    strict_experimental_linking: bool = True
 
     @model_validator(mode="after")
     def sync_generation_aliases(self) -> RankerConfig:
@@ -240,5 +246,11 @@ class RankerConfig(BaseModel):
             "review_dashboard_dir": (
                 str(self.review_dashboard_dir) if self.review_dashboard_dir is not None else None
             ),
+            "enable_experimental_evidence": self.enable_experimental_evidence,
+            "experimental_db_path": str(self.experimental_db_path),
+            "experimental_result_source_filter": self.experimental_result_source_filter,
+            "require_qc_passed_for_score": self.require_qc_passed_for_score,
+            "include_inconclusive_results": self.include_inconclusive_results,
+            "strict_experimental_linking": self.strict_experimental_linking,
             "ranker_config": trace_metadata,
         }
