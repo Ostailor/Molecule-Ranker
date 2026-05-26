@@ -207,6 +207,19 @@ def test_help_commands_work():
         "--strict-structure-mode",
         "--max-structures-per-target",
         "--max-docked-molecules",
+        "--enable-review-workflow",
+        "--disable-review-workflow",
+        "--review-db-path",
+        "--reviewer-id",
+        "--reviewer-name",
+        "--reviewer-role",
+        "--max-review-items",
+        "--include-generated-in-review",
+        "--exclude-generated-from-review",
+        "--generated-high-priority-allowed",
+        "--enable-feedback-prior",
+        "--feedback-db-path",
+        "--generate-review-dashboard",
     } <= options
 
 
@@ -234,6 +247,19 @@ def test_generate_command_help_is_registered():
     }
     assert "--max-retained-generated" in options
     assert "--top" in options
+    assert "--enable-review-workflow" in options
+    assert "--disable-review-workflow" in options
+    assert "--review-db-path" in options
+    assert "--reviewer-id" in options
+    assert "--reviewer-name" in options
+    assert "--reviewer-role" in options
+    assert "--max-review-items" in options
+    assert "--include-generated-in-review" in options
+    assert "--exclude-generated-from-review" in options
+    assert "--generated-high-priority-allowed" in options
+    assert "--enable-feedback-prior" in options
+    assert "--feedback-db-path" in options
+    assert "--generate-review-dashboard" in options
 
 
 def test_assess_developability_command_help_is_registered():
@@ -526,6 +552,23 @@ def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_pat
             "9",
             "--max-docked-molecules",
             "4",
+            "--enable-review-workflow",
+            "--review-db-path",
+            str(tmp_path / "review.sqlite"),
+            "--reviewer-id",
+            "expert-1",
+            "--reviewer-name",
+            "Local Reviewer",
+            "--reviewer-role",
+            "medicinal_chemist",
+            "--max-review-items",
+            "15",
+            "--exclude-generated-from-review",
+            "--generated-high-priority-allowed",
+            "--enable-feedback-prior",
+            "--feedback-db-path",
+            str(tmp_path / "feedback.sqlite"),
+            "--generate-review-dashboard",
         ],
     )
 
@@ -587,6 +630,17 @@ def test_rank_command_prints_success_summary_and_writes_expected_outputs(tmp_pat
     assert FakeOrchestrator.last_config.strict_structure_mode is True
     assert FakeOrchestrator.last_config.max_structures_per_target == 9
     assert FakeOrchestrator.last_config.max_docked_molecules == 4
+    assert FakeOrchestrator.last_config.enable_review_workflow is True
+    assert FakeOrchestrator.last_config.review_db_path == tmp_path / "review.sqlite"
+    assert FakeOrchestrator.last_config.reviewer_id == "expert-1"
+    assert FakeOrchestrator.last_config.reviewer_name == "Local Reviewer"
+    assert FakeOrchestrator.last_config.reviewer_role == "medicinal_chemist"
+    assert FakeOrchestrator.last_config.max_review_items == 15
+    assert FakeOrchestrator.last_config.include_generated_in_review is False
+    assert FakeOrchestrator.last_config.generated_high_priority_allowed is True
+    assert FakeOrchestrator.last_config.enable_feedback_prior is True
+    assert FakeOrchestrator.last_config.feedback_db_path == tmp_path / "feedback.sqlite"
+    assert FakeOrchestrator.last_config.generate_review_dashboard is True
 
 
 def test_generation_command_enables_generation(tmp_path, monkeypatch):
@@ -611,8 +665,55 @@ def test_generation_command_enables_generation(tmp_path, monkeypatch):
     assert FakeOrchestrator.last_config is not None
     assert FakeOrchestrator.last_config.enable_generation is True
     assert FakeOrchestrator.last_config.max_retained_generated == 25
+    assert FakeOrchestrator.last_config.enable_review_workflow is False
     assert "Generated molecules retained: 0" in result.stdout
     assert str(tmp_path / "alzheimer-disease" / "generated_candidates.json") in result.stdout
+
+
+def test_generate_command_maps_review_options(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "MoleculeRankerOrchestrator", FakeOrchestrator)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "Alzheimer disease",
+            "--output-dir",
+            str(tmp_path),
+            "--enable-review-workflow",
+            "--review-db-path",
+            str(tmp_path / "review.sqlite"),
+            "--reviewer-id",
+            "expert-1",
+            "--reviewer-name",
+            "Local Reviewer",
+            "--reviewer-role",
+            "medicinal_chemist",
+            "--max-review-items",
+            "11",
+            "--exclude-generated-from-review",
+            "--generated-high-priority-allowed",
+            "--enable-feedback-prior",
+            "--feedback-db-path",
+            str(tmp_path / "feedback.sqlite"),
+            "--generate-review-dashboard",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert FakeOrchestrator.last_config is not None
+    assert FakeOrchestrator.last_config.enable_review_workflow is True
+    assert FakeOrchestrator.last_config.review_db_path == tmp_path / "review.sqlite"
+    assert FakeOrchestrator.last_config.reviewer_id == "expert-1"
+    assert FakeOrchestrator.last_config.reviewer_name == "Local Reviewer"
+    assert FakeOrchestrator.last_config.reviewer_role == "medicinal_chemist"
+    assert FakeOrchestrator.last_config.max_review_items == 11
+    assert FakeOrchestrator.last_config.include_generated_in_review is False
+    assert FakeOrchestrator.last_config.generated_high_priority_allowed is True
+    assert FakeOrchestrator.last_config.enable_feedback_prior is True
+    assert FakeOrchestrator.last_config.feedback_db_path == tmp_path / "feedback.sqlite"
+    assert FakeOrchestrator.last_config.generate_review_dashboard is True
 
 
 def test_rank_command_keeps_generation_disabled_by_default(tmp_path, monkeypatch):

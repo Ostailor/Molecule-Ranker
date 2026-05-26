@@ -48,6 +48,26 @@ from molecule_ranker.literature.adapters.pubmed_adapter import (
     PubMedAdapter as LiteraturePubMedAdapter,
 )
 from molecule_ranker.orchestrator import MoleculeRankerOrchestrator
+from molecule_ranker.review import (
+    DossierWriterAgent,
+    FeedbackIngestionAgent,
+    FollowupRequest,
+    Reviewer,
+    ReviewerComment,
+    ReviewerDecision,
+    ReviewWorkspace,
+    ReviewWorkspaceStore,
+    build_candidate_comparison,
+    compute_review_metrics,
+    generate_static_review_dashboard,
+    render_static_review_dashboard,
+)
+from molecule_ranker.review.comparison import render_comparison_markdown
+from molecule_ranker.review.decision_engine import ReviewDecisionEngine
+from molecule_ranker.review.dossier import render_dossier_markdown
+from molecule_ranker.review.exporters import export_review_package, render_workspace_markdown
+from molecule_ranker.review.queue_builder import build_review_workspace_from_artifact
+from molecule_ranker.review.workspace import create_validation_handoff
 from molecule_ranker.schemas import (
     Disease,
     GeneratedMoleculeHypothesis,
@@ -72,6 +92,11 @@ app = typer.Typer(
     no_args_is_help=True,
     context_settings={"max_content_width": 120},
 )
+review_app = typer.Typer(
+    help="Local expert review workspace and human-in-the-loop triage commands.",
+    no_args_is_help=True,
+)
+app.add_typer(review_app, name="review")
 
 
 @app.callback()
@@ -115,6 +140,837 @@ def health(
 
     if not all(status.ok for status in statuses):
         raise typer.Exit(code=1)
+
+
+@review_app.command("create")
+def review_create(
+    from_run: Annotated[
+        Path,
+        typer.Option(
+            "--from-run",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            help="Existing run artifact directory, for example results/<disease_slug>/.",
+        ),
+    ],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    reviewer_id: Annotated[
+        str | None,
+        typer.Option("--reviewer-id", help="Optional local reviewer ID metadata."),
+    ] = None,
+    reviewer_name: Annotated[
+        str | None,
+        typer.Option("--reviewer-name", help="Optional local reviewer display name."),
+    ] = None,
+    reviewer_role: Annotated[
+        str | None,
+        typer.Option("--reviewer-role", help="Optional local reviewer role."),
+    ] = None,
+    include_generated: Annotated[
+        bool,
+        typer.Option(
+            "--include-generated/--exclude-generated",
+            help="Include generated molecule hypotheses in the review queue.",
+        ),
+    ] = True,
+    max_review_items: Annotated[
+        int,
+        typer.Option("--max-review-items", min=1, help="Maximum review items to persist."),
+    ] = 100,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print a machine-readable JSON summary."),
+    ] = False,
+) -> None:
+    """Create a persisted review workspace from an existing run artifact directory."""
+    try:
+        payload = _load_review_run_artifacts(from_run, include_generated=include_generated)
+        reviewer = _reviewer_from_cli(reviewer_id, reviewer_name, reviewer_role)
+        workspace = build_review_workspace_from_artifact(payload, reviewer=reviewer)
+        workspace.review_items = workspace.review_items[:max_review_items]
+        workspace.metadata.update(
+            {
+                "source_run_dir": str(from_run),
+                "include_generated": include_generated,
+                "max_review_items": max_review_items,
+                "reviewer": reviewer.model_dump(mode="json"),
+            }
+        )
+        store = ReviewWorkspaceStore(db_path)
+        workspace = store.create_workspace(workspace)
+        review_queue_path = from_run / "review_queue.json"
+        _write_review_queue_json(review_queue_path, workspace)
+        summary = _workspace_summary_payload(workspace)
+        summary.update(
+            {
+                "review_db_path": str(db_path),
+                "review_queue_path": str(review_queue_path),
+            }
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(summary)
+        return
+    typer.echo(f"Review workspace created: {workspace.workspace_id}")
+    typer.echo(f"Disease: {workspace.disease_name}")
+    typer.echo(f"Items: {len(workspace.review_items)}")
+    typer.echo(f"Database: {db_path}")
+    typer.echo(f"Queue JSON: {review_queue_path}")
+
+
+@review_app.command("list")
+def review_list(
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """List persisted review workspaces."""
+    try:
+        summaries = ReviewWorkspaceStore(db_path).list_workspaces()
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = {"review_db_path": str(db_path), "workspaces": [s.model_dump() for s in summaries]}
+    if json_output:
+        _echo_json(payload)
+        return
+    if not summaries:
+        typer.echo("No review workspaces found.")
+        return
+    typer.echo("Workspace ID\tDisease\tCreated\tItems\tPending\tDecisions")
+    for summary in summaries:
+        typer.echo(
+            "\t".join(
+                [
+                    summary.workspace_id,
+                    summary.disease_name,
+                    summary.created_at,
+                    str(summary.review_item_count),
+                    str(summary.pending_count),
+                    str(summary.decision_count),
+                ]
+            )
+        )
+
+
+@review_app.command("show")
+def review_show(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Show a review workspace summary."""
+    try:
+        workspace = ReviewWorkspaceStore(db_path).get_workspace(workspace_id)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = _workspace_summary_payload(workspace)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Workspace: {workspace.workspace_id}")
+    typer.echo(f"Disease: {workspace.disease_name}")
+    typer.echo(f"Created: {workspace.created_at.isoformat()}")
+    typer.echo(f"Review items: {len(workspace.review_items)}")
+    typer.echo(f"Priority distribution: {_format_distribution(payload['priority_distribution'])}")
+    typer.echo(f"Status distribution: {_format_distribution(payload['status_distribution'])}")
+    typer.echo("Top pending items:")
+    for item in payload["top_pending_items"]:
+        typer.echo(
+            f"- {item['review_item_id']}: {item['candidate_name']} "
+            f"({item['priority_bucket']}, score={item['score']})"
+        )
+
+
+@review_app.command("item")
+def review_item(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    review_item_id: Annotated[str, typer.Argument(help="Review item identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Show one review item with evidence, warnings, and score context."""
+    try:
+        workspace = ReviewWorkspaceStore(db_path).get_workspace(workspace_id)
+        item = _find_review_item(workspace, review_item_id)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = item.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Review item: {item.review_item_id}")
+    typer.echo(f"Candidate: {item.candidate_name} ({item.candidate_origin})")
+    typer.echo(f"Disease: {item.disease_name}")
+    typer.echo(f"Targets: {', '.join(item.target_symbols) or 'n/a'}")
+    typer.echo(f"Score: {item.score}  Confidence: {item.confidence}")
+    typer.echo(f"Priority: {item.priority_bucket}  Status: {item.review_status}")
+    typer.echo("Evidence summary:")
+    typer.echo(json.dumps(item.evidence_summary, indent=2, sort_keys=True))
+    typer.echo("Warnings:")
+    for warning in item.warnings:
+        typer.echo(f"- {warning}")
+    typer.echo("Literature summary:")
+    typer.echo(json.dumps(item.literature_summary, indent=2, sort_keys=True))
+    typer.echo("Developability summary:")
+    typer.echo(json.dumps(item.developability_summary, indent=2, sort_keys=True))
+
+
+@review_app.command("init")
+def review_init(
+    input_path: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to candidates.json or generated_candidates.json.",
+        ),
+    ],
+    output_path: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Path for review_workspace.json.",
+        ),
+    ],
+    reviewer_id: Annotated[str, typer.Option("--reviewer-id", help="Local reviewer ID.")],
+    reviewer_name: Annotated[
+        str | None,
+        typer.Option("--reviewer-name", help="Optional local reviewer display name."),
+    ] = None,
+    dashboard_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--dashboard",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Optional static HTML review dashboard path.",
+        ),
+    ] = None,
+) -> None:
+    """Create a local V0.5 review workspace from saved ranking artifacts."""
+    try:
+        payload = json.loads(input_path.read_text())
+        if not isinstance(payload, dict):
+            raise ValueError("Review input must be a JSON object.")
+        workspace = build_review_workspace_from_artifact(
+            payload,
+            reviewer=Reviewer(reviewer_id=reviewer_id, name=reviewer_name),
+        )
+        workspace.metadata["source_artifact"] = str(input_path)
+        _write_review_workspace(output_path, workspace)
+        if dashboard_path is not None:
+            dashboard_path.parent.mkdir(parents=True, exist_ok=True)
+            dashboard_path.write_text(render_static_review_dashboard(workspace))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("Review workspace created")
+    typer.echo(f"Items: {len(workspace.review_items)}")
+    typer.echo(f"Output: {output_path}")
+    if dashboard_path is not None:
+        typer.echo(f"Dashboard: {dashboard_path}")
+
+
+@review_app.command("decide")
+def review_decide(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    review_item_id: Annotated[str, typer.Argument(help="Review item identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option(
+            "--db-path",
+            help="SQLite review database path.",
+        ),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    decision: Annotated[
+        str,
+        typer.Option(
+            "--decision",
+            help=(
+                "accept_for_followup, deprioritize, reject, needs_more_data, "
+                "escalate_to_expert, or hold."
+            ),
+        ),
+    ] = "hold",
+    rationale: Annotated[
+        str,
+        typer.Option("--rationale", help="Reviewer rationale."),
+    ] = "",
+    reviewer_id: Annotated[
+        str,
+        typer.Option("--reviewer-id", help="Local reviewer ID."),
+    ] = "local-reviewer",
+    reviewer_name: Annotated[
+        str | None,
+        typer.Option("--reviewer-name", help="Optional local reviewer display name."),
+    ] = None,
+    reviewer_role: Annotated[
+        str | None,
+        typer.Option("--reviewer-role", help="Optional local reviewer role."),
+    ] = None,
+    confidence: Annotated[
+        float,
+        typer.Option("--confidence", min=0.0, max=1.0, help="Reviewer confidence."),
+    ] = 0.5,
+    factor: Annotated[
+        list[str] | None,
+        typer.Option("--factor", help="Decision factor. Repeatable."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Append an explicit expert triage decision without overwriting prior decisions."""
+    try:
+        store = ReviewWorkspaceStore(db_path)
+        reviewer = _reviewer_from_cli(reviewer_id, reviewer_name, reviewer_role)
+        _require_cli_text(rationale, "--rationale")
+        review_decision = ReviewerDecision(
+            review_item_id=review_item_id,
+            reviewer=reviewer,
+            decision=_normalize_decision_label(decision),  # type: ignore[arg-type]
+            rationale=rationale,
+            confidence=confidence,
+            decision_factors=factor or [],
+        )
+        store.add_decision(workspace_id, review_decision)
+        if status := _status_for_decision(review_decision.decision):
+            store.update_review_status(
+                workspace_id,
+                review_item_id,
+                status,
+                actor=reviewer.reviewer_id,
+            )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = review_decision.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Decision recorded: {review_decision.decision}")
+    typer.echo(f"Decision ID: {review_decision.decision_id}")
+    typer.echo("Human decision remains separate from model-generated scores.")
+
+
+@review_app.command("comment")
+def review_comment(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    review_item_id: Annotated[str, typer.Argument(help="Review item identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    comment: Annotated[
+        str,
+        typer.Option("--comment", help="Reviewer comment text."),
+    ] = "",
+    comment_type: Annotated[
+        str,
+        typer.Option("--comment-type", help="Reviewer comment type."),
+    ] = "general",
+    reviewer_id: Annotated[
+        str,
+        typer.Option("--reviewer-id", help="Local reviewer ID."),
+    ] = "local-reviewer",
+    reviewer_name: Annotated[
+        str | None,
+        typer.Option("--reviewer-name", help="Optional local reviewer display name."),
+    ] = None,
+    reviewer_role: Annotated[
+        str | None,
+        typer.Option("--reviewer-role", help="Optional local reviewer role."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Append a reviewer comment to a review item."""
+    try:
+        _require_cli_text(comment, "--comment")
+        reviewer = _reviewer_from_cli(reviewer_id, reviewer_name, reviewer_role)
+        review_comment_obj = ReviewerComment(
+            review_item_id=review_item_id,
+            reviewer=reviewer,
+            comment_text=comment,
+            comment_type=comment_type,  # type: ignore[arg-type]
+        )
+        ReviewWorkspaceStore(db_path).add_comment(workspace_id, review_comment_obj)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = review_comment_obj.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Comment added: {review_comment_obj.comment_id}")
+
+
+@review_app.command("request-followup")
+def review_request_followup(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    review_item_id: Annotated[str, typer.Argument(help="Review item identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    request_type: Annotated[
+        str,
+        typer.Option("--request-type", help="Follow-up request type."),
+    ] = "expert_review",
+    request_text: Annotated[
+        str,
+        typer.Option("--request-text", help="Follow-up request text."),
+    ] = "",
+    priority: Annotated[
+        str,
+        typer.Option("--priority", help="low, medium, or high."),
+    ] = "medium",
+    reviewer_id: Annotated[
+        str,
+        typer.Option("--reviewer-id", help="Local requester ID."),
+    ] = "local-reviewer",
+    reviewer_name: Annotated[
+        str | None,
+        typer.Option("--reviewer-name", help="Optional local requester display name."),
+    ] = None,
+    reviewer_role: Annotated[
+        str | None,
+        typer.Option("--reviewer-role", help="Optional local requester role."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Append a follow-up computational or expert review request."""
+    try:
+        _require_cli_text(request_text, "--request-text")
+        reviewer = _reviewer_from_cli(reviewer_id, reviewer_name, reviewer_role)
+        request = FollowupRequest(
+            review_item_id=review_item_id,
+            requested_by=reviewer,
+            request_type=_normalize_followup_type(request_type),  # type: ignore[arg-type]
+            request_text=request_text,
+            priority=priority,  # type: ignore[arg-type]
+            status="open",
+        )
+        ReviewWorkspaceStore(db_path).add_followup_request(workspace_id, request)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = request.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Follow-up requested: {request.request_id}")
+
+
+@review_app.command("export")
+def review_export(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    output_path: Annotated[
+        Path,
+        typer.Option("--output", file_okay=True, dir_okay=True, writable=True),
+    ] = Path("review_export"),
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="json, markdown, or zip."),
+    ] = "json",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable command result."),
+    ] = False,
+) -> None:
+    """Export a review workspace package."""
+    try:
+        store = ReviewWorkspaceStore(db_path)
+        workspace = store.get_workspace(workspace_id)
+        if output_format == "json" and output_path.suffix == ".json":
+            path = store.export_workspace_json(workspace_id, output_path)
+            files: list[str] = [path.name]
+        elif output_format == "markdown" and output_path.suffix == ".md":
+            path = output_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(render_workspace_markdown(workspace))
+            files = [path.name]
+        else:
+            result = export_review_package(
+                workspace,
+                output_path,
+                output_format=output_format,
+            )
+            path = result.output_path
+            files = result.files
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = {
+        "workspace_id": workspace_id,
+        "output": str(path),
+        "format": output_format,
+        "files": files,
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Workspace exported: {path}")
+
+
+@review_app.command("audit")
+def review_audit(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Show the review workspace audit trail."""
+    try:
+        workspace = ReviewWorkspaceStore(db_path).get_workspace(workspace_id)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    events = [event.model_dump(mode="json") for event in workspace.audit_events]
+    if json_output:
+        _echo_json({"workspace_id": workspace_id, "audit_events": events})
+        return
+    typer.echo("Timestamp\tActor\tEvent\tObject\tSummary")
+    for event in workspace.audit_events:
+        typer.echo(
+            "\t".join(
+                [
+                    event.timestamp.isoformat(),
+                    event.actor,
+                    event.event_type,
+                    f"{event.object_type}:{event.object_id}",
+                    event.summary,
+                ]
+            )
+        )
+
+
+@review_app.command("metrics")
+def review_metrics(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Summarize local expert review workflow metrics."""
+    try:
+        workspace = ReviewWorkspaceStore(db_path).get_workspace(workspace_id)
+        metrics = compute_review_metrics(workspace)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = metrics.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Workspace: {metrics.workspace_id}")
+    typer.echo(f"Disease: {metrics.disease_name}")
+    typer.echo(f"Review items: {metrics.total_review_items}")
+    typer.echo(f"Reviewed: {metrics.reviewed_count}")
+    typer.echo(f"Pending: {metrics.pending_count}")
+    typer.echo(f"Accepted: {metrics.accepted_count}")
+    typer.echo(f"Rejected: {metrics.rejected_count}")
+    typer.echo(f"Needs more data: {metrics.needs_more_data_count}")
+    typer.echo(f"Feedback conflicts: {metrics.feedback_conflict_count}")
+
+
+@review_app.command("follow-up")
+def review_follow_up(
+    workspace_path: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            writable=True,
+            help="Path to review_workspace.json.",
+        ),
+    ],
+    item_id: Annotated[str, typer.Option("--item-id", help="Review item identifier.")],
+    reviewer_id: Annotated[str, typer.Option("--reviewer-id", help="Local reviewer ID.")],
+    check_type: Annotated[
+        str,
+        typer.Option(
+            "--check-type",
+            help="Computational follow-up check type, for example literature_review or docking.",
+        ),
+    ],
+    question: Annotated[str, typer.Option("--question", help="Question for follow-up work.")],
+) -> None:
+    """Request a follow-up computational check for a reviewed candidate."""
+    try:
+        workspace = _read_review_workspace(workspace_path)
+        request = ReviewDecisionEngine().request_followup(
+            workspace,
+            review_item_id=item_id,
+            reviewer=Reviewer(reviewer_id=reviewer_id),
+            request_type=_normalize_followup_type(check_type),
+            request_text=question,
+            priority="medium",
+        )
+        _write_review_workspace(workspace_path, workspace)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Follow-up requested: {request.request_id}")
+
+
+@review_app.command("compare")
+def review_compare(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    review_item_ids: Annotated[
+        list[str],
+        typer.Argument(help="Two or more review item identifiers to compare."),
+    ],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    allow_auto_recommendation: Annotated[
+        bool,
+        typer.Option(
+            "--allow-auto-recommendation",
+            help="Allow an automated note about the highest model score.",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Compare review candidates side by side for expert review."""
+    try:
+        workspace = ReviewWorkspaceStore(db_path).get_workspace(workspace_id)
+        comparison = build_candidate_comparison(
+            workspace,
+            review_item_ids,
+            allow_auto_recommendation=allow_auto_recommendation,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(comparison.model_dump(mode="json"))
+        return
+    typer.echo(render_comparison_markdown(comparison))
+
+
+@review_app.command("dossier")
+def review_dossier(
+    workspace_path: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to review_workspace.json.",
+        ),
+    ],
+    item_id: Annotated[str, typer.Option("--item-id", help="Review item identifier.")],
+    output_path: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Path for the Markdown review dossier.",
+        ),
+    ],
+) -> None:
+    """Export a candidate review dossier."""
+    try:
+        workspace = _read_review_workspace(workspace_path)
+        dossier = DossierWriterAgent().build_dossier(workspace, item_id)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(render_dossier_markdown(dossier))
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Dossier written: {output_path}")
+
+
+@review_app.command("handoff")
+def review_handoff(
+    workspace_path: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to review_workspace.json.",
+        ),
+    ],
+    item_id: Annotated[str, typer.Option("--item-id", help="Review item identifier.")],
+    reviewer_id: Annotated[str, typer.Option("--reviewer-id", help="Local reviewer ID.")],
+    output_path: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Path for validation_handoff.json.",
+        ),
+    ],
+) -> None:
+    """Create a validation handoff packet for a reviewed candidate."""
+    try:
+        workspace = _read_review_workspace(workspace_path)
+        handoff = create_validation_handoff(
+            workspace,
+            review_item_id=item_id,
+            evidence_packet_paths={"workspace": str(workspace_path)},
+        )
+        _write_review_workspace(workspace_path, workspace)
+        _write_json_model(output_path, handoff)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Validation handoff written: {output_path}")
+
+
+@review_app.command("ingest-feedback")
+def review_ingest_feedback(
+    workspace_path: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            writable=True,
+            help="Path to review_workspace.json.",
+        ),
+    ],
+    output_path: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Path for feedback_ingestion.json.",
+        ),
+    ],
+) -> None:
+    """Export expert feedback signals for future ranking runs."""
+    try:
+        workspace = _read_review_workspace(workspace_path)
+        result = FeedbackIngestionAgent().build_feedback(workspace)
+        _write_review_workspace(workspace_path, workspace)
+        _write_json_model(output_path, result)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Feedback written: {output_path}")
+
+
+@review_app.command("dashboard")
+def review_dashboard(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            file_okay=False,
+            dir_okay=True,
+            writable=True,
+            help="Directory for static HTML review dashboard files.",
+        ),
+    ] = Path("review_dashboard"),
+) -> None:
+    """Generate a no-server static HTML review dashboard."""
+    try:
+        workspace = ReviewWorkspaceStore(db_path).get_workspace(workspace_id)
+        output_path = generate_static_review_dashboard(workspace, output_dir)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Dashboard written: {output_path}")
+    typer.echo(f"Open: {output_path / 'index.html'}")
 
 
 @app.command()
@@ -519,6 +1375,65 @@ def rank(
             help="Maximum molecules sent to optional docking when docking is enabled.",
         ),
     ] = 20,
+    enable_review_workflow: Annotated[
+        bool,
+        typer.Option(
+            "--enable-review-workflow/--disable-review-workflow",
+            help="Create a local expert review workspace during the run.",
+        ),
+    ] = False,
+    review_db_path: Annotated[
+        Path,
+        typer.Option("--review-db-path", help="SQLite review workflow database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    reviewer_id: Annotated[
+        str | None,
+        typer.Option("--reviewer-id", help="Optional local reviewer ID metadata."),
+    ] = None,
+    reviewer_name: Annotated[
+        str | None,
+        typer.Option("--reviewer-name", help="Optional local reviewer display name."),
+    ] = None,
+    reviewer_role: Annotated[
+        str | None,
+        typer.Option("--reviewer-role", help="Optional local reviewer role."),
+    ] = None,
+    max_review_items: Annotated[
+        int,
+        typer.Option("--max-review-items", min=1, help="Maximum review items to queue."),
+    ] = 100,
+    include_generated_in_review: Annotated[
+        bool,
+        typer.Option(
+            "--include-generated-in-review/--exclude-generated-from-review",
+            help="Include generated molecule hypotheses in the review workspace.",
+        ),
+    ] = True,
+    generated_high_priority_allowed: Annotated[
+        bool,
+        typer.Option(
+            "--generated-high-priority-allowed",
+            help="Allow generated hypotheses to receive high-priority review buckets.",
+        ),
+    ] = False,
+    enable_feedback_prior: Annotated[
+        bool,
+        typer.Option(
+            "--enable-feedback-prior",
+            help="Use stored expert review feedback as future ranking context.",
+        ),
+    ] = False,
+    feedback_db_path: Annotated[
+        Path,
+        typer.Option("--feedback-db-path", help="SQLite expert feedback database path."),
+    ] = Path(".review/molecule-ranker-feedback.sqlite"),
+    generate_review_dashboard: Annotated[
+        bool,
+        typer.Option(
+            "--generate-review-dashboard",
+            help="Generate a static HTML dashboard for the review workspace.",
+        ),
+    ] = False,
 ) -> None:
     """Run the V0.4 ranking pipeline with developability triage."""
     defaults = RankerConfig()
@@ -584,6 +1499,17 @@ def rank(
         strict_structure_mode=strict_structure_mode,
         max_structures_per_target=max_structures_per_target,
         max_docked_molecules=max_docked_molecules,
+        enable_review_workflow=enable_review_workflow,
+        review_db_path=review_db_path,
+        reviewer_id=reviewer_id,
+        reviewer_name=reviewer_name,
+        reviewer_role=reviewer_role,
+        max_review_items=max_review_items,
+        include_generated_in_review=include_generated_in_review,
+        generated_high_priority_allowed=generated_high_priority_allowed,
+        enable_feedback_prior=enable_feedback_prior,
+        feedback_db_path=feedback_db_path,
+        generate_review_dashboard=generate_review_dashboard,
     )
 
     try:
@@ -678,6 +1604,65 @@ def generate(
             help="Record structure-aware developability filter pass/fail fields.",
         ),
     ] = False,
+    enable_review_workflow: Annotated[
+        bool,
+        typer.Option(
+            "--enable-review-workflow/--disable-review-workflow",
+            help="Create a local expert review workspace during generation.",
+        ),
+    ] = False,
+    review_db_path: Annotated[
+        Path,
+        typer.Option("--review-db-path", help="SQLite review workflow database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    reviewer_id: Annotated[
+        str | None,
+        typer.Option("--reviewer-id", help="Optional local reviewer ID metadata."),
+    ] = None,
+    reviewer_name: Annotated[
+        str | None,
+        typer.Option("--reviewer-name", help="Optional local reviewer display name."),
+    ] = None,
+    reviewer_role: Annotated[
+        str | None,
+        typer.Option("--reviewer-role", help="Optional local reviewer role."),
+    ] = None,
+    max_review_items: Annotated[
+        int,
+        typer.Option("--max-review-items", min=1, help="Maximum review items to queue."),
+    ] = 100,
+    include_generated_in_review: Annotated[
+        bool,
+        typer.Option(
+            "--include-generated-in-review/--exclude-generated-from-review",
+            help="Include generated molecule hypotheses in the review workspace.",
+        ),
+    ] = True,
+    generated_high_priority_allowed: Annotated[
+        bool,
+        typer.Option(
+            "--generated-high-priority-allowed",
+            help="Allow generated hypotheses to receive high-priority review buckets.",
+        ),
+    ] = False,
+    enable_feedback_prior: Annotated[
+        bool,
+        typer.Option(
+            "--enable-feedback-prior",
+            help="Use stored expert review feedback as future ranking context.",
+        ),
+    ] = False,
+    feedback_db_path: Annotated[
+        Path,
+        typer.Option("--feedback-db-path", help="SQLite expert feedback database path."),
+    ] = Path(".review/molecule-ranker-feedback.sqlite"),
+    generate_review_dashboard: Annotated[
+        bool,
+        typer.Option(
+            "--generate-review-dashboard",
+            help="Generate a static HTML dashboard for the review workspace.",
+        ),
+    ] = False,
 ) -> None:
     """Run the full retrieval pipeline and focus output on generated molecules."""
     config = RankerConfig(
@@ -691,6 +1676,17 @@ def generate(
         max_retained_generated=max_retained_generated,
         reject_basic_alerts=reject_basic_alerts,
         enable_structure_filtering=enable_structure_filtering,
+        enable_review_workflow=enable_review_workflow,
+        review_db_path=review_db_path,
+        reviewer_id=reviewer_id,
+        reviewer_name=reviewer_name,
+        reviewer_role=reviewer_role,
+        max_review_items=max_review_items,
+        include_generated_in_review=include_generated_in_review,
+        generated_high_priority_allowed=generated_high_priority_allowed,
+        enable_feedback_prior=enable_feedback_prior,
+        feedback_db_path=feedback_db_path,
+        generate_review_dashboard=generate_review_dashboard,
     )
 
     try:
@@ -1152,6 +2148,248 @@ def _parse_optional_model(raw: Any, model: type[Any]) -> Any | None:
         return model.model_validate(raw)
     except Exception:
         return None
+
+
+def _normalize_decision_label(label: str) -> str:
+    aliases = {
+        "request_follow_up": "needs_more_data",
+        "advance_to_validation": "accept_for_followup",
+        "reject_for_now": "reject",
+        "hold_for_more_evidence": "hold",
+    }
+    return aliases.get(label, label)
+
+
+def _normalize_followup_type(check_type: str) -> str:
+    aliases = {
+        "literature_review": "rerun_with_more_literature",
+        "target_review": "rerun_with_more_targets",
+        "developability_review": "stricter_developability",
+    }
+    return aliases.get(check_type, check_type)
+
+
+def _read_review_workspace(path: Path) -> ReviewWorkspace:
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("Review workspace must contain a JSON object.")
+    return ReviewWorkspace.model_validate(payload)
+
+
+def _write_review_workspace(path: Path, workspace: ReviewWorkspace) -> None:
+    _write_json_model(path, workspace)
+
+
+def _write_json_model(path: Path, value: BaseModel) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
+
+
+def _load_review_run_artifacts(run_dir: Path, *, include_generated: bool) -> dict[str, Any]:
+    candidates_path = run_dir / "candidates.json"
+    if not candidates_path.exists():
+        raise ValueError(f"Missing run artifact: {candidates_path}")
+    payload = json.loads(candidates_path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("candidates.json must contain a JSON object.")
+    if include_generated:
+        generated_path = run_dir / "generated_candidates.json"
+        if generated_path.exists():
+            generated_payload = json.loads(generated_path.read_text())
+            if isinstance(generated_payload, dict):
+                for key in ("generated_molecule_hypotheses", "retained_generated_molecules"):
+                    if key in generated_payload and key not in payload:
+                        payload[key] = generated_payload[key]
+            elif (
+                isinstance(generated_payload, list)
+                and "generated_molecule_hypotheses" not in payload
+            ):
+                payload["generated_molecule_hypotheses"] = generated_payload
+    else:
+        payload.pop("generated_molecule_hypotheses", None)
+        payload.pop("retained_generated_molecules", None)
+    return payload
+
+
+def _reviewer_from_cli(
+    reviewer_id: str | None,
+    reviewer_name: str | None,
+    reviewer_role: str | None,
+) -> Reviewer:
+    return Reviewer(
+        reviewer_id=reviewer_id or "local-reviewer",
+        name=reviewer_name,
+        role=reviewer_role,
+    )
+
+
+def _require_cli_text(value: str, option_name: str) -> None:
+    if not value.strip():
+        raise ValueError(f"{option_name} is required")
+
+
+def _write_review_queue_json(path: Path, workspace: ReviewWorkspace) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "workspace_id": workspace.workspace_id,
+                "run_id": workspace.run_id,
+                "disease_name": workspace.disease_name,
+                "created_at": workspace.created_at.isoformat(),
+                "review_items": [
+                    item.model_dump(mode="json") for item in workspace.review_items
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def _workspace_summary_payload(workspace: ReviewWorkspace) -> dict[str, Any]:
+    return {
+        "workspace_id": workspace.workspace_id,
+        "run_id": workspace.run_id,
+        "disease_name": workspace.disease_name,
+        "created_at": workspace.created_at.isoformat(),
+        "review_item_count": len(workspace.review_items),
+        "priority_distribution": _distribution(
+            item.priority_bucket for item in workspace.review_items
+        ),
+        "status_distribution": _distribution(item.review_status for item in workspace.review_items),
+        "decision_count": len(workspace.decisions),
+        "comment_count": len(workspace.comments),
+        "followup_request_count": len(workspace.followup_requests),
+        "top_pending_items": [
+            {
+                "review_item_id": item.review_item_id,
+                "candidate_name": item.candidate_name,
+                "candidate_origin": item.candidate_origin,
+                "priority_bucket": item.priority_bucket,
+                "score": item.score,
+                "confidence": item.confidence,
+            }
+            for item in _top_pending_items(workspace.review_items)
+        ],
+    }
+
+
+def _distribution(values: Any) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _top_pending_items(items: list[Any], limit: int = 5) -> list[Any]:
+    priority_order = {
+        "high_priority": 0,
+        "medium_priority": 1,
+        "needs_review": 2,
+        "low_priority": 3,
+        "reject_suggested": 4,
+    }
+    pending = [item for item in items if item.review_status in {"pending", "in_review"}]
+    return sorted(
+        pending,
+        key=lambda item: (
+            priority_order.get(item.priority_bucket, 99),
+            -(item.score or 0.0),
+            item.candidate_name,
+        ),
+    )[:limit]
+
+
+def _find_review_item(workspace: ReviewWorkspace, review_item_id: str) -> Any:
+    for item in workspace.review_items:
+        if item.review_item_id == review_item_id:
+            return item
+    raise ValueError(f"Unknown review item: {review_item_id}")
+
+
+def _format_distribution(distribution: Any) -> str:
+    if not isinstance(distribution, dict) or not distribution:
+        return "none"
+    return ", ".join(f"{key}={value}" for key, value in sorted(distribution.items()))
+
+
+def _status_for_decision(decision: str) -> str | None:
+    return {
+        "accept_for_followup": "accepted",
+        "deprioritize": "deprioritized",
+        "reject": "rejected",
+        "needs_more_data": "needs_more_data",
+        "escalate_to_expert": "escalated",
+        "hold": "pending",
+    }.get(decision)
+
+
+def _render_workspace_markdown(workspace: ReviewWorkspace) -> str:
+    summary = _workspace_summary_payload(workspace)
+    lines = [
+        f"# Review Workspace: {workspace.disease_name}",
+        "",
+        "Human decisions are expert triage labels, not clinical conclusions.",
+        "Model-generated scores do not establish safety, efficacy, binding, or synthesizability.",
+        "",
+        f"- Workspace ID: `{workspace.workspace_id}`",
+        f"- Run ID: `{workspace.run_id}`",
+        f"- Created: `{workspace.created_at.isoformat()}`",
+        f"- Review items: {len(workspace.review_items)}",
+        f"- Priority distribution: {_format_distribution(summary['priority_distribution'])}",
+        f"- Status distribution: {_format_distribution(summary['status_distribution'])}",
+        "",
+        "## Review Items",
+        "",
+    ]
+    for item in workspace.review_items:
+        lines.extend(
+            [
+                f"### {item.candidate_name}",
+                "",
+                f"- Review item ID: `{item.review_item_id}`",
+                f"- Origin: {item.candidate_origin}",
+                f"- Priority: {item.priority_bucket}",
+                f"- Status: {item.review_status}",
+                f"- Score: {item.score}",
+                f"- Confidence: {item.confidence}",
+                f"- Targets: {', '.join(item.target_symbols) or 'n/a'}",
+                "",
+            ]
+        )
+        if item.warnings:
+            lines.append("Warnings:")
+            lines.extend(f"- {warning}" for warning in item.warnings)
+            lines.append("")
+    if workspace.decisions:
+        lines.extend(["## Reviewer Decisions", ""])
+        for decision in workspace.decisions:
+            lines.extend(
+                [
+                    f"- `{decision.created_at.isoformat()}` "
+                    f"{decision.reviewer.reviewer_id}: {decision.decision} "
+                    f"on `{decision.review_item_id}`",
+                    f"  Rationale: {decision.rationale}",
+                ]
+            )
+        lines.append("")
+    if workspace.comments:
+        lines.extend(["## Reviewer Comments", ""])
+        for comment in workspace.comments:
+            lines.append(
+                f"- `{comment.created_at.isoformat()}` {comment.reviewer.reviewer_id} "
+                f"({comment.comment_type}) on `{comment.review_item_id}`: "
+                f"{comment.comment_text}"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _echo_json(payload: dict[str, Any]) -> None:
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def _print_human_summary(result: RankingRun, output_dir: Path, *, verbose: bool) -> None:

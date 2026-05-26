@@ -29,12 +29,17 @@ from molecule_ranker.generation.schemas import (
     NoveltyAssessment,
     SeedMolecule,
 )
+from molecule_ranker.review.decision_engine import ReviewDecisionEngine
+from molecule_ranker.review.queue_builder import build_review_workspace
+from molecule_ranker.review.schemas import FollowupRequest, Reviewer
+from molecule_ranker.review.workspace import ReviewWorkspaceStore, create_validation_handoff
 from molecule_ranker.schemas import (
     AgentTrace,
     Disease,
     EvidenceItem,
     GeneratedMoleculeHypothesis,
     MoleculeCandidate,
+    RankingRun,
     ScoreBreakdown,
     Target,
 )
@@ -962,6 +967,176 @@ def test_report_writer_does_not_create_generation_artifacts_when_generation_disa
     assert (output_dir / "developability.json").exists()
     assert not (output_dir / "generated_candidates.json").exists()
     assert not (output_dir / "generation_trace.json").exists()
+
+
+def test_report_includes_expert_review_workflow_when_enabled(tmp_path):
+    context = _scored_context(tmp_path)
+    assert context.disease is not None
+    workspace = build_review_workspace(
+        RankingRun(
+            disease=context.disease,
+            targets=context.targets,
+            candidates=context.candidates,
+            generated_candidates=context.generated_candidates,
+            traces=context.traces,
+        ),
+        config={"run_id": "run-review"},
+        reviewer=Reviewer(
+            reviewer_id="expert-1",
+            name="Local Reviewer",
+            role="medicinal_chemist",
+        ),
+    )
+    existing_item = workspace.review_items[0]
+    reviewer = Reviewer(reviewer_id="expert-1", name="Local Reviewer", role="medicinal_chemist")
+    ReviewDecisionEngine().record_decision(
+        workspace,
+        review_item_id=existing_item.review_item_id,
+        reviewer=reviewer,
+        decision="needs_more_data",
+        rationale="Review disease-specific evidence separately from scientific evidence.",
+        confidence=0.7,
+        decision_factors=["weak_literature"],
+    )
+    ReviewDecisionEngine().add_comment(
+        workspace,
+        review_item_id=existing_item.review_item_id,
+        reviewer=reviewer,
+        comment_text="Expert comment remains separate from evidence.",
+        comment_type="evidence_question",
+    )
+    workspace.followup_requests.append(
+        FollowupRequest(
+            review_item_id=existing_item.review_item_id,
+            requested_by=reviewer,
+            request_type="rerun_with_more_literature",
+            request_text="Repeat literature review with disease aliases.",
+            priority="high",
+            status="open",
+        )
+    )
+    handoff = create_validation_handoff(
+        workspace,
+        review_item_id=existing_item.review_item_id,
+        evidence_packet_paths={"dossier": "dossier.md"},
+    )
+    workspace.metadata["validation_handoffs"] = [handoff.model_dump(mode="json")]
+    db_path = tmp_path / "review.sqlite"
+    ReviewWorkspaceStore(db_path).create_workspace(workspace)
+    output_dir = tmp_path / "parkinson-disease"
+    output_dir.mkdir()
+    queue_path = output_dir / "review_queue.json"
+    queue_path.write_text(workspace.model_dump_json())
+    context.config.update(
+        {
+            "enable_review_workflow": True,
+            "review_workflow_enabled": True,
+            "review_workspace_id": workspace.workspace_id,
+            "review_db_path": str(db_path),
+            "review_queue_json": str(queue_path),
+            "review_dashboard_path": str(output_dir / "review_dashboard" / "index.html"),
+            "reviewer_id": "expert-1",
+            "reviewer_name": "Local Reviewer",
+            "reviewer_role": "medicinal_chemist",
+            "review_queue_summary": {
+                "review_item_count": len(workspace.review_items),
+                "priority_distribution": {"high_priority": 1, "medium_priority": 1},
+                "status_distribution": {"pending": 1, "needs_more_data": 1},
+            },
+        }
+    )
+
+    ReportWriterAgent().run(context)
+
+    report = (output_dir / "report.md").read_text()
+    assert "## Expert Review Workflow" in report
+    assert "Review workflow enabled: yes" in report
+    assert f"Workspace ID: {workspace.workspace_id}" in report
+    assert f"Review DB path: {db_path}" in report
+    assert f"Review queue JSON: {queue_path}" in report
+    assert "Dashboard: " in report
+    assert "Reviewer ID: expert-1" in report
+    assert "Review item count: 2" in report
+    assert "high_priority: 1" in report
+    assert "needs_more_data: 1" in report
+    assert "Latest reviewer decisions" in report
+    assert "needs_more_data by expert-1" in report
+    candidate_section = report.split("### 1. Evidence-backed candidate", 1)[1].split(
+        "## Targets Considered",
+        1,
+    )[0]
+    assert "Review status:" in candidate_section
+    assert "Reviewer decisions:" in candidate_section
+    assert "Review decision evidence boundary:" in candidate_section
+    assert "Reviewer comments summary:" in candidate_section
+    assert "Follow-up requests:" in candidate_section
+    assert "Validation handoff availability: available" in candidate_section
+    evidence_section = candidate_section.split("Reviewer decisions:", 1)[0]
+    assert "needs_more_data" not in evidence_section
+
+
+def test_report_review_workflow_says_disabled_when_disabled(tmp_path):
+    context = _scored_context(tmp_path)
+    context.config["enable_review_workflow"] = False
+    context.config["review_workflow_enabled"] = False
+
+    ReportWriterAgent().run(context)
+
+    report = (tmp_path / "parkinson-disease" / "report.md").read_text()
+    assert "## Expert Review Workflow" in report
+    assert "Review workflow enabled: no" in report
+
+
+def test_generated_report_review_info_retains_no_direct_evidence_warning(tmp_path):
+    context = _scored_context(tmp_path)
+    assert context.disease is not None
+    workspace = build_review_workspace(
+        RankingRun(
+            disease=context.disease,
+            targets=context.targets,
+            candidates=context.candidates,
+            generated_candidates=context.generated_candidates,
+            traces=context.traces,
+        ),
+        config={"run_id": "run-generated-review"},
+    )
+    generated_item = next(
+        item for item in workspace.review_items if item.candidate_origin == "generated"
+    )
+    ReviewDecisionEngine().record_decision(
+        workspace,
+        review_item_id=generated_item.review_item_id,
+        reviewer=Reviewer(reviewer_id="expert-2"),
+        decision="hold",
+        rationale="Generated hypothesis needs expert chemistry review.",
+        confidence=0.5,
+    )
+    db_path = tmp_path / "review.sqlite"
+    ReviewWorkspaceStore(db_path).create_workspace(workspace)
+    context.config.update(
+        {
+            "enable_review_workflow": True,
+            "review_workflow_enabled": True,
+            "review_workspace_id": workspace.workspace_id,
+            "review_db_path": str(db_path),
+            "review_queue_summary": {
+                "review_item_count": len(workspace.review_items),
+                "priority_distribution": {"medium_priority": 1, "reject_suggested": 1},
+                "status_distribution": {"pending": 1, "needs_more_data": 1},
+            },
+        }
+    )
+
+    ReportWriterAgent().run(context)
+
+    report = (tmp_path / "parkinson-disease" / "report.md").read_text()
+    generated_section = report.split("## Generated Molecule Hypotheses", 1)[1].split(
+        "## Ranked Candidates",
+        1,
+    )[0]
+    assert "Generated hypothesis; no direct experimental evidence" in generated_section
+    assert "Review priority bucket:" in generated_section
+    assert "Expert decision: hold" in generated_section
 
 
 def test_report_writer_developability_artifact_marks_disabled(tmp_path):

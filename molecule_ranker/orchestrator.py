@@ -11,6 +11,7 @@ from molecule_ranker.agents import (
     MoleculeRetrievalAgent,
     NovelMoleculeAgent,
     ReportWriterAgent,
+    ReviewWorkspaceAgent,
     TargetDiscoveryAgent,
 )
 from molecule_ranker.agents.base import BaseAgent, PipelineContext
@@ -126,6 +127,7 @@ class MoleculeRankerOrchestrator:
             )
         self.evidence_scoring = EvidenceScoringAgent()
         self.developability_assessment = DevelopabilityAssessmentAgent()
+        self.review_workspace = ReviewWorkspaceAgent()
         self.report_writer = ReportWriterAgent()
         self.agents: list[BaseAgent] = [
             self.disease_resolver,
@@ -134,6 +136,7 @@ class MoleculeRankerOrchestrator:
             self.novel_molecule,
             self.developability_assessment,
             self.evidence_scoring,
+            self.review_workspace,
             self.report_writer,
         ]
         if self.literature_evidence is not None:

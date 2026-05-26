@@ -5,6 +5,7 @@ from molecule_ranker.agents.literature_evidence import LiteratureEvidenceAgent
 from molecule_ranker.agents.molecule_retrieval import MoleculeRetrievalAgent
 from molecule_ranker.agents.novel_molecule import NovelMoleculeAgent
 from molecule_ranker.agents.report_writer import ReportWriterAgent
+from molecule_ranker.agents.review_workspace import ReviewWorkspaceAgent
 from molecule_ranker.agents.target_discovery import TargetDiscoveryAgent
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "MoleculeRetrievalAgent",
     "NovelMoleculeAgent",
     "ReportWriterAgent",
+    "ReviewWorkspaceAgent",
     "TargetDiscoveryAgent",
 ]

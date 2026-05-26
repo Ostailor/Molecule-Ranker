@@ -1,12 +1,14 @@
 # molecule-ranker
 
 `molecule-ranker` is an agent-first drug discovery research prototype. Given a
-disease name, V0.4 resolves the disease through public biomedical data sources,
+disease name, V0.5 resolves the disease through public biomedical data sources,
 discovers evidence-backed targets, retrieves existing molecules linked to those
 targets, retrieves real literature evidence, ranks the molecules as transparent
 research hypotheses, and can optionally generate target-conditioned in-silico
-molecule hypotheses from those retrieved structures. V0.4 adds computational
-developability triage for existing and generated molecules.
+molecule hypotheses from those retrieved structures. V0.4 added computational
+developability triage for existing and generated molecules. V0.5 adds a local
+expert review workspace for human-in-the-loop triage, dossiers, follow-up
+requests, validation handoffs, feedback ingestion, and audit trails.
 
 The app does not discover cures, does not claim generated molecules treat or are
 active against a disease, does not provide medical advice, and does not provide
@@ -81,6 +83,159 @@ V0.4 does not:
 Unit tests use mocked data only to test behavior deterministically. Production
 code uses real public biomedical data adapters and fails if required data cannot
 be retrieved.
+
+## V0.5 Expert Review Workflow
+
+V0.5 adds an optional expert review workflow and human-in-the-loop triage system.
+The ranking pipeline still works without review enabled. When enabled, V0.5
+creates a local `ReviewWorkspace` backed by SQLite, writes `review_queue.json`,
+and can optionally generate a local static HTML dashboard.
+
+The review workflow is local tooling, not a multi-user production system. The
+SQLite review database defaults to `.review/molecule-ranker-review.sqlite` and
+stores local reviewer identity metadata only; it does not add authentication,
+authorization, collaboration controls, or a SaaS deployment model.
+
+Review decisions are stored separately from scientific evidence and model
+scores. They are expert triage labels, not biomedical evidence, clinical
+conclusions, or proof of safety, efficacy, binding, or synthesizability.
+Expert feedback can inform future prioritization only when
+`enable_feedback_prior` or `--enable-feedback-prior` is explicitly enabled, and
+it remains labeled as expert review feedback rather than experimental evidence.
+
+Candidate dossiers summarize evidence, risks, uncertainty, source provenance,
+limitations, reviewer decisions, comments, and follow-up requests. Validation
+handoff packets are high-level expert-planning packets: they can name broad
+validation categories such as target engagement, cellular pathway, phenotype,
+or toxicology triage, but they do not include lab protocols, operational steps,
+synthesis instructions, reagents, reaction conditions, temperatures, dosing, or
+patient treatment instructions. No clinical advice, dosage, or treatment
+instructions are provided anywhere in the review workflow.
+
+Generated molecules remain computational hypotheses. They have no direct
+experimental evidence, are not claimed to be active, and remain labeled as
+generated throughout review queues, dossiers, comparisons, handoffs, exports,
+reports, and dashboards.
+
+Review objects include `ReviewWorkspace`, `ReviewQueue`, `ReviewItem`,
+`ReviewerDecision`, `ExpertFeedback`, `CandidateDossier`, `ValidationHandoff`,
+`ReviewAuditLog`, `FeedbackIngestionAgent`, and `DossierWriterAgent`.
+
+Run ranking with the review workflow enabled:
+
+```bash
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --enable-generation \
+  --enable-review-workflow \
+  --review-db-path .review/molecule-ranker-review.sqlite \
+  --reviewer-id reviewer-1 \
+  --reviewer-name "Local Reviewer" \
+  --reviewer-role medicinal_chemist \
+  --max-review-items 100 \
+  --generate-review-dashboard
+```
+
+Create a review workspace from existing run artifacts:
+
+```bash
+uv run molecule-ranker review create \
+  --from-run results/alzheimer-disease/ \
+  --db-path .review/molecule-ranker-review.sqlite \
+  --reviewer-id reviewer-1 \
+  --reviewer-name "Local Reviewer" \
+  --reviewer-role medicinal_chemist
+```
+
+List review workspaces:
+
+```bash
+uv run molecule-ranker review list \
+  --db-path .review/molecule-ranker-review.sqlite
+```
+
+Show a review item:
+
+```bash
+uv run molecule-ranker review item \
+  workspace-run-1-alzheimer-disease \
+  review-item-run-1-chembl123 \
+  --db-path .review/molecule-ranker-review.sqlite
+```
+
+Make a review decision:
+
+```bash
+uv run molecule-ranker review decide \
+  workspace-run-1-alzheimer-disease \
+  review-item-run-1-chembl123 \
+  --db-path .review/molecule-ranker-review.sqlite \
+  --decision needs_more_data \
+  --rationale "Expert triage label only; request more disease-specific evidence." \
+  --reviewer-id reviewer-1 \
+  --confidence 0.7 \
+  --factor weak_literature
+```
+
+Add a reviewer comment:
+
+```bash
+uv run molecule-ranker review comment \
+  workspace-run-1-alzheimer-disease \
+  review-item-run-1-chembl123 \
+  --db-path .review/molecule-ranker-review.sqlite \
+  --comment "Check whether the target rationale is disease-specific." \
+  --comment-type evidence_question \
+  --reviewer-id reviewer-1
+```
+
+Compare candidates side by side:
+
+```bash
+uv run molecule-ranker review compare \
+  workspace-run-1-alzheimer-disease \
+  review-item-run-1-chembl123 \
+  review-item-run-1-generated-maob-001 \
+  --db-path .review/molecule-ranker-review.sqlite
+```
+
+Generate a candidate dossier:
+
+```bash
+uv run molecule-ranker review dossier \
+  --workspace results/alzheimer-disease/review_queue.json \
+  --item-id review-item-run-1-chembl123 \
+  --output results/alzheimer-disease/dossiers/chembl123.md
+```
+
+Create a validation handoff packet:
+
+```bash
+uv run molecule-ranker review handoff \
+  --workspace results/alzheimer-disease/review_queue.json \
+  --item-id review-item-run-1-chembl123 \
+  --reviewer-id reviewer-1 \
+  --output results/alzheimer-disease/validation_handoffs/chembl123.json
+```
+
+Export a review package:
+
+```bash
+uv run molecule-ranker review export \
+  workspace-run-1-alzheimer-disease \
+  --db-path .review/molecule-ranker-review.sqlite \
+  --format zip \
+  --output results/alzheimer-disease/review_export.zip
+```
+
+Generate a local static dashboard:
+
+```bash
+uv run molecule-ranker review dashboard \
+  workspace-run-1-alzheimer-disease \
+  --db-path .review/molecule-ranker-review.sqlite \
+  --output results/alzheimer-disease/review_dashboard/
+```
 
 ## Install
 
@@ -179,6 +334,18 @@ uv run molecule-ranker rank "Alzheimer disease" \
   --generated-per-objective 10 \
   --max-retained-generated 10 \
   --generation-random-seed 123
+```
+
+Run ranking with the optional V0.5 review workflow:
+
+```bash
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --enable-review-workflow \
+  --review-db-path .review/molecule-ranker-review.sqlite \
+  --reviewer-id reviewer-1 \
+  --reviewer-role medicinal_chemist \
+  --generate-review-dashboard
 ```
 
 Run the generation-focused command. It still runs disease, target, molecule,
@@ -291,6 +458,13 @@ uv run molecule-ranker rank "Alzheimer disease" \
   --reject-high-toxicity-risk \
   --enable-structure-retrieval \
   --max-structures-per-target 5 \
+  --enable-review-workflow \
+  --review-db-path .review/molecule-ranker-review.sqlite \
+  --reviewer-id reviewer-1 \
+  --reviewer-role medicinal_chemist \
+  --max-review-items 100 \
+  --include-generated-in-review \
+  --generate-review-dashboard \
   --ncbi-email researcher@example.org \
   --ncbi-api-key-env NCBI_API_KEY \
   --max-retries 3 \
@@ -304,7 +478,7 @@ read as an offline substitute unless `--use-cache` is explicitly passed; that
 mode is a cached-real-data fallback for previously retrieved successful
 responses. Use `--no-cache` to bypass cache reads and writes.
 
-Important V0.4 configuration options map to typed `RankerConfig` fields:
+Important V0.5 configuration options map to typed `RankerConfig` fields:
 
 - `results_dir`, `cache_dir`: output and successful-real-response cache locations.
 - `use_cache`: enables cache writes; disabled by `--no-cache`.
@@ -377,6 +551,25 @@ Important V0.4 configuration options map to typed `RankerConfig` fields:
 - `min_developability_score`: threshold for optional structure-aware filtering.
 - `enable_tdc_benchmark`, `tdc_data_dir`: optional benchmark controls for local
   ADMET model evaluation if TDC is installed and explicitly enabled.
+- `enable_review_workflow`: opt-in switch for local expert review workspace
+  creation during ranking or generation.
+- `review_db_path`: local SQLite path for review workspaces. This is local
+  persistence, not a multi-user production database.
+- `reviewer_id`, `reviewer_name`, `reviewer_role`: optional local reviewer
+  identity metadata.
+- `max_review_items`: maximum review queue size.
+- `include_generated_in_review`: includes generated hypotheses in the review
+  queue while preserving `candidate_origin="generated"`.
+- `generated_high_priority_allowed`: controls whether generated hypotheses may
+  receive high-priority review buckets; disabled by default.
+- `review_priority_policy`: review queue prioritization policy; default is
+  conservative.
+- `enable_feedback_prior`: explicitly enables expert feedback as future
+  prioritization context. Disabled by default.
+- `feedback_db_path`, `feedback_weight`: local feedback store and weighting for
+  feedback-prior behavior.
+- `generate_review_dashboard`, `review_dashboard_dir`: optional static local
+  dashboard generation.
 
 The effective config is serialized into `trace.json` so a run can be audited
 with the limits, cache policy, and request policy that produced it. Defaults are
@@ -674,6 +867,11 @@ does not write a normal `report.md` that looks successful.
 - V0.4 implements heuristic developability triage and rule-based ADMET risk
   flags, not validated ADMET prediction, default docking, retrosynthesis,
   synthesis planning, or wet-lab prediction.
+- V0.5 review workspaces are local SQLite artifacts and static files, not a
+  multi-user production system.
+- Review decisions and expert feedback are not biomedical evidence.
+- Validation handoff packets are high-level planning artifacts and do not
+  include lab protocols.
 - No synthesis instructions are provided.
 
 ## Roadmap
@@ -684,6 +882,7 @@ does not write a normal `report.md` that looks successful.
 - V0.4: developability, ADMET, toxicity, synthesizability, and optional
   structure-aware filters.
 - V0.5: expert review workflow and human-in-the-loop triage.
+- V0.6: experimental feedback loop and active learning from assay results.
 
 ## Development
 

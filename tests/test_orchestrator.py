@@ -202,6 +202,7 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
         "NovelMoleculeAgent",
         "DevelopabilityAssessmentAgent",
         "EvidenceScoringAgent",
+        "ReviewWorkspaceAgent",
         "ReportWriterAgent",
     ]
 

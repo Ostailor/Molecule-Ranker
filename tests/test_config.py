@@ -89,6 +89,20 @@ def test_ranker_config_defaults_are_sensible_for_first_real_run():
         "Br",
         "I",
     ]
+    assert config.enable_review_workflow is False
+    assert config.review_db_path.as_posix() == ".review/molecule-ranker-review.sqlite"
+    assert config.reviewer_id is None
+    assert config.reviewer_name is None
+    assert config.reviewer_role is None
+    assert config.max_review_items == 100
+    assert config.include_generated_in_review is True
+    assert config.generated_high_priority_allowed is False
+    assert config.review_priority_policy == "conservative"
+    assert config.enable_feedback_prior is False
+    assert config.feedback_db_path.as_posix() == ".review/molecule-ranker-feedback.sqlite"
+    assert config.feedback_weight == 0.05
+    assert config.generate_review_dashboard is False
+    assert config.review_dashboard_dir is None
 
 
 def test_ranker_config_trace_metadata_is_json_serializable():
@@ -104,3 +118,43 @@ def test_ranker_config_trace_metadata_is_json_serializable():
     assert metadata["enable_docking"] is False
     assert metadata["enable_tdc_benchmark"] is False
     assert metadata["tdc_data_dir"] == ".cache/molecule-ranker/tdc"
+    assert metadata["enable_review_workflow"] is False
+    assert metadata["review_db_path"] == ".review/molecule-ranker-review.sqlite"
+    assert metadata["enable_feedback_prior"] is False
+    assert metadata["feedback_db_path"] == ".review/molecule-ranker-feedback.sqlite"
+    assert metadata["generate_review_dashboard"] is False
+    assert metadata["review_dashboard_dir"] is None
+
+
+def test_review_runtime_config_includes_dashboard_options(tmp_path):
+    config = RankerConfig(
+        enable_review_workflow=True,
+        review_db_path=tmp_path / "review.sqlite",
+        reviewer_id="expert-1",
+        reviewer_name="Local Reviewer",
+        reviewer_role="medicinal_chemist",
+        max_review_items=25,
+        include_generated_in_review=False,
+        generated_high_priority_allowed=True,
+        enable_feedback_prior=True,
+        feedback_db_path=tmp_path / "feedback.sqlite",
+        feedback_weight=0.1,
+        generate_review_dashboard=True,
+        review_dashboard_dir=tmp_path / "dashboard",
+    )
+
+    runtime = config.runtime_agent_config(top=3, results_dir=tmp_path / "results")
+
+    assert runtime["enable_review_workflow"] is True
+    assert runtime["review_db_path"] == str(tmp_path / "review.sqlite")
+    assert runtime["reviewer_id"] == "expert-1"
+    assert runtime["reviewer_name"] == "Local Reviewer"
+    assert runtime["reviewer_role"] == "medicinal_chemist"
+    assert runtime["max_review_items"] == 25
+    assert runtime["include_generated_in_review"] is False
+    assert runtime["generated_high_priority_allowed"] is True
+    assert runtime["enable_feedback_prior"] is True
+    assert runtime["feedback_db_path"] == str(tmp_path / "feedback.sqlite")
+    assert runtime["feedback_weight"] == 0.1
+    assert runtime["generate_review_dashboard"] is True
+    assert runtime["review_dashboard_dir"] == str(tmp_path / "dashboard")

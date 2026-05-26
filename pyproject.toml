@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "molecule-ranker"
-version = "0.4.0"
+version = "0.5.0"
 description = "Agent-first molecule ranking and opt-in generated-hypothesis prototype for biomedical research."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -100,6 +100,21 @@ class RankerConfig(BaseModel):
         gt=0.0,
         le=1.0,
     )
+    enable_review_workflow: bool = False
+    review_db_path: Path = Path(".review/molecule-ranker-review.sqlite")
+    reviewer_id: str | None = None
+    reviewer_name: str | None = None
+    reviewer_role: str | None = None
+    max_review_items: int = Field(default=100, ge=1)
+    include_generated_in_review: bool = True
+    generated_high_priority_allowed: bool = False
+    review_priority_policy: str = "conservative"
+    enable_feedback_prior: bool = False
+    feedback_db_path: Path = Path(".review/molecule-ranker-feedback.sqlite")
+    feedback_weight: float = Field(default=0.05, ge=0.0, le=0.25)
+    require_same_disease_for_feedback: bool = True
+    generate_review_dashboard: bool = False
+    review_dashboard_dir: Path | None = None
 
     @model_validator(mode="after")
     def sync_generation_aliases(self) -> RankerConfig:
@@ -208,5 +223,22 @@ class RankerConfig(BaseModel):
             "generated_candidate_limit": self.max_retained_generated,
             "generation_attempt_budget": self.max_generated_before_filtering,
             "near_identical_similarity_threshold": self.near_duplicate_similarity_threshold,
+            "enable_review_workflow": self.enable_review_workflow,
+            "review_db_path": str(self.review_db_path),
+            "reviewer_id": self.reviewer_id,
+            "reviewer_name": self.reviewer_name,
+            "reviewer_role": self.reviewer_role,
+            "max_review_items": self.max_review_items,
+            "include_generated_in_review": self.include_generated_in_review,
+            "generated_high_priority_allowed": self.generated_high_priority_allowed,
+            "review_priority_policy": self.review_priority_policy,
+            "enable_feedback_prior": self.enable_feedback_prior,
+            "feedback_db_path": str(self.feedback_db_path),
+            "feedback_weight": self.feedback_weight,
+            "require_same_disease_for_feedback": self.require_same_disease_for_feedback,
+            "generate_review_dashboard": self.generate_review_dashboard,
+            "review_dashboard_dir": (
+                str(self.review_dashboard_dir) if self.review_dashboard_dir is not None else None
+            ),
             "ranker_config": trace_metadata,
         }

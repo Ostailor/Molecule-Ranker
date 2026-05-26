@@ -26,6 +26,8 @@ from molecule_ranker.evidence import (
     normalize_evidence_item,
 )
 from molecule_ranker.generation.schemas import GeneratedMolecule, GenerationRun
+from molecule_ranker.review.schemas import ReviewItem, ReviewWorkspace
+from molecule_ranker.review.workspace import ReviewWorkspaceStore
 from molecule_ranker.schemas import (
     AgentTrace,
     DevelopabilityAssessment,
@@ -143,6 +145,7 @@ class ReportWriterAgent(BaseAgent):
         )
         source_limitations = self._source_limitations(context)
         top_candidates = context.candidates[:5]
+        review_context = self._review_context(context)
 
         lines = [
             f"# Molecule Ranking Report: {disease.canonical_name}",
@@ -198,6 +201,10 @@ class ReportWriterAgent(BaseAgent):
             "",
             *self._developability_summary_lines(context),
             "",
+            "## Expert Review Workflow",
+            "",
+            *self._expert_review_workflow_lines(context, review_context),
+            "",
             "## Citations",
             "",
             *self._citation_lines(context),
@@ -218,13 +225,13 @@ class ReportWriterAgent(BaseAgent):
             "",
             "## Generated Molecule Hypotheses",
             "",
-            *self._generated_molecule_hypothesis_lines(context),
+            *self._generated_molecule_hypothesis_lines(context, review_context),
             "",
             "## Ranked Candidates",
         ]
 
         for index, candidate in enumerate(context.candidates, start=1):
-            lines.extend(self._candidate_section(index, candidate))
+            lines.extend(self._candidate_section(index, candidate, review_context))
 
         lines.extend(["", "## Targets Considered"])
         for target in context.targets:
@@ -536,7 +543,298 @@ class ReportWriterAgent(BaseAgent):
             reasons.append("diversity_or_retention_limit")
         return sorted(set(reasons))
 
-    def _candidate_section(self, rank: int, candidate: MoleculeCandidate) -> list[str]:
+    def _review_context(self, context: PipelineContext) -> dict[str, Any]:
+        enabled = bool(
+            context.config.get("review_workflow_enabled")
+            or context.config.get("enable_review_workflow")
+        )
+        workspace = self._load_review_workspace(context) if enabled else None
+        return {
+            "enabled": enabled,
+            "workspace": workspace,
+            "reviewer": self._reviewer_metadata(context),
+            "queue_summary": context.config.get("review_queue_summary", {}),
+            "workspace_id": context.config.get("review_workspace_id")
+            or (workspace.workspace_id if workspace else None),
+            "review_db_path": context.config.get("review_db_path"),
+            "review_queue_json": context.config.get("review_queue_json"),
+            "dashboard_path": context.config.get("review_dashboard_path")
+            or context.config.get("review_dashboard"),
+        }
+
+    def _load_review_workspace(self, context: PipelineContext) -> ReviewWorkspace | None:
+        workspace_id = context.config.get("review_workspace_id")
+        db_path = context.config.get("review_db_path")
+        if workspace_id and db_path:
+            try:
+                return ReviewWorkspaceStore(str(db_path)).get_workspace(str(workspace_id))
+            except (OSError, ValueError):
+                pass
+        queue_path = context.config.get("review_queue_json")
+        if queue_path:
+            try:
+                return ReviewWorkspace.model_validate_json(Path(str(queue_path)).read_text())
+            except (OSError, ValueError):
+                return None
+        return None
+
+    def _expert_review_workflow_lines(
+        self,
+        context: PipelineContext,
+        review_context: dict[str, Any],
+    ) -> list[str]:
+        enabled = bool(review_context.get("enabled"))
+        workspace = review_context.get("workspace")
+        workspace = workspace if isinstance(workspace, ReviewWorkspace) else None
+        summary = self._review_summary(context, workspace, review_context)
+        lines = [
+            f"- Review workflow enabled: {'yes' if enabled else 'no'}",
+        ]
+        if not enabled:
+            lines.append("- Expert review workflow was disabled for this run.")
+            return lines
+        lines.extend(
+            [
+                f"- Workspace ID: {review_context.get('workspace_id') or 'Unavailable'}",
+                f"- Review DB path: {review_context.get('review_db_path') or 'Unavailable'}",
+                f"- Review item count: {summary.get('review_item_count', 0)}",
+                (
+                    "- Priority distribution: "
+                    f"{self._format_distribution(summary.get('priority_distribution', {}))}"
+                ),
+                (
+                    "- Status distribution: "
+                    f"{self._format_distribution(summary.get('status_distribution', {}))}"
+                ),
+                f"- Review queue JSON: {review_context.get('review_queue_json') or 'Unavailable'}",
+                f"- Dashboard: {review_context.get('dashboard_path') or 'Unavailable'}",
+                "- Review decision evidence boundary: reviewer decisions are expert triage "
+                "labels and do not replace scientific evidence.",
+            ]
+        )
+        reviewer = review_context.get("reviewer")
+        if isinstance(reviewer, dict) and reviewer:
+            lines.extend(
+                [
+                    f"- Reviewer ID: {reviewer.get('reviewer_id') or 'Unavailable'}",
+                    f"- Reviewer name: {reviewer.get('name') or 'Unavailable'}",
+                    f"- Reviewer role: {reviewer.get('role') or 'Unavailable'}",
+                ]
+            )
+        lines.append("- Latest reviewer decisions:")
+        decisions = list(workspace.decisions[-5:]) if workspace is not None else []
+        if decisions:
+            lines.extend(
+                (
+                    f"  - {decision.decision} by {decision.reviewer.reviewer_id} "
+                    f"on {decision.review_item_id}: {decision.rationale}"
+                )
+                for decision in decisions
+            )
+        else:
+            lines.append("  - None recorded.")
+        return lines
+
+    def _review_summary(
+        self,
+        context: PipelineContext,
+        workspace: ReviewWorkspace | None,
+        review_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        raw_summary = review_context.get("queue_summary")
+        if isinstance(raw_summary, dict) and raw_summary:
+            return raw_summary
+        if workspace is None:
+            return {"review_item_count": 0, "priority_distribution": {}, "status_distribution": {}}
+        priority_distribution: dict[str, int] = {}
+        status_distribution: dict[str, int] = {}
+        for item in workspace.review_items:
+            priority_distribution[item.priority_bucket] = (
+                priority_distribution.get(item.priority_bucket, 0) + 1
+            )
+            status_distribution[item.review_status] = (
+                status_distribution.get(item.review_status, 0) + 1
+            )
+        return {
+            "review_item_count": len(workspace.review_items),
+            "priority_distribution": dict(sorted(priority_distribution.items())),
+            "status_distribution": dict(sorted(status_distribution.items())),
+        }
+
+    def _reviewer_metadata(self, context: PipelineContext) -> dict[str, Any]:
+        reviewer_id = context.config.get("reviewer_id")
+        if not reviewer_id:
+            return {}
+        return {
+            "reviewer_id": reviewer_id,
+            "name": context.config.get("reviewer_name"),
+            "role": context.config.get("reviewer_role"),
+        }
+
+    def _review_item_for_candidate(
+        self,
+        review_context: dict[str, Any] | None,
+        *,
+        candidate_name: str,
+        candidate_id: str | None = None,
+    ) -> ReviewItem | None:
+        if not review_context:
+            return None
+        workspace = review_context.get("workspace")
+        if not isinstance(workspace, ReviewWorkspace):
+            return None
+        for item in workspace.review_items:
+            if item.candidate_name == candidate_name or item.candidate_id == candidate_id:
+                return item
+        return None
+
+    def _candidate_identifier(self, candidate: MoleculeCandidate) -> str | None:
+        return (
+            candidate.identifiers.get("chembl")
+            or candidate.identifiers.get("pubchem_cid")
+            or candidate.name
+        )
+
+    def _candidate_review_lines(
+        self,
+        item: ReviewItem | None,
+        review_context: dict[str, Any] | None,
+    ) -> list[str]:
+        if item is None:
+            return ["- Review status: unavailable."]
+        decisions = self._review_decisions_for_item(item.review_item_id, review_context)
+        comments = self._review_comments_for_item(item.review_item_id, review_context)
+        followups = self._review_followups_for_item(item.review_item_id, review_context)
+        lines = [
+            (
+                "- Review decision evidence boundary: reviewer decisions are labeled "
+                "separately from scientific evidence."
+            ),
+            "- Reviewer decisions:",
+        ]
+        if decisions:
+            lines.extend(
+                f"  - {decision.decision} by {decision.reviewer.reviewer_id}: {decision.rationale}"
+                for decision in decisions
+            )
+        else:
+            lines.append("  - None recorded.")
+        lines.extend(
+            [
+                f"- Review status: {item.review_status}",
+                f"- Review priority bucket: {item.priority_bucket}",
+            ]
+        )
+        lines.append("- Reviewer comments summary:")
+        if comments:
+            lines.extend(
+                f"  - {comment.comment_type} by {comment.reviewer.reviewer_id}: "
+                f"{comment.comment_text}"
+                for comment in comments
+            )
+        else:
+            lines.append("  - None recorded.")
+        lines.append("- Follow-up requests:")
+        if followups:
+            lines.extend(
+                f"  - {request.request_type} ({request.priority}, {request.status}): "
+                f"{request.request_text}"
+                for request in followups
+            )
+        else:
+            lines.append("  - None recorded.")
+        availability = (
+            "available"
+            if self._validation_handoff_available(item.review_item_id, review_context)
+            else "not recorded"
+        )
+        lines.append(f"- Validation handoff availability: {availability}")
+        return lines
+
+    def _generated_review_lines(
+        self,
+        item: ReviewItem | None,
+        review_context: dict[str, Any] | None,
+    ) -> list[str]:
+        if item is None:
+            return [
+                "- Review priority bucket: unavailable",
+                "- Expert decision: none recorded",
+            ]
+        decisions = self._review_decisions_for_item(item.review_item_id, review_context)
+        latest = decisions[-1].decision if decisions else "none recorded"
+        return [
+            f"- Review priority bucket: {item.priority_bucket}",
+            f"- Expert decision: {latest}",
+            "- Reviewer decisions are expert triage labels, not scientific evidence.",
+        ]
+
+    def _review_decisions_for_item(
+        self,
+        review_item_id: str,
+        review_context: dict[str, Any] | None,
+    ) -> list[Any]:
+        workspace = review_context.get("workspace") if review_context else None
+        if not isinstance(workspace, ReviewWorkspace):
+            return []
+        return [
+            decision
+            for decision in workspace.decisions
+            if decision.review_item_id == review_item_id
+        ]
+
+    def _review_comments_for_item(
+        self,
+        review_item_id: str,
+        review_context: dict[str, Any] | None,
+    ) -> list[Any]:
+        workspace = review_context.get("workspace") if review_context else None
+        if not isinstance(workspace, ReviewWorkspace):
+            return []
+        return [
+            comment for comment in workspace.comments if comment.review_item_id == review_item_id
+        ]
+
+    def _review_followups_for_item(
+        self,
+        review_item_id: str,
+        review_context: dict[str, Any] | None,
+    ) -> list[Any]:
+        workspace = review_context.get("workspace") if review_context else None
+        if not isinstance(workspace, ReviewWorkspace):
+            return []
+        return [
+            request
+            for request in workspace.followup_requests
+            if request.review_item_id == review_item_id
+        ]
+
+    def _validation_handoff_available(
+        self,
+        review_item_id: str,
+        review_context: dict[str, Any] | None,
+    ) -> bool:
+        workspace = review_context.get("workspace") if review_context else None
+        if not isinstance(workspace, ReviewWorkspace):
+            return False
+        handoffs = workspace.metadata.get("validation_handoffs")
+        if isinstance(handoffs, list):
+            return any(
+                isinstance(handoff, dict) and handoff.get("review_item_id") == review_item_id
+                for handoff in handoffs
+            )
+        return any(
+            request.review_item_id == review_item_id
+            and request.request_type == "validation_handoff"
+            for request in workspace.followup_requests
+        )
+
+    def _candidate_section(
+        self,
+        rank: int,
+        candidate: MoleculeCandidate,
+        review_context: dict[str, Any] | None = None,
+    ) -> list[str]:
         score = candidate.score_breakdown
         confidence = score.confidence if score else 0.0
         lines = [
@@ -583,6 +881,17 @@ class ReportWriterAgent(BaseAgent):
         lines.extend(self._candidate_coverage_lines(candidate))
         lines.extend(["", "Developability triage:"])
         lines.extend(self._candidate_developability_lines(candidate.developability_assessment))
+        lines.extend(["", "Expert review:"])
+        lines.extend(
+            self._candidate_review_lines(
+                self._review_item_for_candidate(
+                    review_context,
+                    candidate_name=candidate.name,
+                    candidate_id=self._candidate_identifier(candidate),
+                ),
+                review_context,
+            )
+        )
         lines.extend(["", "Known indications and warnings:"])
         lines.extend(self._known_indication_warning_lines(candidate.evidence))
         lines.extend(["", "Source provenance:"])
@@ -597,6 +906,7 @@ class ReportWriterAgent(BaseAgent):
     def _generated_molecule_hypothesis_lines(
         self,
         context: PipelineContext,
+        review_context: dict[str, Any] | None = None,
     ) -> list[str]:
         generation_run = self._generation_run(context)
         retained = generation_run.retained if generation_run is not None else []
@@ -605,6 +915,7 @@ class ReportWriterAgent(BaseAgent):
         header = [
             "- Generated molecules are computational structures.",
             "- Generated molecules have no direct experimental evidence.",
+            "- Generated hypothesis; no direct experimental evidence.",
             ("- Their scores are generation-prioritization scores, not efficacy predictions."),
             (
                 "- They require chemical review, synthesis feasibility review, ADMET "
@@ -651,11 +962,21 @@ class ReportWriterAgent(BaseAgent):
         ]
 
         if not retained:
-            lines.extend(self._legacy_generated_candidate_lines(context.generated_candidates))
+            lines.extend(
+                self._legacy_generated_candidate_lines(
+                    context.generated_candidates,
+                    review_context,
+                )
+            )
             return lines
 
         seed_names_by_id = self._seed_names_by_id(generation_run)
         for rank, candidate in enumerate(retained, start=1):
+            review_item = self._review_item_for_candidate(
+                review_context,
+                candidate_name=candidate.generated_id,
+                candidate_id=candidate.generated_id,
+            )
             breakdown = candidate.score_breakdown
             validation = candidate.validation
             novelty = candidate.novelty
@@ -714,6 +1035,9 @@ class ReportWriterAgent(BaseAgent):
                     "",
                     *self._candidate_developability_lines(candidate.developability_assessment),
                     "",
+                    "Expert review:",
+                    *self._generated_review_lines(review_item, review_context),
+                    "",
                     "Warnings:",
                     *[
                         f"- {warning}"
@@ -731,9 +1055,15 @@ class ReportWriterAgent(BaseAgent):
     def _legacy_generated_candidate_lines(
         self,
         generated_candidates: list[GeneratedMoleculeHypothesis],
+        review_context: dict[str, Any] | None = None,
     ) -> list[str]:
         lines: list[str] = []
         for candidate in generated_candidates:
+            review_item = self._review_item_for_candidate(
+                review_context,
+                candidate_name=candidate.name,
+                candidate_id=str(candidate.rank or candidate.name),
+            )
             rank = candidate.rank or "-"
             lines.extend(
                 [
@@ -742,6 +1072,8 @@ class ReportWriterAgent(BaseAgent):
                     "",
                     f"- Canonical SMILES: `{candidate.canonical_smiles}`",
                     f"- Conditioned target(s): {candidate.target_symbol}",
+                    "- Generated hypothesis; no direct experimental evidence",
+                    *self._generated_review_lines(review_item, review_context),
                     f"- Generation method: {candidate.source}",
                     f"- Final generation score: {candidate.generation_score:.3f}",
                     (
@@ -2565,7 +2897,7 @@ class ReportWriterAgent(BaseAgent):
     def _format_distribution(self, payload: dict[str, int]) -> str:
         if not payload:
             return "None recorded"
-        return ", ".join(f"{key}={value}" for key, value in sorted(payload.items()))
+        return ", ".join(f"{key}: {value}" for key, value in sorted(payload.items()))
 
     def _developability_config_payload(self, context: PipelineContext) -> dict[str, Any]:
         config = context.config.get("ranker_config")
