@@ -29,6 +29,14 @@ from sqlalchemy import (
 from sqlalchemy.engine import make_url
 
 from molecule_ranker.codex_backbone.guardrails import redact_secrets
+from molecule_ranker.integrations.schemas import (
+    ConnectorConfig,
+    ExternalIdMapping,
+    ExternalRecordEnvelope,
+    IntegrationCredentialCreate,
+    IntegrationCredentialRef,
+    SyncJobRecord,
+)
 from molecule_ranker.platform.auth import (
     AuthError,
     PasswordHasher,
@@ -387,6 +395,107 @@ activity_feed = Table(
     Column("metadata_json", JSON, nullable=False, default=dict),
 )
 
+integration_connectors = Table(
+    "integration_connectors",
+    metadata,
+    Column("connector_id", String(128), primary_key=True),
+    Column("org_id", String(128), nullable=False, index=True),
+    Column("project_id", String(128), nullable=True, index=True),
+    Column("name", String(255), nullable=False),
+    Column("provider", String(64), nullable=False, index=True),
+    Column("kind", String(64), nullable=False, index=True),
+    Column("mode", String(64), nullable=False, index=True),
+    Column("direction", String(64), nullable=False),
+    Column("base_url", Text, nullable=True),
+    Column("credential_ref_json", JSON, nullable=True),
+    Column("config_json", JSON, nullable=False, default=dict),
+    Column("allow_writes", Boolean, nullable=False, default=False),
+    Column("explicit_write_permission", Boolean, nullable=False, default=False),
+    Column("sandbox", Boolean, nullable=False, default=True),
+    Column("created_by_user_id", String(128), nullable=True, index=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("metadata_json", JSON, nullable=False, default=dict),
+)
+
+integration_credentials = Table(
+    "integration_credentials",
+    metadata,
+    Column("credential_id", String(128), primary_key=True),
+    Column("connector_id", String(128), nullable=True, index=True),
+    Column("name", String(255), nullable=False),
+    Column("backend", String(64), nullable=False),
+    Column("key_ref", Text, nullable=True),
+    Column("secret_hash", String(512), nullable=True),
+    Column("secret_salt", String(255), nullable=True),
+    Column("created_by_user_id", String(128), nullable=True, index=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("revoked_at", DateTime(timezone=True), nullable=True),
+    Column("metadata_json", JSON, nullable=False, default=dict),
+)
+
+integration_sync_jobs = Table(
+    "integration_sync_jobs",
+    metadata,
+    Column("sync_job_id", String(128), primary_key=True),
+    Column("connector_id", String(128), nullable=False, index=True),
+    Column("org_id", String(128), nullable=False, index=True),
+    Column("project_id", String(128), nullable=True, index=True),
+    Column("direction", String(64), nullable=False),
+    Column("mode", String(64), nullable=False),
+    Column("status", String(64), nullable=False, index=True),
+    Column("started_at", DateTime(timezone=True), nullable=True),
+    Column("completed_at", DateTime(timezone=True), nullable=True),
+    Column("rows_seen", Integer, nullable=False, default=0),
+    Column("rows_valid", Integer, nullable=False, default=0),
+    Column("rows_rejected", Integer, nullable=False, default=0),
+    Column("contract_report_json", JSON, nullable=True),
+    Column("metadata_json", JSON, nullable=False, default=dict),
+)
+
+integration_sync_audit_logs = Table(
+    "integration_sync_audit_logs",
+    metadata,
+    Column("sync_audit_id", String(128), primary_key=True),
+    Column("sync_job_id", String(128), nullable=False, index=True),
+    Column("connector_id", String(128), nullable=False, index=True),
+    Column("event_type", String(128), nullable=False, index=True),
+    Column("timestamp", DateTime(timezone=True), nullable=False),
+    Column("summary", Text, nullable=False),
+    Column("metadata_json", JSON, nullable=False, default=dict),
+)
+
+external_id_mappings = Table(
+    "external_id_mappings",
+    metadata,
+    Column("mapping_id", String(128), primary_key=True),
+    Column("connector_id", String(128), nullable=False, index=True),
+    Column("internal_id", String(255), nullable=False, index=True),
+    Column("external_id", String(255), nullable=False, index=True),
+    Column("source_system", String(255), nullable=False, index=True),
+    Column("source_record_id", String(255), nullable=False, index=True),
+    Column("mapping_method", String(64), nullable=False),
+    Column("status", String(64), nullable=False, index=True),
+    Column("confidence", Integer, nullable=False, default=1000),
+    Column("validation_evidence_json", JSON, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+integration_provenance_records = Table(
+    "integration_provenance_records",
+    metadata,
+    Column("provenance_record_id", String(128), primary_key=True),
+    Column("sync_job_id", String(128), nullable=False, index=True),
+    Column("connector_id", String(128), nullable=False, index=True),
+    Column("record_type", String(128), nullable=False, index=True),
+    Column("source_system", String(255), nullable=False, index=True),
+    Column("source_record_id", String(255), nullable=False, index=True),
+    Column("source_updated_at", DateTime(timezone=True), nullable=True),
+    Column("imported_at", DateTime(timezone=True), nullable=False),
+    Column("payload_json", JSON, nullable=False, default=dict),
+    Column("raw_metadata_json", JSON, nullable=False, default=dict),
+)
+
 REQUIRED_TABLES = {
     table.name
     for table in [
@@ -410,6 +519,12 @@ REQUIRED_TABLES = {
         assignments,
         notifications,
         activity_feed,
+        integration_connectors,
+        integration_credentials,
+        integration_sync_jobs,
+        integration_sync_audit_logs,
+        external_id_mappings,
+        integration_provenance_records,
     ]
 }
 
@@ -419,7 +534,7 @@ class PlatformDatabaseError(ValueError):
 
 
 class PlatformDatabase:
-    """Central V0.8 platform metadata database.
+    """Central V0.9 platform metadata database.
 
     SQLite is the local/dev default. PostgreSQL URLs are supported for hosted
     deployments through SQLAlchemy and psycopg.
@@ -1640,7 +1755,7 @@ class PlatformDatabase:
             rows = (
                 connection.execute(
                     select(platform_jobs)
-                    .where(platform_jobs.c.status.in_(["failed", "guardrail_failed"]))
+                    .where(platform_jobs.c.status.in_(["failed", "partial", "guardrail_failed"]))
                     .order_by(platform_jobs.c.updated_at.desc())
                     .limit(limit)
                 )
@@ -1674,6 +1789,334 @@ class PlatformDatabase:
             "status_counts": status_counts,
             "latest_worker_job_at": latest.isoformat() if latest else None,
         }
+
+    def create_integration_credential(
+        self,
+        request: IntegrationCredentialCreate,
+        *,
+        actor_user_id: str | None = None,
+    ) -> IntegrationCredentialRef:
+        credential_id = f"cred-{uuid.uuid4().hex[:16]}"
+        backend = "platform_hash"
+        key_ref = None
+        secret_hash = None
+        secret_salt = None
+        if request.secret_value:
+            secret_salt, secret_hash = hash_token(request.secret_value)
+        elif request.secret_env_var:
+            backend = "env"
+            key_ref = request.secret_env_var
+        elif request.vault_ref:
+            backend = "vault"
+            key_ref = request.vault_ref
+        now = _now()
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(integration_credentials).values(
+                    credential_id=credential_id,
+                    connector_id=request.connector_id,
+                    name=request.name,
+                    backend=backend,
+                    key_ref=key_ref,
+                    secret_hash=secret_hash,
+                    secret_salt=secret_salt,
+                    created_by_user_id=actor_user_id,
+                    created_at=now,
+                    revoked_at=None,
+                    metadata_json=_redact_json(request.metadata),
+                )
+            )
+        self.write_audit(
+            "integration_credential_created",
+            actor_user_id=actor_user_id,
+            summary=f"Created integration credential {credential_id}.",
+            object_type="integration_credential",
+            object_id=credential_id,
+            metadata={"credential_id": credential_id, "backend": backend},
+        )
+        return IntegrationCredentialRef(
+            credential_id=credential_id,
+            backend=backend,  # type: ignore[arg-type]
+            key_ref=key_ref,
+            configured=True,
+            created_at=now,
+        )
+
+    def create_integration_connector(
+        self,
+        connector: ConnectorConfig,
+        *,
+        actor_user_id: str | None = None,
+        org_id: str = "default",
+        project_id: str | None = None,
+    ) -> ConnectorConfig:
+        now = _now()
+        stored = connector.model_copy(update={"created_at": now, "updated_at": now})
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(integration_connectors).values(
+                    connector_id=stored.connector_id,
+                    org_id=org_id,
+                    project_id=project_id,
+                    name=stored.name,
+                    provider=stored.provider,
+                    kind=stored.kind,
+                    mode=stored.mode,
+                    direction=stored.direction,
+                    base_url=stored.base_url,
+                    credential_ref_json=stored.credential_ref.model_dump(mode="json")
+                    if stored.credential_ref
+                    else None,
+                    config_json=_redact_json(stored.config),
+                    allow_writes=stored.allow_writes,
+                    explicit_write_permission=stored.explicit_write_permission,
+                    sandbox=stored.sandbox,
+                    created_by_user_id=actor_user_id,
+                    created_at=stored.created_at,
+                    updated_at=stored.updated_at,
+                    metadata_json=_redact_json(stored.metadata),
+                )
+            )
+        self.write_audit(
+            "integration_connector_created",
+            actor_user_id=actor_user_id,
+            org_id=org_id,
+            project_id=project_id,
+            summary=f"Created {stored.provider} integration connector {stored.connector_id}.",
+            object_type="integration_connector",
+            object_id=stored.connector_id,
+            metadata={
+                "connector_id": stored.connector_id,
+                "provider": stored.provider,
+                "mode": stored.mode,
+                "allow_writes": stored.allow_writes,
+            },
+        )
+        return stored
+
+    def get_integration_connector(self, connector_id: str) -> ConnectorConfig | None:
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(
+                    select(integration_connectors).where(
+                        integration_connectors.c.connector_id == connector_id
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        return _connector_config(row) if row else None
+
+    def list_integration_connectors(
+        self,
+        *,
+        org_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[ConnectorConfig]:
+        statement = select(integration_connectors)
+        if org_id is not None:
+            statement = statement.where(integration_connectors.c.org_id == org_id)
+        if project_id is not None:
+            statement = statement.where(integration_connectors.c.project_id == project_id)
+        statement = statement.order_by(integration_connectors.c.created_at.desc())
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().fetchall()
+        return [_connector_config(row) for row in rows]
+
+    def start_integration_sync_job(
+        self,
+        *,
+        connector_id: str,
+        actor_user_id: str | None = None,
+        org_id: str = "default",
+        project_id: str | None = None,
+        direction: str = "import",
+        mode: str = "dry_run",
+        metadata: dict[str, Any] | None = None,
+    ) -> SyncJobRecord:
+        sync_job = SyncJobRecord(
+            connector_id=connector_id,
+            org_id=org_id,
+            project_id=project_id,
+            direction=direction,  # type: ignore[arg-type]
+            mode=mode,  # type: ignore[arg-type]
+            status="running",
+            started_at=_now(),
+            metadata=_redact_json(metadata or {}),
+        )
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(integration_sync_jobs).values(
+                    sync_job_id=sync_job.sync_job_id,
+                    connector_id=sync_job.connector_id,
+                    org_id=sync_job.org_id,
+                    project_id=sync_job.project_id,
+                    direction=sync_job.direction,
+                    mode=sync_job.mode,
+                    status=sync_job.status,
+                    started_at=sync_job.started_at,
+                    completed_at=None,
+                    rows_seen=0,
+                    rows_valid=0,
+                    rows_rejected=0,
+                    contract_report_json=None,
+                    metadata_json=sync_job.metadata,
+                )
+            )
+        self._write_sync_audit(
+            sync_job.sync_job_id,
+            connector_id=connector_id,
+            event_type="sync_started",
+            summary=f"Started {direction} sync in {mode} mode.",
+            metadata={"actor_user_id": actor_user_id, "project_id": project_id},
+        )
+        return sync_job
+
+    def complete_integration_sync_job(
+        self,
+        sync_job: SyncJobRecord,
+        *,
+        records: list[ExternalRecordEnvelope] | None = None,
+    ) -> SyncJobRecord:
+        completed = sync_job.model_copy(update={"completed_at": _now()})
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(integration_sync_jobs)
+                .where(integration_sync_jobs.c.sync_job_id == completed.sync_job_id)
+                .values(
+                    status=completed.status,
+                    completed_at=completed.completed_at,
+                    rows_seen=completed.rows_seen,
+                    rows_valid=completed.rows_valid,
+                    rows_rejected=completed.rows_rejected,
+                    contract_report_json=completed.contract_report.model_dump(mode="json")
+                    if completed.contract_report
+                    else None,
+                    metadata_json=_redact_json(completed.metadata),
+                )
+            )
+            for record in records or []:
+                connection.execute(
+                    insert(integration_provenance_records).values(
+                        provenance_record_id=f"prov-{uuid.uuid4().hex[:16]}",
+                        sync_job_id=record.provenance.sync_job_id,
+                        connector_id=completed.connector_id,
+                        record_type=record.record_type,
+                        source_system=record.provenance.source_system,
+                        source_record_id=record.provenance.source_record_id,
+                        source_updated_at=record.provenance.source_updated_at,
+                        imported_at=record.provenance.imported_at,
+                        payload_json=_redact_json(record.payload),
+                        raw_metadata_json=_redact_json(record.provenance.raw_metadata),
+                    )
+                )
+        self._write_sync_audit(
+            completed.sync_job_id,
+            connector_id=completed.connector_id,
+            event_type="sync_completed",
+            summary=f"Completed sync with status {completed.status}.",
+            metadata={
+                "rows_seen": completed.rows_seen,
+                "rows_valid": completed.rows_valid,
+                "rows_rejected": completed.rows_rejected,
+            },
+        )
+        return completed
+
+    def list_integration_sync_jobs(
+        self,
+        *,
+        connector_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SyncJobRecord]:
+        statement = select(integration_sync_jobs)
+        if connector_id is not None:
+            statement = statement.where(integration_sync_jobs.c.connector_id == connector_id)
+        statement = statement.order_by(integration_sync_jobs.c.started_at.desc()).limit(limit)
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().fetchall()
+        return [_sync_job(row) for row in rows]
+
+    def list_integration_sync_audit_logs(
+        self,
+        *,
+        sync_job_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        statement = select(integration_sync_audit_logs)
+        if sync_job_id is not None:
+            statement = statement.where(integration_sync_audit_logs.c.sync_job_id == sync_job_id)
+        statement = statement.order_by(integration_sync_audit_logs.c.timestamp.desc()).limit(limit)
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().fetchall()
+        return [_public_row(row) for row in rows]
+
+    def save_external_id_mappings(
+        self,
+        mappings: list[ExternalIdMapping],
+    ) -> list[ExternalIdMapping]:
+        with self.engine.begin() as connection:
+            for mapping in mappings:
+                connection.execute(
+                    insert(external_id_mappings).values(
+                        mapping_id=mapping.mapping_id,
+                        connector_id=mapping.connector_id,
+                        internal_id=mapping.internal_id,
+                        external_id=mapping.external_id,
+                        source_system=mapping.source_system,
+                        source_record_id=mapping.source_record_id,
+                        mapping_method=mapping.mapping_method,
+                        status=mapping.status,
+                        confidence=int(mapping.confidence * 1000),
+                        validation_evidence_json=_redact_json(mapping.validation_evidence),
+                        created_at=mapping.created_at,
+                    )
+                )
+        for mapping in mappings:
+            self.write_audit(
+                "external_id_mapping_saved",
+                summary=f"Saved external ID mapping {mapping.mapping_id}.",
+                object_type="external_id_mapping",
+                object_id=mapping.mapping_id,
+                metadata={
+                    "connector_id": mapping.connector_id,
+                    "mapping_method": mapping.mapping_method,
+                    "status": mapping.status,
+                },
+            )
+        return mappings
+
+    def integration_dashboard_summary(self) -> dict[str, Any]:
+        return {
+            "connectors": [
+                connector.model_dump(mode="json", exclude={"credential_ref"})
+                for connector in self.list_integration_connectors()
+            ],
+            "sync_jobs": [job.model_dump(mode="json") for job in self.list_integration_sync_jobs()],
+            "sync_audit_logs": self.list_integration_sync_audit_logs(limit=20),
+        }
+
+    def _write_sync_audit(
+        self,
+        sync_job_id: str,
+        *,
+        connector_id: str,
+        event_type: str,
+        summary: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(integration_sync_audit_logs).values(
+                    sync_audit_id=f"sync-audit-{uuid.uuid4().hex[:16]}",
+                    sync_job_id=sync_job_id,
+                    connector_id=connector_id,
+                    event_type=event_type,
+                    timestamp=_now(),
+                    summary=redact_secrets(summary),
+                    metadata_json=_redact_json(metadata),
+                )
+            )
 
     def configure_platform_settings(
         self,
@@ -2047,6 +2490,48 @@ def _activity(row: Any) -> ActivityFeedItem:
     )
 
 
+def _connector_config(row: Any) -> ConnectorConfig:
+    credential_ref = row["credential_ref_json"]
+    return ConnectorConfig(
+        connector_id=str(row["connector_id"]),
+        name=str(row["name"]),
+        provider=str(row["provider"]),  # type: ignore[arg-type]
+        kind=str(row["kind"]),  # type: ignore[arg-type]
+        mode=str(row["mode"]),  # type: ignore[arg-type]
+        direction=str(row["direction"]),  # type: ignore[arg-type]
+        base_url=row["base_url"],
+        credential_ref=IntegrationCredentialRef.model_validate(credential_ref)
+        if credential_ref
+        else None,
+        config=dict(row["config_json"] or {}),
+        allow_writes=bool(row["allow_writes"]),
+        explicit_write_permission=bool(row["explicit_write_permission"]),
+        sandbox=bool(row["sandbox"]),
+        created_at=_aware(row["created_at"]),
+        updated_at=_aware(row["updated_at"]),
+        metadata=dict(row["metadata_json"] or {}),
+    )
+
+
+def _sync_job(row: Any) -> SyncJobRecord:
+    return SyncJobRecord(
+        sync_job_id=str(row["sync_job_id"]),
+        connector_id=str(row["connector_id"]),
+        org_id=str(row["org_id"]),
+        project_id=row["project_id"],
+        direction=str(row["direction"]),  # type: ignore[arg-type]
+        mode=str(row["mode"]),  # type: ignore[arg-type]
+        status=str(row["status"]),  # type: ignore[arg-type]
+        started_at=_aware(row["started_at"]) if row["started_at"] else None,
+        completed_at=_aware(row["completed_at"]) if row["completed_at"] else None,
+        rows_seen=int(row["rows_seen"] or 0),
+        rows_valid=int(row["rows_valid"] or 0),
+        rows_rejected=int(row["rows_rejected"] or 0),
+        contract_report=row["contract_report_json"],
+        metadata=dict(row["metadata_json"] or {}),
+    )
+
+
 def _job(row: Any) -> JobRecord:
     status = "pending" if row["status"] == "queued" else str(row["status"])
     return JobRecord(
@@ -2084,6 +2569,12 @@ __all__ = [
     "SCHEMA_VERSION",
     "activity_feed",
     "assignments",
+    "external_id_mappings",
+    "integration_connectors",
+    "integration_credentials",
+    "integration_provenance_records",
+    "integration_sync_audit_logs",
+    "integration_sync_jobs",
     "metadata",
     "notifications",
     "project_comments",

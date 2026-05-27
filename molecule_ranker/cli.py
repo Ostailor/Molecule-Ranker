@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import uuid
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -165,11 +166,11 @@ experiment_app = typer.Typer(
     no_args_is_help=True,
 )
 project_app = typer.Typer(
-    help="V0.8 project workspace, sharing, jobs, dashboard, and API commands.",
+    help="V0.9 project workspace, sharing, jobs, dashboard, and API commands.",
     no_args_is_help=True,
 )
 codex_app = typer.Typer(
-    help="V0.8 controlled Codex CLI assistant, worker, and engineering automation commands.",
+    help="V0.9 controlled Codex CLI assistant, worker, and engineering automation commands.",
     no_args_is_help=True,
 )
 codex_assist_app = typer.Typer(
@@ -201,11 +202,11 @@ config_app = typer.Typer(
     no_args_is_help=True,
 )
 worker_app = typer.Typer(
-    help="Run V0.8 background workers.",
+    help="Run V0.9 background workers.",
     no_args_is_help=True,
 )
 job_app = typer.Typer(
-    help="Inspect and cancel V0.8 background jobs.",
+    help="Inspect and cancel V0.9 background jobs.",
     no_args_is_help=True,
 )
 notifications_app = typer.Typer(
@@ -224,6 +225,38 @@ platform_retention_app = typer.Typer(
     help="Run hosted platform data retention policies.",
     no_args_is_help=True,
 )
+integration_app = typer.Typer(
+    help="Manage external research-system integrations.",
+    no_args_is_help=True,
+)
+integration_system_app = typer.Typer(
+    help="Manage external systems.",
+    no_args_is_help=True,
+)
+integration_credential_app = typer.Typer(
+    help="Manage integration credential references.",
+    no_args_is_help=True,
+)
+integration_mapping_app = typer.Typer(
+    help="Review and approve integration entity mappings.",
+    no_args_is_help=True,
+)
+integration_sync_app = typer.Typer(
+    help="Enqueue and inspect integration sync jobs.",
+    no_args_is_help=True,
+)
+integration_webhook_app = typer.Typer(
+    help="Test webhook signing and payload handling.",
+    no_args_is_help=True,
+)
+integration_warehouse_app = typer.Typer(
+    help="Export curated warehouse packages.",
+    no_args_is_help=True,
+)
+integration_benchling_app = typer.Typer(
+    help="Benchling connector helpers.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
@@ -238,10 +271,18 @@ app.add_typer(job_app, name="job")
 app.add_typer(notifications_app, name="notifications")
 app.add_typer(admin_app, name="admin")
 app.add_typer(platform_cli_app, name="platform")
+app.add_typer(integration_app, name="integration")
 codex_app.add_typer(codex_assist_app, name="assist")
 codex_app.add_typer(codex_engineering_app, name="engineering")
 auth_cli_app.add_typer(auth_token_app, name="token")
 platform_cli_app.add_typer(platform_retention_app, name="retention")
+integration_app.add_typer(integration_system_app, name="system")
+integration_app.add_typer(integration_credential_app, name="credential")
+integration_app.add_typer(integration_mapping_app, name="mapping")
+integration_app.add_typer(integration_sync_app, name="sync")
+integration_app.add_typer(integration_webhook_app, name="webhook")
+integration_app.add_typer(integration_warehouse_app, name="warehouse")
+integration_app.add_typer(integration_benchling_app, name="benchling")
 
 
 @app.callback()
@@ -253,6 +294,137 @@ def main() -> None:
 def version() -> None:
     """Print the package version."""
     typer.echo(__version__)
+
+
+@integration_system_app.command("create")
+def integration_system_create(
+    name: Annotated[str, typer.Option("--name", help="External system display name.")],
+    system_type: Annotated[str, typer.Option("--system-type", help="External system type.")],
+    vendor: Annotated[str | None, typer.Option("--vendor")] = None,
+    base_url: Annotated[str | None, typer.Option("--base-url")] = None,
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Default mode: read_only, dry_run, or write_enabled."),
+    ] = "dry_run",
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create an external integration system."""
+    from molecule_ranker.integrations.schemas import ExternalSystem
+    from molecule_ranker.integrations.store import IntegrationStore
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    store = IntegrationStore(database, org_id=org_id, project_id=project_id)
+    now = datetime.now(UTC)
+    system = ExternalSystem(
+        external_system_id=f"ext-{slugify(name)}",
+        name=name,
+        system_type=system_type,  # type: ignore[arg-type]
+        vendor=vendor,
+        base_url=base_url,
+        enabled=True,
+        default_mode=mode,  # type: ignore[arg-type]
+        created_at=now,
+        updated_at=now,
+        metadata={},
+    )
+    try:
+        created = store.create_external_system(system, org_id=org_id, project_id=project_id)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json({"system": created.model_dump(mode="json")})
+        return
+    typer.echo(f"Created external system: {created.external_system_id}")
+
+
+@integration_system_app.command("list")
+def integration_system_list(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List configured external systems."""
+    from molecule_ranker.integrations.store import IntegrationStore
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    store = IntegrationStore(database, org_id=org_id, project_id=project_id)
+    systems = store.list_external_systems(org_id=org_id, project_id=project_id)
+    if json_output:
+        _echo_json({"systems": [system.model_dump(mode="json") for system in systems]})
+        return
+    for system in systems:
+        typer.echo(
+            "\t".join(
+                [
+                    system.external_system_id,
+                    system.name,
+                    system.system_type,
+                    system.vendor or "",
+                    system.default_mode,
+                ]
+            )
+        )
+
+
+@integration_system_app.command("health")
+def integration_system_health(
+    external_system_id: Annotated[str, typer.Argument(help="External system ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Show a safe local health summary for an external system."""
+    from molecule_ranker.integrations.store import IntegrationStore
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    system = IntegrationStore(database, org_id=org_id, project_id=project_id).get_external_system(
+        external_system_id
+    )
+    if system is None:
+        typer.echo(f"External system not found: {external_system_id}", err=True)
+        raise typer.Exit(code=1)
+    status = {
+        "external_system_id": external_system_id,
+        "status": "ok" if system.enabled else "blocked",
+        "mode": system.default_mode,
+        "vendor": system.vendor,
+        "base_url_configured": bool(system.base_url),
+        "checked_at": datetime.now(UTC).isoformat(),
+    }
+    if json_output:
+        _echo_json(status)
+        return
+    typer.echo(f"{external_system_id}: {status['status']} ({system.default_mode})")
 
 
 @app.command()
@@ -287,6 +459,650 @@ def health(
         raise typer.Exit(code=1)
 
 
+@integration_credential_app.command("create")
+def integration_credential_create(
+    external_system_id: Annotated[
+        str,
+        typer.Option("--external-system-id", help="External system ID for this credential."),
+    ],
+    credential_type: Annotated[
+        str,
+        typer.Option(
+            "--credential-type",
+            help="Credential type, for example api_key or bearer_token.",
+        ),
+    ],
+    secret_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--secret-ref",
+            help=(
+                "Reference only: env:NAME, local_encrypted_file:/path, "
+                "or external_secret_manager:path."
+            ),
+        ),
+    ] = None,
+    secret_env_var: Annotated[
+        str | None,
+        typer.Option("--secret-env-var", help="Environment variable containing the secret."),
+    ] = None,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    credential_id: Annotated[
+        str | None,
+        typer.Option("--credential-id", help="Optional credential ID."),
+    ] = None,
+    actor_user_id: Annotated[
+        str | None,
+        typer.Option("--actor-user-id", help="Optional audit actor user ID."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create a credential reference without storing the secret value."""
+    from molecule_ranker.integrations.credentials import create_credential_reference
+
+    resolved_secret_ref = secret_ref or (f"env:{secret_env_var}" if secret_env_var else None)
+    if resolved_secret_ref is None:
+        typer.echo("Error: provide --secret-env-var or --secret-ref.", err=True)
+        raise typer.Exit(code=1)
+    credential = create_credential_reference(
+        external_system_id=external_system_id,
+        credential_type=credential_type,  # type: ignore[arg-type]
+        secret_ref=resolved_secret_ref,
+        root_dir=root_dir,
+        credential_id=credential_id,
+        actor_user_id=actor_user_id,
+    )
+    payload = {"credential": credential.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Credential reference created: {credential.credential_id}")
+
+
+@integration_credential_app.command("list")
+def integration_credential_list(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    include_deleted: Annotated[
+        bool,
+        typer.Option("--include-deleted", help="Include revoked/deleted references."),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List credential references with secret material redacted."""
+    from molecule_ranker.integrations.credentials import list_credentials_redacted
+
+    credentials = list_credentials_redacted(root_dir=root_dir, include_deleted=include_deleted)
+    if json_output:
+        _echo_json({"credentials": credentials})
+        return
+    typer.echo("Credential ID\tExternal system\tType\tSecret ref\tStatus")
+    for credential in credentials:
+        metadata = dict(credential.get("metadata") or {})
+        typer.echo(
+            "\t".join(
+                [
+                    str(credential["credential_id"]),
+                    str(credential["external_system_id"]),
+                    str(credential["credential_type"]),
+                    str(credential["secret_ref"]),
+                    str(metadata.get("status") or "active"),
+                ]
+            )
+        )
+
+
+@integration_credential_app.command("delete")
+def integration_credential_delete(
+    credential_id: Annotated[str, typer.Argument(help="Credential reference ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    actor_user_id: Annotated[
+        str | None,
+        typer.Option("--actor-user-id", help="Optional audit actor user ID."),
+    ] = None,
+    reason: Annotated[
+        str | None,
+        typer.Option("--reason", help="Optional deletion/revocation reason."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Revoke and hide an integration credential reference."""
+    from molecule_ranker.integrations.credentials import delete_credential_reference
+
+    credential = delete_credential_reference(
+        credential_id,
+        root_dir=root_dir,
+        actor_user_id=actor_user_id,
+        reason=reason,
+    )
+    if json_output:
+        _echo_json({"credential": credential})
+        return
+    typer.echo(f"Credential reference revoked: {credential_id}")
+
+
+@integration_credential_app.command("test")
+def integration_credential_test(
+    credential_id: Annotated[str, typer.Argument(help="Credential reference ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Validate a credential reference without printing the secret."""
+    from molecule_ranker.integrations.credentials import CredentialResolver
+
+    payload = CredentialResolver(root_dir=root_dir).validate_credential(credential_id)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Credential {credential_id}: {'ok' if payload['ok'] else 'failed'}")
+    typer.echo(str(payload["message"]))
+    if not payload["ok"]:
+        raise typer.Exit(code=1)
+
+
+@integration_sync_app.command("enqueue")
+def integration_sync_enqueue(
+    connector_id: Annotated[str, typer.Argument(help="Integration connector ID.")],
+    requested_by_user_id: Annotated[
+        str,
+        typer.Option("--user-id", help="User requesting the sync job."),
+    ],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    direction: Annotated[str, typer.Option("--direction")] = "import",
+    mode: Annotated[str, typer.Option("--mode")] = "dry_run",
+    object_type: Annotated[
+        list[str] | None,
+        typer.Option("--object-type", help="Object type to sync. Repeat for multiple types."),
+    ] = None,
+    job_type: Annotated[str, typer.Option("--job-type")] = "integration_sync",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Enqueue an integration sync through the V0.8 platform job queue."""
+    from molecule_ranker.integrations.sync import SyncRequest
+    from molecule_ranker.integrations.worker import enqueue_integration_sync_job
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    user = database.get_user(requested_by_user_id)
+    if user is None:
+        typer.echo(f"User not found: {requested_by_user_id}", err=True)
+        raise typer.Exit(code=1)
+    connector = database.get_integration_connector(connector_id)
+    if connector is None:
+        typer.echo(f"Connector not found: {connector_id}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        request = SyncRequest(
+            direction=direction,  # type: ignore[arg-type]
+            object_types=object_type or ["assay_results"],  # type: ignore[arg-type]
+            mode="dry_run" if mode == "sandbox" else mode,  # type: ignore[arg-type]
+            org_id=org_id,
+            project_id=project_id,
+            requested_by_user_id=user.user_id,
+        )
+        job = enqueue_integration_sync_job(
+            database=database,
+            connector=connector,
+            request=request,
+            requested_by=user,
+            job_type=job_type,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json({"job": job.model_dump(mode="json")})
+        return
+    typer.echo(f"Enqueued integration job: {job.job_id}")
+
+
+@integration_mapping_app.command("list")
+def integration_mapping_list(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    status: Annotated[str | None, typer.Option("--status")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List entity mappings for review."""
+    from molecule_ranker.integrations.store import IntegrationStore
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    store = IntegrationStore(database, org_id=org_id, project_id=project_id)
+    mappings = store.find_mappings(org_id=org_id, project_id=project_id, status=status)
+    if json_output:
+        _echo_json({"mappings": [mapping.model_dump(mode="json") for mapping in mappings]})
+        return
+    for mapping in mappings:
+        typer.echo(
+            "\t".join(
+                [
+                    mapping.mapping_id,
+                    mapping.internal_entity_type,
+                    mapping.internal_entity_id,
+                    mapping.external_ref.external_record_id,
+                    mapping.status,
+                ]
+            )
+        )
+
+
+@integration_mapping_app.command("approve")
+def integration_mapping_approve(
+    mapping_id: Annotated[str, typer.Argument(help="Mapping ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Approve a pending mapping."""
+    mapping = _update_mapping_cli(
+        mapping_id,
+        status="active",
+        root_dir=root_dir,
+        database_url=database_url,
+        db_path=db_path,
+        org_id=org_id,
+        project_id=project_id,
+    )
+    if json_output:
+        _echo_json({"mapping": mapping.model_dump(mode="json")})
+        return
+    typer.echo(f"Approved mapping: {mapping.mapping_id}")
+
+
+@integration_mapping_app.command("reject")
+def integration_mapping_reject(
+    mapping_id: Annotated[str, typer.Argument(help="Mapping ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Reject a pending mapping."""
+    mapping = _update_mapping_cli(
+        mapping_id,
+        status="rejected",
+        root_dir=root_dir,
+        database_url=database_url,
+        db_path=db_path,
+        org_id=org_id,
+        project_id=project_id,
+    )
+    if json_output:
+        _echo_json({"mapping": mapping.model_dump(mode="json")})
+        return
+    typer.echo(f"Rejected mapping: {mapping.mapping_id}")
+
+
+@integration_sync_app.command("run")
+def integration_sync_run(
+    external_system_id: Annotated[
+        str,
+        typer.Option("--external-system-id", help="External system ID."),
+    ],
+    direction: Annotated[str, typer.Option("--direction")] = "import",
+    object_type: Annotated[
+        list[str] | None,
+        typer.Option("--object-type", help="Object type to sync. Repeat for multiple types."),
+    ] = None,
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    write_enabled: Annotated[bool, typer.Option("--write-enabled")] = False,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    requested_by_user_id: Annotated[str | None, typer.Option("--user-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create and complete a guarded local sync job record."""
+    from molecule_ranker.integrations.schemas import SyncJob
+    from molecule_ranker.integrations.store import IntegrationStore
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    store = IntegrationStore(database, org_id=org_id, project_id=project_id)
+    system = store.get_external_system(external_system_id)
+    if system is None:
+        typer.echo(f"External system not found: {external_system_id}", err=True)
+        raise typer.Exit(code=1)
+    mode = "write_enabled" if write_enabled else "dry_run" if dry_run else system.default_mode
+    if mode == "write_enabled" and system.default_mode != "write_enabled":
+        typer.echo("Error: write-enabled sync requires a write_enabled external system.", err=True)
+        raise typer.Exit(code=1)
+    now = datetime.now(UTC)
+    try:
+        job = store.create_sync_job(
+            SyncJob(
+                sync_job_id=f"sync-{uuid.uuid4().hex[:16]}",
+                external_system_id=external_system_id,
+                project_id=project_id,
+                direction=direction,  # type: ignore[arg-type]
+                object_types=object_type or ["assay_results"],
+                mode=mode,  # type: ignore[arg-type]
+                status="queued",
+                requested_by_user_id=requested_by_user_id,
+                metadata={"cli": True, "dry_run": mode != "write_enabled"},
+            ),
+            org_id=org_id,
+        )
+        job = store.update_sync_job(
+            job.sync_job_id,
+            status="succeeded",
+            started_at=now,
+            completed_at=datetime.now(UTC),
+            records_seen=0,
+            warnings=["dry-run sync record only; no connector operation performed"]
+            if mode != "write_enabled"
+            else [],
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json({"sync_job": job.model_dump(mode="json")})
+        return
+    typer.echo(f"Sync job completed: {job.sync_job_id} ({job.mode})")
+
+
+@integration_sync_app.command("list")
+def integration_sync_list(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    external_system_id: Annotated[str | None, typer.Option("--external-system-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List integration sync jobs."""
+    from molecule_ranker.integrations.store import IntegrationStore
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    store = IntegrationStore(database, org_id=org_id, project_id=project_id)
+    jobs = store.list_sync_jobs(
+        org_id=org_id,
+        project_id=project_id,
+        external_system_id=external_system_id,
+    )
+    if json_output:
+        _echo_json({"sync_jobs": [job.model_dump(mode="json") for job in jobs]})
+        return
+    for job in jobs:
+        typer.echo("\t".join([job.sync_job_id, job.external_system_id, job.direction, job.status]))
+
+
+@integration_sync_app.command("show")
+def integration_sync_show(
+    sync_job_id: Annotated[str, typer.Argument(help="Sync job ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Show one integration sync job and its records."""
+    from molecule_ranker.integrations.store import IntegrationStore
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    store = IntegrationStore(database, org_id=org_id, project_id=project_id)
+    job = store.get_sync_job(sync_job_id)
+    if job is None:
+        typer.echo(f"Sync job not found: {sync_job_id}", err=True)
+        raise typer.Exit(code=1)
+    records = store.list_sync_records(sync_job_id=sync_job_id)
+    payload = {
+        "sync_job": job.model_dump(mode="json"),
+        "records": [record.model_dump(mode="json") for record in records],
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"{job.sync_job_id}: {job.status} ({len(records)} records)")
+
+
+@integration_webhook_app.command("test")
+def integration_webhook_test(
+    external_system_id: Annotated[str, typer.Option("--external-system-id")] = "test-system",
+    secret: Annotated[str, typer.Option("--secret", help="Webhook signing secret.")] = "dev-secret",
+    event_type: Annotated[str, typer.Option("--event-type")] = "test.event",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Generate a signed generic webhook test payload."""
+    from molecule_ranker.integrations.webhooks import sign_payload
+
+    payload = {
+        "webhook_event_id": f"webhook-test-{uuid.uuid4().hex[:8]}",
+        "external_system_id": external_system_id,
+        "event_type": event_type,
+        "external_record_id": "test-record",
+    }
+    raw = json.dumps(payload, sort_keys=True).encode()
+    result = {"payload": payload, "signature": sign_payload(raw, secret)}
+    if json_output:
+        _echo_json(result)
+        return
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@integration_warehouse_app.command("export")
+def integration_warehouse_export(
+    project_id: Annotated[str, typer.Option("--project-id")],
+    external_system_id: Annotated[str, typer.Option("--external-system-id")],
+    tables: Annotated[str, typer.Option("--tables", help="Comma-separated table aliases.")],
+    output_format: Annotated[str, typer.Option("--format")] = "csv",
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    output_dir: Annotated[Path, typer.Option("--output-dir")] = Path(
+        ".molecule-ranker/warehouse-export"
+    ),
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    org_id: Annotated[str, typer.Option("--org-id")] = "default",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Export curated warehouse tables as local artifacts or SQL previews."""
+    from molecule_ranker.integrations.store import IntegrationStore
+    from molecule_ranker.integrations.warehouse_models import (
+        build_sql_insert_upsert,
+        export_rows_csv,
+        export_rows_parquet,
+        resolve_table_name,
+    )
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    store = IntegrationStore(database, org_id=org_id, project_id=project_id)
+    system = store.get_external_system(external_system_id)
+    if system is None:
+        typer.echo(f"External system not found: {external_system_id}", err=True)
+        raise typer.Exit(code=1)
+    if output_format == "sql" and not dry_run and system.default_mode != "write_enabled":
+        typer.echo(
+            "Error: SQL warehouse export requires --dry-run or write_enabled system.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    output_root = output_dir if output_dir.is_absolute() else root_dir / output_dir
+    output_root.mkdir(parents=True, exist_ok=True)
+    exported: list[dict[str, Any]] = []
+    for raw_table in [part.strip() for part in tables.split(",") if part.strip()]:
+        table_name = resolve_table_name(raw_table)
+        rows = [{"org_id": org_id, "project_id": project_id, "source_system": "molecule_ranker"}]
+        if output_format == "csv":
+            path = export_rows_csv(table_name, rows, output_root / f"{table_name}.csv")
+            exported.append({"table": table_name, "path": str(path), "format": "csv"})
+        elif output_format == "parquet":
+            path = export_rows_parquet(table_name, rows, output_root / f"{table_name}.parquet")
+            exported.append({"table": table_name, "path": str(path), "format": "parquet"})
+        elif output_format == "sql":
+            sql, params = build_sql_insert_upsert(table_name, rows)
+            path = output_root / f"{table_name}.sql"
+            path.write_text(sql + "\n-- params: " + json.dumps(params, sort_keys=True) + "\n")
+            exported.append({"table": table_name, "path": str(path), "format": "sql"})
+        else:
+            typer.echo("Error: --format must be csv, parquet, or sql.", err=True)
+            raise typer.Exit(code=1)
+    if json_output:
+        _echo_json(
+            {
+                "external_system_id": external_system_id,
+                "project_id": project_id,
+                "dry_run": dry_run,
+                "exports": exported,
+            }
+        )
+        return
+    typer.echo(f"Warehouse export prepared: {len(exported)} table(s)")
+
+
+@integration_benchling_app.command("test")
+def integration_benchling_test(
+    external_system_id: Annotated[str | None, typer.Option("--external-system-id")] = None,
+    base_url: Annotated[str | None, typer.Option("--base-url")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = True,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Check Benchling connector configuration without exposing credentials."""
+    if dry_run:
+        payload = {
+            "status": "dry_run",
+            "external_system_id": external_system_id,
+            "base_url_configured": bool(base_url or os.getenv("BENCHLING_BASE_URL")),
+            "credential_env_configured": bool(os.getenv("BENCHLING_API_KEY")),
+        }
+        if json_output:
+            _echo_json(payload)
+            return
+        typer.echo(f"Benchling dry-run: {payload['status']}")
+        return
+    typer.echo(
+        "Error: live Benchling test is not enabled by default; use connector tests.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+@integration_benchling_app.command("import-assay-results")
+def integration_benchling_import_assay_results(
+    external_system_id: Annotated[str, typer.Option("--external-system-id")],
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = True,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Prepare a Benchling assay-result import task; no external read occurs in dry-run."""
+    payload = {
+        "external_system_id": external_system_id,
+        "project_id": project_id,
+        "dry_run": dry_run,
+        "status": "prepared",
+        "object_type": "assay_results",
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo("Benchling assay result import prepared.")
+
+
+@integration_benchling_app.command("export-dossier")
+def integration_benchling_export_dossier(
+    external_system_id: Annotated[str, typer.Option("--external-system-id")],
+    dossier_path: Annotated[Path | None, typer.Option("--dossier-path")] = None,
+    write_enabled: Annotated[bool, typer.Option("--write-enabled")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Prepare a Benchling dossier export; writes require --write-enabled."""
+    if not write_enabled:
+        payload = {
+            "external_system_id": external_system_id,
+            "dossier_path": str(dossier_path) if dossier_path else None,
+            "status": "dry_run",
+            "external_write": "blocked_without_write_enabled",
+        }
+        if json_output:
+            _echo_json(payload)
+            return
+        typer.echo("Benchling dossier export dry-run; no external write performed.")
+        return
+    payload = {
+        "external_system_id": external_system_id,
+        "dossier_path": str(dossier_path) if dossier_path else None,
+        "status": "prepared_for_write_enabled_connector",
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo("Benchling dossier export prepared for write-enabled connector.")
+
+
 @app.command("serve")
 def serve(
     root_dir: Annotated[
@@ -301,7 +1117,7 @@ def serve(
     ] = None,
     hosted_mode: Annotated[
         bool,
-        typer.Option("--hosted", help="Enable V0.8 hosted auth, RBAC, jobs, and dashboard."),
+        typer.Option("--hosted", help="Enable V0.9 hosted auth, RBAC, jobs, and dashboard."),
     ] = False,
     auth_secret: Annotated[
         str | None,
@@ -511,12 +1327,20 @@ def worker_run(
 ) -> None:
     """Run the SQLite/Postgres-backed platform job worker."""
     from molecule_ranker.platform.settings import PlatformSettings
-    from molecule_ranker.workers import CodexQueueWorker, PipelineWorker, WorkerScheduler
+    from molecule_ranker.workers import (
+        CodexQueueWorker,
+        IntegrationQueueWorker,
+        PipelineWorker,
+        WorkerScheduler,
+    )
     from molecule_ranker.workspace.store import ProjectWorkspaceStore
 
     database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
     settings = PlatformSettings.from_environment()
-    workers: list[Any] = [PipelineWorker(database=database, root_dir=root_dir)]
+    workers: list[Any] = [
+        IntegrationQueueWorker(database=database),
+        PipelineWorker(database=database, root_dir=root_dir),
+    ]
     if settings.enable_codex_worker or settings.codex_worker_enabled:
         workers.append(
             CodexQueueWorker(
@@ -2352,7 +3176,7 @@ def project_serve(
     ] = None,
     hosted_mode: Annotated[
         bool,
-        typer.Option("--hosted", help="Enable V0.8 hosted auth, RBAC, jobs, and dashboard."),
+        typer.Option("--hosted", help="Enable V0.9 hosted auth, RBAC, jobs, and dashboard."),
     ] = False,
     auth_secret: Annotated[
         str | None,
@@ -2378,7 +3202,7 @@ def project_serve(
         ),
     ] = False,
 ) -> None:
-    """Start the project API server; hosted mode enables the V0.8 platform surface."""
+    """Start the project API server; hosted mode enables the V0.9 platform surface."""
     _serve_api(
         root_dir=root_dir,
         host=host,
@@ -6153,6 +6977,31 @@ def _platform_database(
         db_path=db_path,
         initialize=True,
     )
+
+
+def _update_mapping_cli(
+    mapping_id: str,
+    *,
+    status: str,
+    root_dir: Path,
+    database_url: str | None,
+    db_path: Path | None,
+    org_id: str,
+    project_id: str | None,
+) -> Any:
+    from molecule_ranker.integrations.store import IntegrationStore
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    store = IntegrationStore(database, org_id=org_id, project_id=project_id)
+    try:
+        return store.update_mapping_status(
+            mapping_id,
+            status=status,
+            metadata={"reviewed_via": "cli", "reviewed_at": datetime.now(UTC).isoformat()},
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 def _print_human_summary(result: RankingRun, output_dir: Path, *, verbose: bool) -> None:

@@ -1,7 +1,7 @@
 # molecule-ranker
 
 `molecule-ranker` is an internal research platform for source-backed molecule
-ranking. Given a disease name, V0.8 resolves the disease through public
+ranking. Given a disease name, V0.9 resolves the disease through public
 biomedical data sources,
 discovers evidence-backed targets, retrieves existing molecules linked to those
 targets, retrieves real literature evidence, ranks the molecules as transparent
@@ -14,18 +14,21 @@ an experimental feedback loop and active-learning prioritization from
 user-imported assay result files. V0.7 added a controlled Codex CLI provider as
 the orchestration LLM layer for project planning, artifact inspection,
 multi-run comparison summaries, review-assistant workflows, follow-up planning,
-and engineering automation. V0.8 keeps CLI/local mode working and adds hosted
+and engineering automation. V0.8 kept CLI/local mode working and added hosted
 internal-platform primitives: user accounts, organizations, teams, RBAC,
 project sharing, an authenticated dashboard, SQLite/PostgreSQL platform
 metadata, job queueing, controlled Codex worker orchestration, audit logs, operational
-health, admin controls, and data export/delete/retention controls. Codex CLI can
-authenticate through local ChatGPT sign-in, so local LLM workflows do not
+health, admin controls, and data export/delete/retention controls. V0.9 adds
+guarded external research-system integrations for ELN/LIMS, compound registry,
+assay providers, generic REST APIs, generic file/SFTP-style drops, data
+warehouses, and signed webhooks. Benchling is the first concrete connector.
+Codex CLI can authenticate through local ChatGPT sign-in, so local LLM workflows do not
 require an OpenAI API key when Codex CLI is already authenticated locally.
 
 The app does not discover cures, does not claim generated molecules treat or are
 active against a disease, does not provide medical advice, and does not provide
 synthesis instructions, lab protocols, dosage, or patient treatment
-instructions. V0.8 is an internal research platform MVP, not a regulated
+instructions. V0.9 is an internal research platform MVP, not a regulated
 clinical product. Ranked molecules and generated structures are research
 hypotheses that require independent validation.
 Generated molecules are computational hypotheses only: they are not known
@@ -33,12 +36,13 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V0.8
+## Current Scope Through V0.9
 
-V0.8 implements existing-molecule ranking, opt-in generated hypotheses,
+V0.9 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
-available as a guarded orchestration layer and hosted-mode platform services:
+available as a guarded orchestration layer, hosted-mode platform services, and
+external integration primitives:
 
 - Resolve disease names to public biomedical disease entities with ambiguity handling.
 - Retrieve real disease-associated targets with richer target identifiers and metadata.
@@ -103,8 +107,23 @@ available as a guarded orchestration layer and hosted-mode platform services:
 - Queue hosted Codex work as allowlisted project jobs. Hosted API callers cannot
   submit arbitrary Codex prompts or shell-capable tasks; a `CodexWorker` builds
   server-side tasks from registered project artifacts.
+- Configure external integration connectors for ELN/LIMS, compound registry,
+  assay providers, Benchling, generic REST, generic CSV/SFTP-style staging,
+  PostgreSQL-compatible warehouses, optional Databricks SQL and Snowflake
+  connectors, signed webhooks, and a SiLA metadata-only adapter placeholder.
+- Ingest webhooks and connector imports with source system, source record ID,
+  sync job ID, timestamps, raw metadata, data-contract validation, sync audit
+  logs, health checks, and an integration dashboard.
+- Export curated molecule-ranker warehouse tables for candidates, generated
+  molecules, targets, evidence, literature claims, developability assessments,
+  assay results, review decisions, active-learning suggestions, sync jobs, and
+  artifact manifests.
+- Keep integration credentials as environment/vault references or hashed
+  platform secrets; plaintext credentials are not stored or surfaced.
+- Let Codex suggest external-ID mappings only as assistant output. Deterministic
+  validation against observed source records must confirm mappings before use.
 
-V0.8 does not:
+V0.9 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -134,14 +153,16 @@ V0.8 does not:
 - Expose cache files, secrets, bearer tokens, API keys, or hidden environment
   files through the hosted API, dashboard, audit logs, artifacts, or Codex
   prompts.
-- Provide external ELN/LIMS integrations or regulated clinical-product
-  workflows.
+- Run lab instruments, control devices, provide lab protocols, provide synthesis
+  instructions, provide dosing, or provide patient-treatment guidance.
+- Write to external systems by default. Connector modes default to dry-run,
+  read-only, or sandbox; writes/exports require explicit config and permission.
 
 Unit tests use mocked data only to test behavior deterministically. Production
 code uses real public biomedical data adapters and fails if required data cannot
 be retrieved.
 
-## V0.8 Hosted Mode
+## V0.9 Hosted Mode
 
 Start the local API surface as before:
 
@@ -208,7 +229,7 @@ uv run molecule-ranker auth token revoke \
   --db-path .molecule-ranker/platform.sqlite
 ```
 
-### V0.8 Platform Controls
+### V0.9 Platform Controls
 
 Authentication modes:
 
@@ -273,7 +294,7 @@ Deployment options:
 - Optional Kubernetes manifests: deployment examples are provided under
   `deployment/k8s/` for teams that already operate Kubernetes.
 
-### V0.8 Usage Examples
+### V0.9 Usage Examples
 
 Create an admin user:
 
@@ -388,16 +409,180 @@ cp .env.example .env
 docker compose up --build
 ```
 
+## V0.9 External Integrations
+
+V0.9 adds a guarded external integration framework for internal research-system
+handoffs and imports. Supported connector categories are:
+
+- ELN/LIMS systems.
+- Compound registries.
+- Assay result providers.
+- Generic REST APIs.
+- Generic local/mounted file drops and SFTP-style staging interfaces.
+- PostgreSQL-compatible data warehouses.
+- Signed webhooks.
+
+Benchling is the first concrete ELN/LIMS and registry connector. Generic REST
+and generic file connectors cover systems that do not yet have a custom
+connector. Warehouse exports support curated molecule-ranker tables such as
+`mr_candidates`, `mr_generated_molecules`, `mr_targets`,
+`mr_evidence_items`, `mr_literature_claims`,
+`mr_developability_assessments`, `mr_assay_results`,
+`mr_review_decisions`, `mr_active_learning_suggestions`, `mr_sync_jobs`, and
+`mr_artifacts`. Databricks SQL and Snowflake connectors are optional dependency
+paths. SiLA is present only as a metadata adapter placeholder; V0.9 does not
+control instruments or devices.
+
+Integration safety boundaries:
+
+- Default connector mode is `read_only` or `dry_run`.
+- External writes and exports require explicit `write_enabled` mode and
+  permission.
+- Credentials are stored as secret references, such as `env:BENCHLING_API_KEY`,
+  not plaintext secret values.
+- Secrets are redacted from logs, audit records, dashboards, artifacts, exports,
+  and Codex prompts.
+- Codex can assist with schema-mapping suggestions, sync-failure explanation,
+  mapping-review questions, and export summaries, but it cannot activate
+  mappings, write to external systems, invent external IDs, invent Benchling
+  records, invent assay runs/results, or create evidence.
+- Imported assay data must pass validation before it can become experimental
+  evidence or affect scores.
+- Export packages and integration outputs do not include lab protocols,
+  synthesis instructions, dosing, patient treatment guidance, or clinical
+  advice.
+
+### Integration CLI Examples
+
+Create an external system:
+
+```bash
+uv run molecule-ranker integration system create \
+  --name "Benchling Dev" \
+  --system-type eln \
+  --vendor benchling \
+  --base-url https://benchling.example \
+  --mode dry_run \
+  --db-path .molecule-ranker/platform.sqlite
+```
+
+Create a credential reference. The secret value stays in the environment; the
+database stores only `env:BENCHLING_API_KEY`.
+
+```bash
+export BENCHLING_API_KEY="..."
+
+uv run molecule-ranker integration credential create \
+  --external-system-id ext-benchling-dev \
+  --credential-type api_key \
+  --secret-env-var BENCHLING_API_KEY \
+  --root . \
+  --json
+```
+
+Health check an integration configuration:
+
+```bash
+uv run molecule-ranker integration system health ext-benchling-dev \
+  --db-path .molecule-ranker/platform.sqlite \
+  --json
+```
+
+Run a dry-run sync. This records a guarded sync job and does not write to an
+external system.
+
+```bash
+uv run molecule-ranker integration sync run \
+  --external-system-id ext-benchling-dev \
+  --direction import \
+  --object-type assay_results \
+  --project-id project-1 \
+  --dry-run \
+  --db-path .molecule-ranker/platform.sqlite \
+  --json
+```
+
+Benchling registry mapping is handled as a pending mapping review item. Codex
+may suggest a mapping, but deterministic validation and a human approval step
+are required before activation.
+
+```bash
+uv run molecule-ranker integration mapping list \
+  --project-id project-1 \
+  --status pending_review \
+  --db-path .molecule-ranker/platform.sqlite \
+  --json
+
+uv run molecule-ranker integration mapping approve mapping-123 \
+  --db-path .molecule-ranker/platform.sqlite
+```
+
+Prepare a Benchling assay-result import in dry-run mode:
+
+```bash
+uv run molecule-ranker integration benchling import-assay-results \
+  --external-system-id ext-benchling-dev \
+  --project-id project-1 \
+  --dry-run \
+  --json
+```
+
+Import assay results from a generic file drop. The file connector reads only
+inside its configured root, blocks path traversal, and validates imported assay
+results before they can affect scoring.
+
+```bash
+uv run molecule-ranker integration sync run \
+  --external-system-id ext-generic-file \
+  --direction import \
+  --object-type assay_results \
+  --project-id project-1 \
+  --dry-run \
+  --db-path .molecule-ranker/platform.sqlite
+```
+
+Export curated warehouse tables as local CSV artifacts:
+
+```bash
+uv run molecule-ranker integration warehouse export \
+  --project-id project-1 \
+  --external-system-id ext-warehouse \
+  --tables candidates,assay_results,review_decisions \
+  --format csv \
+  --dry-run \
+  --output-dir .molecule-ranker/warehouse-export \
+  --db-path .molecule-ranker/platform.sqlite \
+  --json
+```
+
+Inspect a sync job:
+
+```bash
+uv run molecule-ranker integration sync show sync-... \
+  --db-path .molecule-ranker/platform.sqlite \
+  --json
+```
+
+Generate a signed webhook test payload:
+
+```bash
+uv run molecule-ranker integration webhook test \
+  --external-system-id ext-benchling-dev \
+  --secret "$WEBHOOK_SIGNING_SECRET" \
+  --event-type assay_result.created \
+  --json
+```
+
 API authentication uses bearer tokens. `POST /auth/login` returns a short-lived
 access token plus a refresh token; `POST /auth/refresh` issues a new access
 token; `POST /auth/logout` invalidates the session. Browser cookie sessions are
-not used in V0.8, so CSRF protection is not part of the API bearer-token flow.
+not used in V0.9, so CSRF protection is not part of the API bearer-token flow.
 OIDC settings are present as placeholders and `/auth/oidc/*` routes return a
 clean disabled response unless configured.
 
-## V0.8 Codex CLI Orchestration
+## V0.9 Codex CLI Orchestration
 
-V0.8 keeps Codex CLI as the primary LLM agent backbone for molecule-ranker. Codex
+V0.9 keeps Codex CLI as the primary LLM agent backbone for molecule-ranker. Codex
 CLI is used because OpenAI documents Codex as included with ChatGPT Plus, Pro,
 Business, Enterprise/Edu, and other eligible plans, and the CLI can run through
 local ChatGPT authentication instead of requiring project-specific OpenAI API

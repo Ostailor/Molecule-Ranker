@@ -24,6 +24,12 @@ CodexTaskType = Literal[
     "inspect_artifacts",
     "engineering_plan",
     "engineering_test_loop",
+    "suggest_schema_mapping",
+    "explain_sync_failure",
+    "summarize_external_record",
+    "suggest_mapping_review_questions",
+    "draft_export_summary",
+    "compare_internal_external_record",
 ]
 CodexOutputFormat = Literal["json", "markdown", "text"]
 CodexResultStatus = Literal[

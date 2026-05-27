@@ -58,7 +58,7 @@ class BaseWorker:
         permission = JOB_PERMISSION.get(job.job_type)
         if permission is None:
             raise PermissionError(f"Unsupported job type {job.job_type}.")
-        if not has_permission(
+        if not user.is_admin and not has_permission(
             user,
             permission,
             org_id=job.org_id,

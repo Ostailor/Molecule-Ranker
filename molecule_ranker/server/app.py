@@ -19,9 +19,11 @@ from molecule_ranker.server.routes import (
     auth,
     codex,
     experiments,
+    integrations,
     platform,
     projects,
     review,
+    webhooks,
 )
 from molecule_ranker.server.security import (
     HealthResponse,
@@ -44,6 +46,8 @@ OPENAPI_TAGS = [
     {"name": "projects", "description": "Project workspaces and sharing."},
     {"name": "artifacts", "description": "Permission-checked artifact metadata and downloads."},
     {"name": "codex", "description": "Guarded Codex job endpoints."},
+    {"name": "integrations", "description": "V0.9 external research-system integrations."},
+    {"name": "webhooks", "description": "Signed external integration webhook ingestion."},
     {"name": "platform", "description": "Hosted platform administration and audit."},
     {"name": "web", "description": "Server-rendered hosted dashboard."},
 ]
@@ -88,8 +92,8 @@ def create_app(
         title="molecule-ranker API",
         version=__version__,
         description=(
-            "Local API by default. Hosted mode adds V0.8 users, teams, RBAC, jobs, "
-            "audit logs, observability, and guarded Codex worker orchestration."
+            "Local API by default. Hosted mode adds users, teams, RBAC, jobs, "
+            "audit logs, guarded Codex worker orchestration, and V0.9 integrations."
         ),
         openapi_tags=OPENAPI_TAGS,
     )
@@ -199,6 +203,8 @@ def create_app(
     app.include_router(codex.router, dependencies=dependencies)
     app.include_router(review.router, dependencies=dependencies)
     app.include_router(experiments.router, dependencies=dependencies)
+    app.include_router(integrations.router, dependencies=dependencies)
+    app.include_router(webhooks.router)
     return app
 
 

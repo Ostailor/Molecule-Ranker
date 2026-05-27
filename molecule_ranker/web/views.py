@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from html import escape
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import parse_qs
@@ -10,6 +11,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette import status
 
+from molecule_ranker.integrations.connectors import create_connector
+from molecule_ranker.integrations.store import IntegrationStore
 from molecule_ranker.platform.auth import (
     AuthError,
     AuthTokenConfig,
@@ -136,6 +139,298 @@ def project_list_alias(
     store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
 ) -> Response:
     return project_list_page(request, user, database, store)
+
+
+@router.get("/dashboard/integrations", response_class=HTMLResponse)
+def integrations_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_integration_dashboard_permission(database, user, "integration:read")
+    store = IntegrationStore(database, user=user)
+    systems = store.list_external_systems()
+    connectors = database.list_integration_connectors()
+    return _integration_html(
+        "Integrations",
+        _nav()
+        + _table(
+            ["ID", "Name", "Type", "Vendor", "Mode", "Enabled"],
+            [
+                [
+                    _link(
+                        f"/dashboard/integrations/{system.external_system_id}",
+                        system.external_system_id,
+                    ),
+                    system.name,
+                    system.system_type,
+                    system.vendor or "",
+                    system.default_mode,
+                    system.enabled,
+                ]
+                for system in systems
+            ]
+            + [
+                [
+                    _link(
+                        f"/dashboard/integrations/{connector.connector_id}",
+                        connector.connector_id,
+                    ),
+                    connector.name,
+                    connector.kind,
+                    connector.provider,
+                    connector.mode,
+                    True,
+                ]
+                for connector in connectors
+                if connector.connector_id not in {system.external_system_id for system in systems}
+            ],
+        ),
+    )
+
+
+@router.get("/dashboard/integrations/credentials", response_class=HTMLResponse)
+def integration_credentials_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_integration_dashboard_permission(database, user, "integration:manage_credentials")
+    credentials = IntegrationStore(database, user=user).list_credential_references()
+    return _integration_html(
+        "Integration credentials",
+        _nav()
+        + _table(
+            ["ID", "System", "Type", "Secret reference", "Status"],
+            [
+                [
+                    credential.credential_id,
+                    credential.external_system_id,
+                    credential.credential_type,
+                    _redacted_secret_ref(credential.secret_ref),
+                    credential.metadata.get("status") or "active",
+                ]
+                for credential in credentials
+            ],
+        ),
+    )
+
+
+@router.get("/dashboard/integrations/sync-jobs", response_class=HTMLResponse)
+def integration_sync_jobs_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_integration_dashboard_permission(database, user, "integration:read")
+    jobs = IntegrationStore(database, user=user).list_sync_jobs(limit=100)
+    return _integration_html(
+        "Integration sync jobs",
+        _nav()
+        + _table(
+            ["ID", "System", "Direction", "Mode", "Status", "Seen", "Failed"],
+            [
+                [
+                    _link(f"/dashboard/integrations/sync-jobs/{job.sync_job_id}", job.sync_job_id),
+                    job.external_system_id,
+                    job.direction,
+                    job.mode,
+                    job.status,
+                    job.records_seen,
+                    job.records_failed,
+                ]
+                for job in jobs
+            ],
+        ),
+    )
+
+
+@router.get("/dashboard/integrations/sync-jobs/{sync_job_id}", response_class=HTMLResponse)
+def integration_sync_job_detail_page(
+    sync_job_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_integration_dashboard_permission(database, user, "integration:read")
+    store = IntegrationStore(database, user=user)
+    job = store.get_sync_job(sync_job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Sync job not found.")
+    records = store.list_sync_records(sync_job_id=sync_job_id, limit=500)
+    return _integration_html(
+        f"Sync job {sync_job_id}",
+        _nav()
+        + _definition_list(
+            {
+                "System": job.external_system_id,
+                "Direction": job.direction,
+                "Mode": job.mode,
+                "Status": job.status,
+                "Records seen": job.records_seen,
+                "Errors": job.error_summary or "",
+            }
+        )
+        + "<h2>Sync record detail</h2>"
+        + _table(
+            ["Record", "External ID", "Action", "Status", "Artifact"],
+            [
+                [
+                    record.sync_record_id,
+                    record.external_ref.external_record_id,
+                    record.action,
+                    record.status,
+                    record.raw_payload_artifact_id or "",
+                ]
+                for record in records
+            ],
+        ),
+    )
+
+
+@router.get("/dashboard/integrations/mappings", response_class=HTMLResponse)
+def integration_mapping_queue_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_integration_dashboard_permission(database, user, "integration:read")
+    mappings = IntegrationStore(database, user=user).find_mappings(status="pending_review")
+    return _integration_html(
+        "Mapping review queue",
+        _nav()
+        + _table(
+            ["ID", "Internal", "External", "Method", "Confidence", "Status"],
+            [
+                [
+                    mapping.mapping_id,
+                    f"{mapping.internal_entity_type}:{mapping.internal_entity_id}",
+                    mapping.external_ref.external_record_id,
+                    mapping.mapping_method,
+                    mapping.mapping_confidence,
+                    mapping.status,
+                ]
+                for mapping in mappings
+            ],
+        ),
+    )
+
+
+@router.get("/dashboard/integrations/webhooks", response_class=HTMLResponse)
+def integration_webhook_events_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_integration_dashboard_permission(database, user, "integration:read")
+    events = IntegrationStore(database, user=user).list_webhook_events(limit=100)
+    return _integration_html(
+        "Webhook events",
+        _nav()
+        + _table(
+            ["ID", "System", "Type", "Status", "Payload artifact"],
+            [
+                [
+                    event.get("webhook_event_id"),
+                    event.get("external_system_id"),
+                    event.get("event_type"),
+                    event.get("status"),
+                    event.get("payload_artifact_id"),
+                ]
+                for event in events
+            ],
+        ),
+    )
+
+
+@router.get("/dashboard/integrations/data-contracts", response_class=HTMLResponse)
+def integration_data_contracts_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_integration_dashboard_permission(database, user, "integration:read")
+    contracts = IntegrationStore(database, user=user).list_data_contracts()
+    return _integration_html(
+        "Data contracts",
+        _nav()
+        + _table(
+            ["ID", "Name", "Object type", "Version", "Required fields"],
+            [
+                [
+                    contract.contract_id,
+                    contract.name,
+                    contract.object_type,
+                    contract.version,
+                    ", ".join(contract.required_fields),
+                ]
+                for contract in contracts
+            ],
+        ),
+    )
+
+
+@router.get("/dashboard/integrations/{external_system_id}", response_class=HTMLResponse)
+def integration_detail_page(
+    external_system_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_integration_dashboard_permission(database, user, "integration:read")
+    store = IntegrationStore(database, user=user)
+    system = store.get_external_system(external_system_id)
+    connector = database.get_integration_connector(external_system_id)
+    if system is None and connector is None:
+        raise HTTPException(status_code=404, detail="Integration not found.")
+    health_payload: dict[str, Any]
+    if connector is not None:
+        health_payload = create_connector(connector).health_check().model_dump(mode="json")
+    else:
+        health_payload = {"status": "unconfigured", "message": "No connector configured."}
+    jobs = store.list_sync_jobs(external_system_id=external_system_id, limit=25)
+    records = store.list_sync_records(external_system_id=external_system_id, limit=25)
+    title = system.name if system is not None else str(connector.name if connector else "")
+    return _integration_html(
+        f"Integration {title}",
+        _nav()
+        + _definition_list(
+            {
+                "External system ID": external_system_id,
+                "Name": title,
+                "Health": health_payload.get("status"),
+                "Health message": health_payload.get("message"),
+            }
+        )
+        + "<h2>Health check results</h2>"
+        + f"<pre>{_h(health_payload)}</pre>"
+        + "<h2>Sync job history</h2>"
+        + _table(
+            ["ID", "Direction", "Status", "Seen"],
+            [
+                [
+                    _link(f"/dashboard/integrations/sync-jobs/{job.sync_job_id}", job.sync_job_id),
+                    job.direction,
+                    job.status,
+                    job.records_seen,
+                ]
+                for job in jobs
+            ],
+        )
+        + "<h2>Recent sync records</h2>"
+        + _table(
+            ["ID", "External ID", "Action", "Status"],
+            [
+                [
+                    record.sync_record_id,
+                    record.external_ref.external_record_id,
+                    record.action,
+                    record.status,
+                ]
+                for record in records
+            ],
+        ),
+    )
 
 
 @router.get("/dashboard/projects/{project_id}", response_class=HTMLResponse)
@@ -729,6 +1024,80 @@ def _template(
         context,
         status_code=status_code,
     )
+
+
+def _require_integration_dashboard_permission(
+    database: PlatformDatabase,
+    user: UserAccount,
+    permission: str,
+) -> None:
+    if user.is_admin:
+        return
+    if not has_permission(user, permission, database=database):
+        raise HTTPException(status_code=403, detail="Integration permission denied.")
+
+
+def _integration_html(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)}</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/integrations.css\">"
+        "</head><body>"
+        f"<header class=\"integration-header\"><h1>{_h(title)}</h1></header>"
+        "<main class=\"integration-content\">"
+        "<p class=\"notice\">External integrations default to read-only or dry-run. "
+        "Secrets are redacted and connector writes require explicit permission.</p>"
+        f"{body}</main></body></html>\n"
+    )
+
+
+def _nav() -> str:
+    links = {
+        "Integrations": "/dashboard/integrations",
+        "Credentials": "/dashboard/integrations/credentials",
+        "Sync jobs": "/dashboard/integrations/sync-jobs",
+        "Mappings": "/dashboard/integrations/mappings",
+        "Webhooks": "/dashboard/integrations/webhooks",
+        "Data contracts": "/dashboard/integrations/data-contracts",
+    }
+    return "<nav>" + " ".join(_link(href, label) for label, href in links.items()) + "</nav>"
+
+
+def _table(headers: list[str], rows: list[list[Any]]) -> str:
+    head = "".join(f"<th>{_h(header)}</th>" for header in headers)
+    body = "".join(
+        "<tr>"
+        + "".join(f"<td>{cell if _is_html(cell) else _h(cell)}</td>" for cell in row)
+        + "</tr>"
+        for row in rows
+    )
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def _definition_list(values: dict[str, Any]) -> str:
+    rows = "".join(f"<dt>{_h(key)}</dt><dd>{_h(value)}</dd>" for key, value in values.items())
+    return f"<dl>{rows}</dl>"
+
+
+def _link(href: str, label: Any) -> str:
+    return f"<a href=\"{_h(href)}\">{_h(label)}</a>"
+
+
+def _is_html(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("<a ")
+
+
+def _h(value: Any) -> str:
+    return escape(str(value or ""), quote=True)
+
+
+def _redacted_secret_ref(secret_ref: str) -> str:
+    if ":" not in secret_ref:
+        return "[redacted]"
+    prefix, reference = secret_ref.split(":", 1)
+    visible = reference[-4:] if len(reference) > 4 else "ref"
+    return f"{prefix}:...{visible}"
 
 
 def _set_browser_session(

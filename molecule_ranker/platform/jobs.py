@@ -23,6 +23,12 @@ QUEUE_JOB_TYPES = {
     "generation",
     "developability",
     "experiment_import",
+    "integration_sync",
+    "connector_health_check",
+    "webhook_processing",
+    "warehouse_export",
+    "registry_mapping_review",
+    "external_export",
     "active_learning",
     "review_export",
     "dashboard_build",
@@ -34,6 +40,12 @@ JOB_PERMISSION: dict[str, str] = {
     "generation": "run:create",
     "developability": "run:create",
     "experiment_import": "experiment:import",
+    "integration_sync": "integration:sync",
+    "connector_health_check": "integration:read",
+    "webhook_processing": "integration:sync",
+    "warehouse_export": "integration:sync",
+    "registry_mapping_review": "integration:sync",
+    "external_export": "integration:sync",
     "active_learning": "run:create",
     "review_export": "artifact:export",
     "dashboard_build": "project:read",
@@ -70,7 +82,7 @@ class PlatformJobQueue:
         if job_type not in QUEUE_JOB_TYPES:
             raise PlatformDatabaseError(f"Unsupported job type: {job_type}")
         permission = JOB_PERMISSION[job_type]
-        if not has_permission(
+        if not requested_by.is_admin and not has_permission(
             requested_by,
             permission,
             org_id=org_id,
@@ -442,12 +454,12 @@ class PlatformJobQueue:
 class RedisJobQueueAdapter:
     """Placeholder for future Redis/RQ/Celery queue integration.
 
-    V0.8 intentionally uses the SQL-backed queue so local and hosted MVP
+    V0.9 intentionally uses the SQL-backed queue so local and hosted MVP
     deployments do not require Redis.
     """
 
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-        raise NotImplementedError("Redis/RQ/Celery adapters are planned after the V0.8 MVP.")
+        raise NotImplementedError("Redis/RQ/Celery adapters are planned after the V0.9 MVP.")
 
 
 def enqueue_platform_job(

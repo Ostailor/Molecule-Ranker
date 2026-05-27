@@ -73,7 +73,7 @@ class SummaryValues:
 
 @dataclass
 class MetricsRegistry:
-    """Small in-process Prometheus-style registry for the V0.8 internal MVP."""
+    """Small in-process Prometheus-style registry for the V0.9 internal MVP."""
 
     counters: dict[str, float] = field(default_factory=dict)
     summaries: dict[str, SummaryValues] = field(default_factory=dict)

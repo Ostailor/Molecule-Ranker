@@ -70,6 +70,14 @@ FABRICATION_PROMPT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"\b(?:fake|placeholder)\s+(?:pmid|doi|citation|assay result)\b", re.I),
         "Prompt asks for fake biomedical references or assay results.",
     ),
+    (
+        re.compile(
+            r"\b(?:fake|placeholder|invent|fabricate|make up)\s+"
+            r"(?:registry id|external id|benchling id|assay run|assay result)\b",
+            re.I,
+        ),
+        "Prompt asks for fake external integration identifiers or records.",
+    ),
 )
 
 PROHIBITED_REQUEST_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -195,6 +203,11 @@ CITATION_ID_PATTERN = re.compile(
 MOLECULE_NAME_PATTERN = re.compile(
     r"\b(?:Generated[-_][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*|GEN[-_][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*)\b"
 )
+EXTERNAL_ID_PATTERN = re.compile(
+    r"\b(?:REG|CMP|BATCH|SAMPLE|BNCH|BENCHLING|ASSAY-RUN|ASSAY-RESULT|"
+    r"bfi|bfe|bmr|bms|entity|entry)[-_][A-Za-z0-9][A-Za-z0-9_.-]{2,}\b",
+    re.I,
+)
 
 
 def redact_secrets(text: str) -> str:
@@ -239,6 +252,7 @@ def check_output(
         *detect_protocol_or_synthesis_text(text),
         *_detect_unbacked_assay_results(text, allowed_artifact_refs),
         *_detect_unbacked_molecules(text, allowed_artifact_refs),
+        *detect_fake_external_ids(text, allowed_artifact_refs),
     ]
     if not warnings:
         return result
@@ -272,6 +286,17 @@ def detect_protocol_or_synthesis_text(text: str) -> list[str]:
     for pattern, label in PROTOCOL_OR_SYNTHESIS_PATTERNS:
         if pattern.search(text):
             warnings.append(f"Forbidden protocol/synthesis content: {label}.")
+    return warnings
+
+
+def detect_fake_external_ids(text: str, allowed_artifact_refs: set[str]) -> list[str]:
+    allowed = {item.lower() for item in allowed_artifact_refs}
+    warnings: list[str] = []
+    for match in EXTERNAL_ID_PATTERN.finditer(text):
+        external_id = match.group(0)
+        lowered = external_id.lower()
+        if lowered not in allowed and not any(lowered in item for item in allowed):
+            warnings.append(f"Unbacked external record identifier: {external_id}.")
     return warnings
 
 
@@ -390,6 +415,15 @@ def _collect_json_refs(value: Any, refs: set[str]) -> None:
                 "pmid",
                 "doi",
                 "source_record_id",
+                "external_record_id",
+                "external_record_ref",
+                "external_system_id",
+                "registry_id",
+                "benchling_id",
+                "assay_run_id",
+                "assay_result_id",
+                "sync_job_id",
+                "sync_record_id",
                 "citation_id",
                 "result_id",
                 "molecule_id",

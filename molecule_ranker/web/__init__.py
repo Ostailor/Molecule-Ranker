@@ -1,4 +1,4 @@
-"""Server-rendered hosted dashboard for molecule-ranker V0.8."""
+"""Server-rendered hosted dashboard for molecule-ranker."""
 
 from molecule_ranker.web.views import router
 

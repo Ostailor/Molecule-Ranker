@@ -41,6 +41,9 @@ COMMON_SAFETY_CONSTRAINTS = [
     "No synthesis/lab protocols.",
     "No unsupported claims.",
     "No claims of cure, treatment, safety, efficacy, binding, activity, or synthesizability.",
+    "Do not invent registry IDs, Benchling IDs, external records, assay runs, or assay results.",
+    "Do not activate mappings, enqueue sync jobs, or write to external systems.",
+    "Codex outputs must cite internal artifact IDs and external record refs supplied in context.",
 ]
 
 TEMPLATE_ALIASES = {
@@ -205,6 +208,112 @@ TASK_TEMPLATES: dict[str, dict[str, Any]] = {
             "proposed_fix": "string",
             "commands_to_run": ["safe commands"],
             "files_to_inspect": ["relative or absolute file paths"],
+        },
+    },
+    "suggest_schema_mapping": {
+        "description": "Suggest candidate field mappings from external records to data contracts.",
+        "required_inputs": ["integration context artifact with records and data contract"],
+        "optional_inputs": ["existing mappings", "validation errors"],
+        "instructions": [
+            "Suggest mappings only from fields present in the supplied artifacts.",
+            "Every suggestion must be status=pending_review.",
+            "Do not activate mappings or invent external IDs, registry IDs, Benchling IDs, "
+            "fields, or records.",
+            "Cite artifact_refs and external_record_refs for every mapping suggestion.",
+        ],
+        "output_json_schema": {
+            "suggested_mappings": ["pending mapping suggestion objects"],
+            "validation_notes": ["deterministic validation notes"],
+            "artifact_refs": ["artifact IDs or file paths used"],
+            "external_record_refs": ["external record refs used"],
+        },
+    },
+    "explain_sync_failure": {
+        "description": "Explain integration sync failures from existing sync records.",
+        "required_inputs": ["sync job", "sync records", "connector audit summaries"],
+        "optional_inputs": ["validation errors", "warnings"],
+        "instructions": [
+            "Explain only failures present in supplied sync records or audit metadata.",
+            "Do not invent external records, assay results, or connector behavior.",
+            "Cite sync_record_ids, artifact_refs, and external_record_refs.",
+        ],
+        "output_json_schema": {
+            "failure_summary": "string",
+            "failed_records": ["sync-record-grounded failure strings"],
+            "likely_causes": ["artifact-backed cause strings"],
+            "next_review_questions": ["safe review questions"],
+            "artifact_refs": ["artifact IDs or file paths used"],
+            "external_record_refs": ["external record refs used"],
+        },
+    },
+    "summarize_external_record": {
+        "description": "Summarize one external record from artifact-scoped metadata.",
+        "required_inputs": ["external record payload artifact"],
+        "optional_inputs": ["data contract", "mapping context"],
+        "instructions": [
+            "Summarize only supplied external record fields.",
+            "Do not infer missing assay results, registry IDs, or Benchling IDs.",
+            "Cite artifact_refs and external_record_refs.",
+        ],
+        "output_json_schema": {
+            "record_summary": "string",
+            "key_fields": ["field summary strings"],
+            "limitations": ["limitation strings"],
+            "artifact_refs": ["artifact IDs or file paths used"],
+            "external_record_refs": ["external record refs used"],
+        },
+    },
+    "suggest_mapping_review_questions": {
+        "description": "Suggest human review questions for pending integration mappings.",
+        "required_inputs": ["pending mapping", "external record refs", "deterministic signals"],
+        "optional_inputs": ["conflict details"],
+        "instructions": [
+            "Ask questions only; do not approve, reject, or activate mappings.",
+            "Do not invent external IDs or records.",
+            "Cite artifact_refs and external_record_refs.",
+        ],
+        "output_json_schema": {
+            "review_questions": ["mapping review question strings"],
+            "blocking_uncertainties": ["uncertainty strings"],
+            "artifact_refs": ["artifact IDs or file paths used"],
+            "external_record_refs": ["external record refs used"],
+        },
+    },
+    "draft_export_summary": {
+        "description": "Draft a safe summary for a planned export artifact.",
+        "required_inputs": ["export artifact preview", "target system metadata"],
+        "optional_inputs": ["data contract validation report"],
+        "instructions": [
+            "Draft a summary only; do not write to external systems.",
+            "Do not include secrets, credentials, protocols, synthesis steps, dosing, or "
+            "treatment guidance.",
+            "Cite artifact_refs and external_record_refs.",
+        ],
+        "output_json_schema": {
+            "export_summary": "string",
+            "records_in_scope": ["artifact-backed record strings"],
+            "write_boundary": "string",
+            "artifact_refs": ["artifact IDs or file paths used"],
+            "external_record_refs": ["external record refs used"],
+        },
+    },
+    "compare_internal_external_record": {
+        "description": "Compare an internal entity record with one external record.",
+        "required_inputs": ["internal record", "external record", "mapping context"],
+        "optional_inputs": ["data contract validation report"],
+        "instructions": [
+            "Compare only supplied fields and deterministic identifiers.",
+            "Do not invent IDs, assay results, or evidence.",
+            "Do not create EvidenceItem or activate mappings.",
+            "Cite artifact_refs and external_record_refs.",
+        ],
+        "output_json_schema": {
+            "comparison_summary": "string",
+            "matching_fields": ["field strings"],
+            "mismatches": ["field strings"],
+            "review_questions": ["safe review questions"],
+            "artifact_refs": ["artifact IDs or file paths used"],
+            "external_record_refs": ["external record refs used"],
         },
     },
     "summarize_project": {

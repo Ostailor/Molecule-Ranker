@@ -17,6 +17,12 @@ PlatformJobType = Literal[
     "developability",
     "literature",
     "experiment_import",
+    "integration_sync",
+    "connector_health_check",
+    "webhook_processing",
+    "warehouse_export",
+    "registry_mapping_review",
+    "external_export",
     "active_learning",
     "review_export",
     "dashboard_build",
@@ -29,6 +35,7 @@ PlatformJobStatus = Literal[
     "running",
     "succeeded",
     "failed",
+    "partial",
     "cancelled",
     "guardrail_failed",
 ]
@@ -354,7 +361,7 @@ class ActivityFeedItem(PlatformSchema):
 
 
 class JobRecord(PlatformSchema):
-    """Compatibility record for the initial V0.8 SQLite job queue."""
+    """Compatibility record for the initial V0.9 SQLite job queue."""
 
     job_id: str
     job_type: str
@@ -363,6 +370,7 @@ class JobRecord(PlatformSchema):
         "running",
         "succeeded",
         "failed",
+        "partial",
         "cancelled",
         "guardrail_failed",
     ] = "pending"

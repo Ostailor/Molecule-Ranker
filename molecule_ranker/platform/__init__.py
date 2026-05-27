@@ -1,4 +1,4 @@
-"""V0.8 hosted-platform primitives for internal molecule-ranker deployments."""
+"""Hosted-platform primitives for internal molecule-ranker deployments."""
 
 from molecule_ranker.platform.auth import (
     AuthError,
