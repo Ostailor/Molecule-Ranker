@@ -13,6 +13,7 @@ from molecule_ranker.review.decision_engine import ReviewDecisionEngine
 from molecule_ranker.review.queue_builder import build_review_workspace_from_artifact
 from molecule_ranker.review.schemas import (
     CandidateDossier,
+    CodexReviewArtifact,
     FollowupRequest,
     ReviewAuditEvent,
     Reviewer,
@@ -116,6 +117,12 @@ class ReviewWorkspaceStore:
                 self._insert_comment(connection, workspace.workspace_id, comment)
             for request in workspace.followup_requests:
                 self._insert_followup_request(connection, workspace.workspace_id, request)
+            for artifact in workspace.codex_review_artifacts:
+                self._insert_codex_review_artifact(
+                    connection,
+                    workspace.workspace_id,
+                    artifact,
+                )
             for audit in workspace.audit_events:
                 self._insert_audit_event(connection, workspace.workspace_id, audit)
         return workspace
@@ -176,6 +183,17 @@ class ReviewWorkspaceStore:
                     (workspace_id,),
                 )
             ]
+            codex_artifacts = [
+                CodexReviewArtifact.model_validate_json(artifact_row["payload_json"])
+                for artifact_row in connection.execute(
+                    """
+                    select payload_json from codex_review_artifacts
+                    where workspace_id = ?
+                    order by generated_at, rowid
+                    """,
+                    (workspace_id,),
+                )
+            ]
             events = [
                 ReviewAuditEvent.model_validate_json(event_row["payload_json"])
                 for event_row in connection.execute(
@@ -196,6 +214,7 @@ class ReviewWorkspaceStore:
             decisions=decisions,
             comments=comments,
             followup_requests=requests,
+            codex_review_artifacts=codex_artifacts,
             audit_events=events,
             metadata=json.loads(str(row["metadata_json"] or "{}")),
         )
@@ -328,6 +347,29 @@ class ReviewWorkspaceStore:
                 ),
             )
 
+    def add_codex_review_artifact(
+        self,
+        workspace_id: str,
+        artifact: CodexReviewArtifact,
+    ) -> None:
+        with self._connect() as connection:
+            self._require_workspace(connection, workspace_id)
+            for review_item_id in artifact.review_item_ids:
+                self._require_item(connection, workspace_id, review_item_id)
+            self._insert_codex_review_artifact(connection, workspace_id, artifact)
+            self._insert_audit_event(
+                connection,
+                workspace_id,
+                create_audit_event(
+                    event_type="codex_review_artifact_added",
+                    actor="CodexBackboneProvider",
+                    object_type="CodexReviewArtifact",
+                    object_id=artifact.artifact_id,
+                    summary=f"Codex review artifact added: {artifact.task_type}.",
+                    after=artifact.model_dump(mode="json"),
+                ),
+            )
+
     def update_review_status(
         self,
         workspace_id: str,
@@ -388,6 +430,12 @@ class ReviewWorkspaceStore:
                 self._insert_comment(connection, workspace.workspace_id, comment)
             for request in workspace.followup_requests:
                 self._insert_followup_request(connection, workspace.workspace_id, request)
+            for artifact in workspace.codex_review_artifacts:
+                self._insert_codex_review_artifact(
+                    connection,
+                    workspace.workspace_id,
+                    artifact,
+                )
             for audit in workspace.audit_events:
                 self._insert_audit_event(connection, workspace.workspace_id, audit)
         return workspace
@@ -476,6 +524,17 @@ class ReviewWorkspaceStore:
                     foreign key (workspace_id) references review_workspaces(workspace_id)
                 );
 
+                create table if not exists codex_review_artifacts (
+                    artifact_id text primary key,
+                    workspace_id text not null,
+                    task_type text not null,
+                    review_item_ids_json text not null,
+                    status text not null,
+                    generated_at text not null,
+                    payload_json text not null,
+                    foreign key (workspace_id) references review_workspaces(workspace_id)
+                );
+
                 create table if not exists audit_events (
                     event_id text primary key,
                     workspace_id text not null,
@@ -504,6 +563,8 @@ class ReviewWorkspaceStore:
                     on reviewer_comments(workspace_id, reviewer_id, comment_type, created_at);
                 create index if not exists idx_followup_requests_search
                     on followup_requests(workspace_id, reviewer_id, status, priority, created_at);
+                create index if not exists idx_codex_review_artifacts_search
+                    on codex_review_artifacts(workspace_id, task_type, status, generated_at);
                 create index if not exists idx_audit_events_search
                     on audit_events(workspace_id, actor, event_type, created_at);
                 """
@@ -722,6 +783,35 @@ class ReviewWorkspaceStore:
                 handoff.candidate_origin,
                 handoff.created_at.isoformat(),
                 handoff.model_dump_json(),
+            ),
+        )
+
+    def _insert_codex_review_artifact(
+        self,
+        connection: sqlite3.Connection,
+        workspace_id: str,
+        artifact: CodexReviewArtifact,
+    ) -> None:
+        connection.execute(
+            """
+            insert or replace into codex_review_artifacts (
+                artifact_id,
+                workspace_id,
+                task_type,
+                review_item_ids_json,
+                status,
+                generated_at,
+                payload_json
+            ) values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact.artifact_id,
+                workspace_id,
+                artifact.task_type,
+                json.dumps(artifact.review_item_ids, sort_keys=True),
+                artifact.status,
+                artifact.generated_at.isoformat(),
+                artifact.model_dump_json(),
             ),
         )
 

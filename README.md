@@ -1,7 +1,7 @@
 # molecule-ranker
 
 `molecule-ranker` is an agent-first drug discovery research prototype. Given a
-disease name, V0.6 resolves the disease through public biomedical data sources,
+disease name, V0.7 resolves the disease through public biomedical data sources,
 discovers evidence-backed targets, retrieves existing molecules linked to those
 targets, retrieves real literature evidence, ranks the molecules as transparent
 research hypotheses, and can optionally generate target-conditioned in-silico
@@ -10,7 +10,12 @@ developability triage for existing and generated molecules. V0.5 added a local
 expert review workspace for human-in-the-loop triage, dossiers, follow-up
 requests, validation handoffs, feedback ingestion, and audit trails. V0.6 adds
 an experimental feedback loop and active-learning prioritization from
-user-imported assay result files.
+user-imported assay result files. V0.7 adds a controlled Codex CLI provider as
+the orchestration LLM layer for project planning, artifact inspection,
+multi-run comparison summaries, review-assistant workflows, follow-up planning,
+and engineering automation. Codex CLI can authenticate through local ChatGPT
+sign-in, so V0.7 LLM workflows do not require an OpenAI API key when Codex CLI
+is already authenticated locally.
 
 The app does not discover cures, does not claim generated molecules treat or are
 active against a disease, does not provide medical advice, and does not provide
@@ -21,11 +26,12 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V0.6
+## Current Scope Through V0.7
 
-V0.6 implements existing-molecule ranking, opt-in generated hypotheses,
+V0.7 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
-experimental feedback loop from user-imported assay result files:
+experimental feedback loop from user-imported assay result files, with Codex CLI
+available as a guarded orchestration layer:
 
 - Resolve disease names to public biomedical disease entities with ambiguity handling.
 - Retrieve real disease-associated targets with richer target identifiers and metadata.
@@ -66,8 +72,25 @@ experimental feedback loop from user-imported assay result files:
   result records, link results to candidates and exact generated structures,
   summarize experimental evidence, adjust scores only when linked and
   QC-appropriate, and suggest active-learning batches for expert triage.
+- Register local runs in a `ProjectWorkspace`, track artifacts through an
+  `ArtifactRegistry`, compare multiple runs, generate a project dashboard, and
+  expose a local JSON project API.
+- Use `CodexCLIProvider` to call Codex CLI through subprocess execution with
+  working-directory isolation, timeouts, dry-run and disabled modes, structured
+  prompts, JSON validation, artifact manifests, guardrails, audit logs, and
+  status capture.
+- Run Codex-backed assistant commands for project planning, report
+  summarization, candidate/run comparison summaries, review questions,
+  active-learning explanations, and follow-up computational task planning.
+- Run engineering automation commands for lint, typecheck, tests, and
+  Codex-backed engineering plans.
+- Store Codex-backed outputs in separate `codex_backbone` artifacts so they do
+  not become biomedical evidence, assay results, generated molecules, review
+  decisions, or score updates.
+- Run Codex guardrails and evals for JSON validity, artifact grounding,
+  citation fabrication, forbidden biomedical claims, and safe command planning.
 
-V0.6 does not:
+V0.7 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -89,10 +112,137 @@ V0.6 does not:
 - Make patient-specific recommendations.
 - Fabricate assay results, infer assay outcomes from model scores, or treat
   surrogate model predictions as experimental evidence.
+- Treat Codex CLI as a biomedical source of truth.
+- Let Codex invent targets, molecules, assay results, citations, evidence, or
+  scores.
+- Let Codex directly alter scores without calling molecule-ranker scoring
+  modules.
 
 Unit tests use mocked data only to test behavior deterministically. Production
 code uses real public biomedical data adapters and fails if required data cannot
 be retrieved.
+
+## V0.7 Codex CLI Orchestration
+
+V0.7 makes Codex CLI the primary LLM agent backbone for molecule-ranker. Codex
+CLI is used because OpenAI documents Codex as included with ChatGPT Plus, Pro,
+Business, Enterprise/Edu, and other eligible plans, and the CLI can run through
+local ChatGPT authentication instead of requiring project-specific OpenAI API
+keys. Usage is still subject to the user's ChatGPT/Codex plan limits and local
+Codex configuration. See OpenAI's Codex plan documentation:
+<https://help.openai.com/en/articles/11369540-codex-in-chatgpt>.
+
+Codex CLI orchestrates, summarizes, explains, compares, and plans. It can
+inspect local molecule-ranker artifacts, draft source-grounded summaries, build
+review-assistant questions, explain uncertainty, compare runs or candidates,
+plan safe follow-up CLI tasks, and help with engineering test/lint/typecheck
+loops.
+
+Codex CLI is not the biomedical truth layer. Deterministic source-backed tools
+remain authoritative for disease resolution, target evidence, molecule
+retrieval, literature evidence, generated hypotheses, developability triage,
+experimental result ingestion, assay-result linking, and score recalibration.
+Codex-backed outputs are stored separately as `codex_backbone` artifacts and do
+not directly alter candidates, evidence, assay results, generated molecules,
+review decisions, or score fields.
+
+Codex CLI must not:
+
+- Create biomedical evidence.
+- Directly change scores.
+- Fabricate citations, assay results, targets, molecules, evidence, or paper
+  claims.
+- Provide medical advice, synthesis instructions, lab protocols, animal or
+  human dosing, or patient treatment guidance.
+- Claim that a molecule cures, treats, binds, is active, is safe, is effective,
+  or is synthesizable unless that claim is explicitly present in source-backed
+  artifacts and still framed as artifact context rather than a new conclusion.
+
+Guardrails and evals are included. Prompt and output checks redact secrets,
+exclude cache/secret artifacts, reject fabrication requests, flag fake
+citations and assay results, block protocol/synthesis/dosing/treatment content,
+validate JSON, and evaluate artifact grounding and safe command planning.
+
+Register runs in a local project workspace:
+
+```bash
+uv run molecule-ranker project init --root .
+uv run molecule-ranker project register-run results/example-condition --run-id run-1
+uv run molecule-ranker project list
+```
+
+Compare registered runs and generate a dashboard:
+
+```bash
+uv run molecule-ranker project compare --run-id run-1 --run-id run-2
+uv run molecule-ranker project dashboard --output-dir .molecule-ranker/dashboard
+```
+
+Start the local JSON API server:
+
+```bash
+uv run molecule-ranker project serve --host 127.0.0.1 --port 8765
+```
+
+Check local Codex CLI status without printing credentials:
+
+```bash
+uv run molecule-ranker codex status --json
+```
+
+Summarize a completed run with Codex:
+
+```bash
+uv run molecule-ranker codex summarize-run \
+  results/alzheimer-disease/ \
+  --dry-run \
+  --json
+```
+
+Explain a candidate using existing artifacts only:
+
+```bash
+uv run molecule-ranker codex explain-candidate \
+  results/alzheimer-disease/ \
+  --candidate "ExampleCandidate" \
+  --dry-run \
+  --json
+```
+
+Plan a safe follow-up run:
+
+```bash
+uv run molecule-ranker codex plan-followup \
+  results/alzheimer-disease/ \
+  --dry-run \
+  --json
+```
+
+Compare two run directories:
+
+```bash
+uv run molecule-ranker codex compare-runs \
+  results/alzheimer-disease-run-a/ \
+  results/alzheimer-disease-run-b/ \
+  --dry-run \
+  --json
+```
+
+Run Codex evals:
+
+```bash
+uv run molecule-ranker codex eval \
+  --cases tests/fixtures/codex_eval_cases.json \
+  --json
+```
+
+Run an engineering test-loop analysis with Codex:
+
+```bash
+uv run molecule-ranker codex test-loop \
+  --test-output test_output.txt \
+  --json
+```
 
 ## V0.5 Expert Review Workflow
 
@@ -1033,8 +1183,13 @@ does not write a normal `report.md` that looks successful.
   structure-aware filters.
 - V0.5: expert review workflow and human-in-the-loop triage.
 - V0.6: experimental feedback loop and active learning from assay results.
-- V0.7: workspace/productization layer, API server, and multi-run project
-  management.
+- V0.7: Codex CLI LLM backbone, project workspace, multi-run management, and
+  local API server.
+- V0.8: production deployment, auth, user roles, team collaboration, and hosted
+  dashboard.
+- V0.9: external integrations for ELN/LIMS, registry, assay providers, and data
+  warehouse.
+- V1.0: validated internal research platform MVP.
 
 ## Development
 

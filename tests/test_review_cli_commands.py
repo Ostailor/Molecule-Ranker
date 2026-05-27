@@ -319,3 +319,49 @@ def test_review_cli_create_can_exclude_generated_and_limit_items(tmp_path):
     workspace = ReviewWorkspaceStore(db_path).get_workspace(workspace_id)
     assert len(workspace.review_items) == 1
     assert workspace.review_items[0].candidate_origin == "existing"
+
+
+def test_review_cli_codex_questions_command_stores_review_assistance(tmp_path):
+    runner = CliRunner()
+    run_dir = tmp_path / "results" / "parkinson-disease"
+    db_path = tmp_path / "review.sqlite"
+    _write_run_artifacts(run_dir)
+
+    created = runner.invoke(
+        app,
+        [
+            "review",
+            "create",
+            "--from-run",
+            str(run_dir),
+            "--db-path",
+            str(db_path),
+            "--json",
+        ],
+    )
+    assert created.exit_code == 0, created.stdout
+    workspace_id = json.loads(created.stdout)["workspace_id"]
+    workspace = ReviewWorkspaceStore(db_path).get_workspace(workspace_id)
+    item_id = workspace.review_items[0].review_item_id
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "codex-questions",
+            workspace_id,
+            item_id,
+            "--db-path",
+            str(db_path),
+            "--codex-mode",
+            "dry_run",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["task_type"] == "codex_review_questions"
+    reloaded = ReviewWorkspaceStore(db_path).get_workspace(workspace_id)
+    assert len(reloaded.codex_review_artifacts) == 1
+    assert reloaded.decisions == []

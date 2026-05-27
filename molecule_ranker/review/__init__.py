@@ -21,6 +21,7 @@ from molecule_ranker.review.metrics import ReviewMetrics, compute_review_metrics
 from molecule_ranker.review.schemas import (
     CandidateComparison,
     CandidateDossier,
+    CodexReviewArtifact,
     ExpertFeedback,
     FeedbackIngestionResult,
     FollowupRequest,
@@ -39,6 +40,7 @@ from molecule_ranker.review.workspace import ReviewWorkspaceStore, ReviewWorkspa
 __all__ = [
     "CandidateDossier",
     "CandidateComparison",
+    "CodexReviewArtifact",
     "DossierWriterAgent",
     "ExpertFeedback",
     "FeedbackIngestionAgent",

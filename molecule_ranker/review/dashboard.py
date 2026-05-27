@@ -88,6 +88,7 @@ def _index_body(workspace: ReviewWorkspace) -> str:
         f"{_metric('Review items', str(len(workspace.review_items)))}"
         f"{_metric('Decisions', str(len(workspace.decisions)))}"
         f"{_metric('Comments', str(len(workspace.comments)))}"
+        f"{_metric('Codex assistance', str(len(workspace.codex_review_artifacts)))}"
         "</section>"
         f"{_distribution_panel('Priority buckets', priorities)}"
         f"{_distribution_panel('Review statuses', statuses)}"
@@ -156,6 +157,11 @@ def _candidate_body(workspace: ReviewWorkspace, item: ReviewItem, dossier: Any) 
     comments = [
         comment for comment in workspace.comments if comment.review_item_id == item.review_item_id
     ]
+    codex_artifacts = [
+        artifact
+        for artifact in workspace.codex_review_artifacts
+        if item.review_item_id in artifact.review_item_ids
+    ]
     citations = _citation_links(item.literature_summary)
     return (
         f"<h2>{_h(item.candidate_name)}</h2>"
@@ -182,6 +188,8 @@ def _candidate_body(workspace: ReviewWorkspace, item: ReviewItem, dossier: Any) 
         f"{_decision_list(decisions)}"
         "<h3>Reviewer comments</h3>"
         f"{_comment_list(comments)}"
+        "<h3>Codex review assistance</h3>"
+        f"{_codex_artifact_list(codex_artifacts)}"
         "<h3>Dossier sections</h3>"
         f"{_json_block(dossier.metadata.get('sections', []))}"
     )
@@ -274,6 +282,21 @@ def _comment_list(comments: list[Any]) -> str:
         f"{_h(comment.comment_text)}</li>"
         for comment in comments
     ) + "</ul>"
+
+
+def _codex_artifact_list(artifacts: list[Any]) -> str:
+    if not artifacts:
+        return "<p>None recorded.</p>"
+    return (
+        "<p class=\"notice\">Codex assistance is separate from reviewer decisions, "
+        "evidence, assay results, generated molecules, and scores.</p><ul>"
+        + "".join(
+            f"<li>{_h(artifact.task_type)} ({_h(artifact.status)}): "
+            f"{_h(', '.join(artifact.artifact_refs) or artifact.artifact_id)}</li>"
+            for artifact in artifacts
+        )
+        + "</ul>"
+    )
 
 
 def _citation_links(summary: dict[str, Any]) -> list[str]:

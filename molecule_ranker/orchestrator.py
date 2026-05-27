@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from molecule_ranker.agents import (
+    CodexBackboneAgent,
     DevelopabilityAssessmentAgent,
     DiseaseResolverAgent,
     EvidenceScoringAgent,
@@ -127,6 +128,7 @@ class MoleculeRankerOrchestrator:
                 metadata_source,
             )
         self.evidence_scoring = EvidenceScoringAgent()
+        self.codex_backbone = CodexBackboneAgent()
         self.experimental_evidence = ExperimentalEvidenceAgent()
         self.developability_assessment = DevelopabilityAssessmentAgent()
         self.review_workspace = ReviewWorkspaceAgent()
@@ -139,6 +141,7 @@ class MoleculeRankerOrchestrator:
             self.developability_assessment,
             self.experimental_evidence,
             self.evidence_scoring,
+            self.codex_backbone,
             self.review_workspace,
             self.report_writer,
         ]

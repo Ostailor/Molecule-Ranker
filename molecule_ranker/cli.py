@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
+import subprocess
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import typer
 from pydantic import BaseModel
@@ -13,6 +16,23 @@ from pydantic import BaseModel
 from molecule_ranker import __version__
 from molecule_ranker.agents.base import AgentExecutionError, PipelineContext
 from molecule_ranker.agents.developability_assessment import DevelopabilityAssessmentAgent
+from molecule_ranker.codex import (
+    CodexArtifact,
+    CodexCLIProvider,
+    CodexProviderConfig,
+    CodexRequest,
+)
+from molecule_ranker.codex_backbone.artifact_context import select_relevant_artifacts
+from molecule_ranker.codex_backbone.evals import run_codex_evals
+from molecule_ranker.codex_backbone.guardrails import redact_secrets
+from molecule_ranker.codex_backbone.provider import CodexBackboneProvider
+from molecule_ranker.codex_backbone.schemas import CodexBackboneConfig, CodexTask, CodexTaskResult
+from molecule_ranker.codex_engineering import (
+    CodexEngineeringRunner,
+    build_docs_plan_task,
+    build_engineering_task,
+    build_test_loop_task,
+)
 from molecule_ranker.config import RankerConfig
 from molecule_ranker.data_sources import (
     ChEMBLAdapter,
@@ -68,7 +88,17 @@ from molecule_ranker.literature.adapters.pubmed_adapter import (
     PubMedAdapter as LiteraturePubMedAdapter,
 )
 from molecule_ranker.orchestrator import MoleculeRankerOrchestrator
+from molecule_ranker.project import (
+    ProjectWorkspaceStore as LegacyProjectWorkspaceStore,
+)
+from molecule_ranker.project import (
+    compare_project_runs,
+    generate_project_dashboard,
+    render_run_comparison_markdown,
+)
+from molecule_ranker.project.server import run_project_api_server
 from molecule_ranker.review import (
+    CodexReviewArtifact,
     DossierWriterAgent,
     FeedbackIngestionAgent,
     FollowupRequest,
@@ -82,6 +112,7 @@ from molecule_ranker.review import (
     generate_static_review_dashboard,
     render_static_review_dashboard,
 )
+from molecule_ranker.review.codex_assistant import CodexReviewAssistant
 from molecule_ranker.review.comparison import render_comparison_markdown
 from molecule_ranker.review.decision_engine import ReviewDecisionEngine
 from molecule_ranker.review.dossier import render_dossier_markdown
@@ -95,6 +126,15 @@ from molecule_ranker.schemas import (
     RankingRun,
 )
 from molecule_ranker.utils import slugify
+from molecule_ranker.workspace import (
+    ProjectWorkspaceStore as WorkspaceProjectStore,
+)
+from molecule_ranker.workspace import (
+    compare_project_runs as compare_workspace_project_runs,
+)
+from molecule_ranker.workspace import (
+    render_project_comparison_markdown,
+)
 
 PIPELINE_ERRORS = (
     DiseaseResolutionError,
@@ -124,9 +164,29 @@ experiment_app = typer.Typer(
     help="V0.6 experimental assay result import, storage, review, and active learning.",
     no_args_is_help=True,
 )
+project_app = typer.Typer(
+    help="V0.7 project workspace, run registry, comparison, dashboard, and local API commands.",
+    no_args_is_help=True,
+)
+codex_app = typer.Typer(
+    help="V0.7 controlled Codex CLI assistant and engineering automation commands.",
+    no_args_is_help=True,
+)
+codex_assist_app = typer.Typer(
+    help="Artifact-grounded Codex assistant workflows.",
+    no_args_is_help=True,
+)
+codex_engineering_app = typer.Typer(
+    help="Codex-backed engineering automation and local check loops.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
+app.add_typer(project_app, name="project")
+app.add_typer(codex_app, name="codex")
+codex_app.add_typer(codex_assist_app, name="assist")
+codex_app.add_typer(codex_engineering_app, name="engineering")
 
 
 @app.callback()
@@ -721,6 +781,1126 @@ def experimental_prioritize(
         )
     if output_path is not None:
         typer.echo(f"Report written: {output_path}")
+
+
+@project_app.command("init")
+def project_init(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional stable project identifier."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create or load a V0.7 project workspace manifest."""
+    try:
+        store = LegacyProjectWorkspaceStore(root_dir)
+        workspace = store.load_or_create(project_id=project_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(workspace.model_dump(mode="json"))
+        return
+    typer.echo(f"Project workspace: {workspace.project_id}")
+    typer.echo(f"Root: {workspace.root_dir}")
+    typer.echo(f"Manifest: {store.workspace_path}")
+
+
+@project_app.command("create")
+def project_create(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    workspace_id: Annotated[
+        str | None,
+        typer.Option("--workspace-id", help="Optional stable workspace identifier."),
+    ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="Human-readable project workspace name."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create or load a V0.7 project workspace."""
+    try:
+        store = WorkspaceProjectStore(root_dir)
+        workspace = store.load_or_create(workspace_id=workspace_id, name=name)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(workspace.model_dump(mode="json"))
+        return
+    typer.echo(f"Project workspace: {workspace.workspace_id}")
+    typer.echo(f"Name: {workspace.name}")
+    typer.echo(f"Root: {workspace.root_dir}")
+    typer.echo(f"Manifest: {store.workspace_path}")
+
+
+@project_app.command("show")
+def project_show(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Show a V0.7 project workspace manifest."""
+    try:
+        workspace = WorkspaceProjectStore(root_dir).load_or_create()
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(workspace.model_dump(mode="json"))
+        return
+    typer.echo(f"Project workspace: {workspace.workspace_id}")
+    typer.echo(f"Name: {workspace.name}")
+    typer.echo(f"Runs: {len(workspace.runs)}")
+    typer.echo(f"Artifacts: {len(workspace.artifacts)}")
+    typer.echo(f"Codex outputs: {len(workspace.codex_outputs)}")
+
+
+@project_app.command("register-run")
+def project_register_run(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    run_id: Annotated[
+        str | None,
+        typer.Option("--run-id", help="Optional run identifier override."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Register one completed molecule-ranker run directory in the project workspace."""
+    try:
+        store = LegacyProjectWorkspaceStore(root_dir)
+        workspace = store.register_run_dir(run_dir, run_id=run_id)
+        resolved_run_dir = str(run_dir.resolve())
+        project_run = next(run for run in workspace.runs if run.run_dir == resolved_run_dir)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(project_run.model_dump(mode="json"))
+        return
+    typer.echo(f"Registered run: {project_run.run_id}")
+    typer.echo(f"Disease: {project_run.disease_name}")
+    typer.echo(f"Artifacts: {len(project_run.artifacts)}")
+
+
+@project_app.command("run")
+def project_run(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    run_id: Annotated[
+        str | None,
+        typer.Option("--run-id", help="Optional run identifier override."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Register one completed run directory in the V0.7 project workspace."""
+    try:
+        store = WorkspaceProjectStore(root_dir)
+        workspace = store.register_run_dir(run_dir, run_id=run_id)
+        resolved_run_dir = str(run_dir.resolve())
+        project_run = next(run for run in workspace.runs if run.run_dir == resolved_run_dir)
+    except (OSError, StopIteration, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(project_run.model_dump(mode="json"))
+        return
+    typer.echo(f"Registered run: {project_run.run_id}")
+    typer.echo(f"Disease: {project_run.disease_name}")
+    typer.echo(f"Artifacts: {len(project_run.artifacts)}")
+
+
+@project_app.command("list")
+def project_list(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List registered project runs and artifacts."""
+    try:
+        workspace_store = WorkspaceProjectStore(root_dir)
+        if workspace_store.workspace_path.exists():
+            workspace = workspace_store.load_or_create()
+        else:
+            workspace = LegacyProjectWorkspaceStore(root_dir).load_or_create()
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(workspace.model_dump(mode="json"))
+        return
+    workspace_any: Any = workspace
+    project_id = (
+        str(workspace_any.workspace_id)
+        if hasattr(workspace_any, "workspace_id")
+        else str(workspace_any.project_id)
+    )
+    typer.echo(f"Project: {project_id}")
+    typer.echo("Run ID\tDisease\tCandidates\tGenerated\tTargets\tArtifacts")
+    for run in workspace.runs:
+        typer.echo(
+            "\t".join(
+                [
+                    run.run_id,
+                    run.disease_name,
+                    str(run.candidate_count),
+                    str(run.generated_candidate_count),
+                    str(run.target_count),
+                    str(len(run.artifacts)),
+                ]
+            )
+        )
+
+
+@project_app.command("artifacts")
+def project_artifacts(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List registered V0.7 project artifacts."""
+    try:
+        store = WorkspaceProjectStore(root_dir)
+        workspace = store.load_or_create()
+        manifest = store.artifact_manifest(workspace)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json({"workspace_id": workspace.workspace_id, "artifacts": manifest})
+        return
+    typer.echo(f"Project: {workspace.workspace_id}")
+    typer.echo("Artifact ID\tRun ID\tType\tSize\tPath")
+    for artifact in manifest:
+        typer.echo(
+            "\t".join(
+                [
+                    str(artifact["artifact_id"]),
+                    str(artifact.get("run_id") or ""),
+                    str(artifact["artifact_type"]),
+                    str(artifact["size_bytes"]),
+                    str(artifact["path"]),
+                ]
+            )
+        )
+
+
+@project_app.command("compare")
+def project_compare(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    run_id: Annotated[
+        list[str] | None,
+        typer.Option("--run-id", help="Run ID to include. Repeatable; defaults to all runs."),
+    ] = None,
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Compare two or more registered runs using existing local artifacts."""
+    try:
+        workspace_store = WorkspaceProjectStore(root_dir)
+        if workspace_store.workspace_path.exists():
+            workspace = workspace_store.load_or_create()
+            selected = _select_project_runs(workspace.runs, run_id or [])
+            comparison = compare_workspace_project_runs(selected)
+            rendered = render_project_comparison_markdown(comparison)
+        else:
+            workspace = LegacyProjectWorkspaceStore(root_dir).load_or_create()
+            selected = _select_project_runs(workspace.runs, run_id or [])
+            comparison = compare_project_runs(selected)
+            rendered = render_run_comparison_markdown(comparison)
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            if json_output:
+                output_path.write_text(
+                    json.dumps(comparison.model_dump(mode="json"), indent=2, sort_keys=True)
+                    + "\n"
+                )
+            else:
+                output_path.write_text(rendered)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(comparison.model_dump(mode="json"))
+        return
+    typer.echo(rendered, nl=False)
+    if output_path is not None:
+        typer.echo(f"Comparison written: {output_path}")
+
+
+@project_app.command("summarize")
+def project_summarize(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    use_codex: Annotated[
+        bool,
+        typer.Option("--use-codex", help="Use the controlled Codex backbone provider."),
+    ] = False,
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Codex mode: enabled, dry_run, or disabled."),
+    ] = "dry_run",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Summarize project state from run summaries and artifact manifests."""
+    try:
+        store = WorkspaceProjectStore(root_dir)
+        workspace = store.load_or_create()
+        if use_codex:
+            config = _project_codex_config(root_dir, mode=mode)
+            workspace, result, output_path = store.run_codex_project_task(
+                "summarize_project",
+                config=config,
+            )
+            payload = {
+                "workspace_id": workspace.workspace_id,
+                "task_type": "summarize_project",
+                "status": result.status,
+                "output_path": str(output_path),
+                "artifact_refs": [artifact.artifact_id for artifact in workspace.artifacts],
+                "output_json": result.output_json,
+            }
+        else:
+            payload = _project_summary_payload(workspace)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(payload)
+        return
+    if use_codex:
+        typer.echo(f"Codex project summary: {payload['status']}")
+        typer.echo(f"Output: {payload['output_path']}")
+        typer.echo(f"Artifact refs: {len(payload['artifact_refs'])}")
+        return
+    typer.echo(f"Project: {payload['workspace_id']}")
+    typer.echo(f"Runs: {payload['run_count']}")
+    typer.echo(f"Artifacts: {payload['artifact_count']}")
+
+
+@project_app.command("plan-next")
+def project_plan_next(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    use_codex: Annotated[
+        bool,
+        typer.Option("--use-codex", help="Use the controlled Codex backbone provider."),
+    ] = False,
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Codex mode: enabled, dry_run, or disabled."),
+    ] = "dry_run",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Suggest safe next project actions from existing artifacts."""
+    try:
+        store = WorkspaceProjectStore(root_dir)
+        workspace = store.load_or_create()
+        if use_codex:
+            config = _project_codex_config(root_dir, mode=mode)
+            workspace, result, output_path = store.run_codex_project_task(
+                "suggest_next_project_actions",
+                config=config,
+            )
+            payload = {
+                "workspace_id": workspace.workspace_id,
+                "task_type": "suggest_next_project_actions",
+                "status": result.status,
+                "output_path": str(output_path),
+                "artifact_refs": [artifact.artifact_id for artifact in workspace.artifacts],
+                "output_json": result.output_json,
+            }
+        else:
+            payload = {
+                **_project_summary_payload(workspace),
+                "recommended_actions": [
+                    {
+                        "action_type": "summarize",
+                        "safe_cli_command": "molecule-ranker project summarize --use-codex",
+                        "rationale": (
+                            "Create an artifact-grounded project summary before selecting "
+                            "follow-up work."
+                        ),
+                    }
+                ],
+            }
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(payload)
+        return
+    if use_codex:
+        typer.echo(f"Codex project next-action plan: {payload['status']}")
+        typer.echo(f"Output: {payload['output_path']}")
+        typer.echo(f"Artifact refs: {len(payload['artifact_refs'])}")
+        return
+    typer.echo("Recommended next action:")
+    for action in payload["recommended_actions"]:
+        typer.echo(f"- {action['safe_cli_command']}: {action['rationale']}")
+
+
+@project_app.command("dashboard")
+def project_dashboard(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True, writable=True),
+    ] = Path(".molecule-ranker/dashboard"),
+) -> None:
+    """Generate a static project dashboard from the registered workspace."""
+    try:
+        workspace = LegacyProjectWorkspaceStore(root_dir).load_or_create()
+        path = generate_project_dashboard(workspace, output_dir)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Project dashboard written: {path}")
+    typer.echo(f"Open: {path / 'index.html'}")
+
+
+@project_app.command("serve")
+def project_serve(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
+) -> None:
+    """Start a local JSON API server for the project workspace."""
+    typer.echo(f"Serving molecule-ranker project API at http://{host}:{port}")
+    typer.echo("Endpoints: /health, /project, /runs, /artifacts, /comparison")
+    run_project_api_server(root_dir, host=host, port=port)
+
+
+@codex_app.command("status")
+def codex_status(
+    command: Annotated[
+        str,
+        typer.Option("--command", help="Codex CLI command or absolute path."),
+    ] = "codex",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Check Codex CLI availability without exposing credentials."""
+    try:
+        command_parts = shlex.split(command) or ["codex"]
+        resolved = shutil.which(command_parts[0])
+        version_check = _codex_status_check(command_parts, resolved)
+        payload = {
+            "configured_command": command,
+            "resolved_command": resolved,
+            "cli_exists": resolved is not None,
+            "backbone_enabled": RankerConfig().enable_codex_backbone,
+            "status_check": version_check,
+        }
+    except OSError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Configured command: {payload['configured_command']}")
+    typer.echo(f"Resolved command: {payload['resolved_command'] or 'not found'}")
+    typer.echo(f"CLI exists: {payload['cli_exists']}")
+    typer.echo(f"Backbone enabled: {payload['backbone_enabled']}")
+    status_check = payload["status_check"]
+    if isinstance(status_check, dict):
+        typer.echo(f"Status check: {status_check['status']}")
+        if status_check.get("stdout"):
+            typer.echo(f"stdout: {status_check['stdout']}")
+        if status_check.get("stderr"):
+            typer.echo(f"stderr: {status_check['stderr']}")
+
+
+@codex_app.command("run-task")
+def codex_run_task(
+    task_path: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    command: Annotated[str, typer.Option("--command")] = "codex",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run a serialized CodexTask through the controlled Codex backbone provider."""
+    try:
+        task = CodexTask.model_validate(json.loads(task_path.read_text()))
+        result = _run_codex_task(task, dry_run=dry_run, command=command)
+        destination = output_path or task_path.with_name(f"{task.task_id}_result.json")
+        _write_json_model(destination, result)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "status": result.status,
+        "output_path": str(destination),
+        "result": result.model_dump(mode="json"),
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Codex task status: {result.status}")
+    typer.echo(f"Result written: {destination}")
+
+
+@codex_app.command("summarize-run")
+def codex_summarize_run(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    command: Annotated[str, typer.Option("--command")] = "codex",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Build and run a summarize_run task from a completed run directory."""
+    try:
+        task = _build_codex_run_task(run_dir, task_type="summarize_run")
+        result = _run_codex_task(task, dry_run=dry_run, command=command)
+        destination = output_path or run_dir / "codex_summary.json"
+        _write_json_model(destination, result)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = _codex_cli_payload(result, destination)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Codex summary status: {result.status}")
+    typer.echo(f"Result written: {destination}")
+
+
+@codex_app.command("explain-candidate")
+def codex_explain_candidate(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    candidate: Annotated[str, typer.Option("--candidate", help="Candidate name to explain.")],
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    command: Annotated[str, typer.Option("--command")] = "codex",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Explain a candidate ranking using only existing run artifacts."""
+    try:
+        task = _build_codex_run_task(run_dir, task_type="explain_ranking", candidate=candidate)
+        result = _run_codex_task(task, dry_run=dry_run, command=command)
+        destination = output_path or run_dir / f"codex_explain_{slugify(candidate)}.json"
+        _write_json_model(destination, result)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = _codex_cli_payload(result, destination)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Codex candidate explanation status: {result.status}")
+    typer.echo(f"Result written: {destination}")
+
+
+@codex_app.command("compare-runs")
+def codex_compare_runs(
+    run_a_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    run_b_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    command: Annotated[str, typer.Option("--command")] = "codex",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Compare two run directories using Codex-backed artifact explanation."""
+    try:
+        task = _build_codex_compare_runs_task(run_a_dir, run_b_dir)
+        result = _run_codex_task(task, dry_run=dry_run, command=command)
+        destination = output_path or Path("codex_run_comparison.json")
+        _write_json_model(destination, result)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = _codex_cli_payload(result, destination)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Codex run comparison status: {result.status}")
+    typer.echo(f"Result written: {destination}")
+
+
+@codex_app.command("plan-followup")
+def codex_plan_followup(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    command: Annotated[str, typer.Option("--command")] = "codex",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Suggest safe molecule-ranker CLI follow-up commands from run artifacts."""
+    try:
+        task = _build_codex_run_task(run_dir, task_type="plan_followup_run")
+        result = _run_codex_task(task, dry_run=dry_run, command=command)
+        destination = output_path or run_dir / "codex_followup_plan.json"
+        _write_json_model(destination, result)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = _codex_cli_payload(result, destination)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Codex follow-up plan status: {result.status}")
+    typer.echo(f"Result written: {destination}")
+
+
+@codex_app.command("engineering-plan")
+def codex_top_level_engineering_plan(
+    goal: Annotated[
+        str | None,
+        typer.Option("--goal", help="Engineering planning goal."),
+    ] = None,
+    prompt: Annotated[
+        str | None,
+        typer.Option("--prompt", help="Deprecated alias for --goal."),
+    ] = None,
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="Allow Codex to apply edits.")] = False,
+    allow_git_push: Annotated[bool, typer.Option("--allow-git-push")] = False,
+    allow_deletions: Annotated[bool, typer.Option("--allow-deletions")] = False,
+    command: Annotated[str, typer.Option("--command")] = "codex",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Plan codebase work with engineering guardrails. Dry-run is enabled by default."""
+    try:
+        resolved_goal = goal or prompt
+        if not resolved_goal:
+            raise ValueError("--goal is required.")
+        task = build_engineering_task(
+            task_type="implementation_planning",
+            goal=resolved_goal,
+            working_directory=cwd,
+            apply=apply,
+            allow_git_push=allow_git_push,
+            allow_deletions=allow_deletions,
+        )
+        result = CodexEngineeringRunner(
+            codex_command=command,
+            working_directory=cwd,
+        ).run(
+            task,
+            apply=apply,
+            allow_git_push=allow_git_push,
+            allow_deletions=allow_deletions,
+        )
+        destination = output_path or cwd / "codex_engineering_plan.json"
+        _write_json_model(destination, result)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = _codex_cli_payload(result, destination)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Codex engineering plan status: {result.status}")
+    typer.echo(f"Result written: {destination}")
+
+
+@codex_app.command("test-loop")
+def codex_test_loop(
+    test_output: Annotated[
+        Path,
+        typer.Option(
+            "--test-output",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Captured test output to analyze.",
+        ),
+    ],
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="Allow Codex to apply edits.")] = False,
+    allow_git_push: Annotated[bool, typer.Option("--allow-git-push")] = False,
+    allow_deletions: Annotated[bool, typer.Option("--allow-deletions")] = False,
+    command: Annotated[str, typer.Option("--command")] = "codex",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Analyze test failures with Codex engineering guardrails."""
+    try:
+        task = build_test_loop_task(
+            test_output,
+            working_directory=cwd,
+            apply=apply,
+            allow_git_push=allow_git_push,
+            allow_deletions=allow_deletions,
+        )
+        result = CodexEngineeringRunner(codex_command=command, working_directory=cwd).run(
+            task,
+            apply=apply,
+            allow_git_push=allow_git_push,
+            allow_deletions=allow_deletions,
+        )
+        destination = output_path or cwd / "codex_test_loop.json"
+        _write_json_model(destination, result)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = _codex_cli_payload(result, destination)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Codex test-loop status: {result.status}")
+    typer.echo(f"Result written: {destination}")
+
+
+@codex_app.command("docs-plan")
+def codex_docs_plan(
+    section: Annotated[
+        Path,
+        typer.Option("--section", help="Documentation file or section path to update."),
+    ],
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="Allow Codex to apply edits.")] = False,
+    allow_git_push: Annotated[bool, typer.Option("--allow-git-push")] = False,
+    allow_deletions: Annotated[bool, typer.Option("--allow-deletions")] = False,
+    command: Annotated[str, typer.Option("--command")] = "codex",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Plan documentation updates with Codex engineering guardrails."""
+    try:
+        task = build_docs_plan_task(
+            section,
+            working_directory=cwd,
+            apply=apply,
+            allow_git_push=allow_git_push,
+            allow_deletions=allow_deletions,
+        )
+        result = CodexEngineeringRunner(codex_command=command, working_directory=cwd).run(
+            task,
+            apply=apply,
+            allow_git_push=allow_git_push,
+            allow_deletions=allow_deletions,
+        )
+        destination = output_path or cwd / "codex_docs_plan.json"
+        _write_json_model(destination, result)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = _codex_cli_payload(result, destination)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Codex docs-plan status: {result.status}")
+    typer.echo(f"Result written: {destination}")
+
+
+@codex_app.command("eval")
+def codex_eval(
+    cases: Annotated[
+        Path,
+        typer.Option(
+            "--cases",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Codex eval cases JSON file.",
+        ),
+    ],
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run deterministic evals for Codex-backed LLM task outputs."""
+    try:
+        report = run_codex_evals(cases)
+        if output_path is not None:
+            _write_json_model(output_path, report)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = report.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Codex eval cases: {report.case_count}")
+    typer.echo(f"Passed: {report.passed_count}")
+    typer.echo(f"Failed: {report.failed_count}")
+    typer.echo("Metrics:")
+    for name, value in report.metrics.items():
+        typer.echo(f"- {name}: {value:.3f}")
+    failing = [result for result in report.results if not result.passed]
+    if failing:
+        typer.echo("Failing cases:")
+        for result in failing:
+            typer.echo(f"- {result.case_id}: {'; '.join(result.failures)}")
+    if output_path is not None:
+        typer.echo(f"Eval report written: {output_path}")
+
+
+@codex_assist_app.command("plan")
+def codex_assist_plan(
+    task: Annotated[str, typer.Argument(help="Planning task for Codex to structure.")],
+    artifact: Annotated[
+        list[Path] | None,
+        typer.Option("--artifact", exists=True, readable=True, help="Grounding artifact path."),
+    ] = None,
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    mode: Annotated[str, typer.Option("--mode", help="enabled, dry_run, or disabled.")] = "dry_run",
+    timeout: Annotated[float, typer.Option("--timeout", min=1.0)] = 120.0,
+    audit_log: Annotated[
+        Path,
+        typer.Option("--audit-log", file_okay=True, dir_okay=False),
+    ] = Path(".codex/molecule-ranker/codex-cli-audit.jsonl"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Ask Codex CLI for a project plan grounded in supplied artifacts."""
+    request = _codex_request(
+        task=task,
+        artifacts=artifact or [],
+        workflow="project_planning",
+        schema=_assistant_schema("plan"),
+    )
+    response = _invoke_codex_request(
+        request,
+        mode=mode,
+        cwd=cwd,
+        timeout=timeout,
+        audit_log=audit_log,
+    )
+    _print_codex_response(response, json_output=json_output)
+
+
+@codex_assist_app.command("summarize-report")
+def codex_assist_summarize_report(
+    report_path: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    mode: Annotated[str, typer.Option("--mode")] = "dry_run",
+    timeout: Annotated[float, typer.Option("--timeout", min=1.0)] = 120.0,
+    audit_log: Annotated[
+        Path,
+        typer.Option("--audit-log", file_okay=True, dir_okay=False),
+    ] = Path(".codex/molecule-ranker/codex-cli-audit.jsonl"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Summarize a source-backed report without adding biomedical claims."""
+    request = _codex_request(
+        task="Summarize the supplied molecule-ranker report for expert review.",
+        artifacts=[report_path],
+        workflow="report_summarization",
+        schema=_assistant_schema("summary"),
+        prompt_sections={
+            "instructions": [
+                "Use only the supplied report artifact.",
+                "Separate evidence, limitations, and follow-up questions.",
+            ]
+        },
+    )
+    response = _invoke_codex_request(
+        request,
+        mode=mode,
+        cwd=cwd,
+        timeout=timeout,
+        audit_log=audit_log,
+    )
+    _print_codex_response(response, json_output=json_output)
+
+
+@codex_assist_app.command("compare-runs")
+def codex_assist_compare_runs(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    run_id: Annotated[
+        list[str] | None,
+        typer.Option("--run-id", help="Run ID to include. Repeatable; defaults to all runs."),
+    ] = None,
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    mode: Annotated[str, typer.Option("--mode")] = "dry_run",
+    timeout: Annotated[float, typer.Option("--timeout", min=1.0)] = 120.0,
+    audit_log: Annotated[
+        Path,
+        typer.Option("--audit-log", file_okay=True, dir_okay=False),
+    ] = Path(".codex/molecule-ranker/codex-cli-audit.jsonl"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Ask Codex to summarize an already computed multi-run comparison."""
+    try:
+        workspace = LegacyProjectWorkspaceStore(root_dir).load_or_create()
+        comparison = compare_project_runs(_select_project_runs(workspace.runs, run_id or []))
+        comparison_path = Path(".molecule-ranker") / "last-comparison.json"
+        comparison_path.parent.mkdir(parents=True, exist_ok=True)
+        comparison_path.write_text(
+            json.dumps(comparison.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    request = _codex_request(
+        task="Summarize the artifact-grounded multi-run comparison for review.",
+        artifacts=[comparison_path],
+        workflow="candidate_comparison",
+        schema=_assistant_schema("comparison"),
+    )
+    response = _invoke_codex_request(
+        request,
+        mode=mode,
+        cwd=cwd,
+        timeout=timeout,
+        audit_log=audit_log,
+    )
+    _print_codex_response(response, json_output=json_output)
+
+
+@codex_assist_app.command("review-questions")
+def codex_assist_review_questions(
+    workspace_json: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    mode: Annotated[str, typer.Option("--mode")] = "dry_run",
+    timeout: Annotated[float, typer.Option("--timeout", min=1.0)] = 120.0,
+    audit_log: Annotated[
+        Path,
+        typer.Option("--audit-log", file_okay=True, dir_okay=False),
+    ] = Path(".codex/molecule-ranker/codex-cli-audit.jsonl"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Generate high-level expert review questions from a review workspace artifact."""
+    request = _codex_request(
+        task="Draft high-level expert review questions grounded in the review workspace.",
+        artifacts=[workspace_json],
+        workflow="review_assistant",
+        schema=_assistant_schema("review_questions"),
+    )
+    response = _invoke_codex_request(
+        request,
+        mode=mode,
+        cwd=cwd,
+        timeout=timeout,
+        audit_log=audit_log,
+    )
+    _print_codex_response(response, json_output=json_output)
+
+
+@codex_assist_app.command("explain-active-learning")
+def codex_assist_explain_active_learning(
+    batch_json: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    mode: Annotated[str, typer.Option("--mode")] = "dry_run",
+    timeout: Annotated[float, typer.Option("--timeout", min=1.0)] = 120.0,
+    audit_log: Annotated[
+        Path,
+        typer.Option("--audit-log", file_okay=True, dir_okay=False),
+    ] = Path(".codex/molecule-ranker/codex-cli-audit.jsonl"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Explain an active-learning batch as triage rationale, not experimental instruction."""
+    request = _codex_request(
+        task="Explain why the active-learning batch was suggested for expert triage.",
+        artifacts=[batch_json],
+        workflow="active_learning_explanation",
+        schema=_assistant_schema("active_learning"),
+    )
+    response = _invoke_codex_request(
+        request,
+        mode=mode,
+        cwd=cwd,
+        timeout=timeout,
+        audit_log=audit_log,
+    )
+    _print_codex_response(response, json_output=json_output)
+
+
+@codex_assist_app.command("follow-up")
+def codex_assist_follow_up(
+    artifact: Annotated[
+        list[Path],
+        typer.Option("--artifact", exists=True, readable=True, help="Grounding artifact path."),
+    ],
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    mode: Annotated[str, typer.Option("--mode")] = "dry_run",
+    timeout: Annotated[float, typer.Option("--timeout", min=1.0)] = 120.0,
+    audit_log: Annotated[
+        Path,
+        typer.Option("--audit-log", file_okay=True, dir_okay=False),
+    ] = Path(".codex/molecule-ranker/codex-cli-audit.jsonl"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Plan computational follow-up tasks from existing artifacts."""
+    request = _codex_request(
+        task="Propose follow-up computational tasks grounded in the supplied artifacts.",
+        artifacts=artifact,
+        workflow="follow_up_task_planning",
+        schema=_assistant_schema("follow_up"),
+    )
+    response = _invoke_codex_request(
+        request,
+        mode=mode,
+        cwd=cwd,
+        timeout=timeout,
+        audit_log=audit_log,
+    )
+    _print_codex_response(response, json_output=json_output)
+
+
+@codex_engineering_app.command("check")
+def codex_engineering_check(
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    skip_tests: Annotated[bool, typer.Option("--skip-tests")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run local engineering checks that Codex may orchestrate safely."""
+    commands = [["uv", "run", "ruff", "check", "."]]
+    commands.append(["uv", "run", "pyright"])
+    if not skip_tests:
+        commands.append(["uv", "run", "pytest"])
+    results = [_run_engineering_command(command, cwd=cwd) for command in commands]
+    payload = {
+        "status": "ok" if all(result["returncode"] == 0 for result in results) else "failed",
+        "commands": results,
+    }
+    if json_output:
+        _echo_json(payload)
+        if payload["status"] != "ok":
+            raise typer.Exit(code=1)
+        return
+    for result in results:
+        typer.echo(
+            f"{' '.join(result['command'])}: exit {result['returncode']} "
+            f"({result['duration_seconds']:.2f}s)"
+        )
+        if result["stderr_excerpt"]:
+            typer.echo(result["stderr_excerpt"])
+    if payload["status"] != "ok":
+        raise typer.Exit(code=1)
+
+
+@codex_engineering_app.command("plan")
+def codex_engineering_plan(
+    task: Annotated[str, typer.Argument(help="Engineering automation task.")],
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    mode: Annotated[str, typer.Option("--mode")] = "dry_run",
+    timeout: Annotated[float, typer.Option("--timeout", min=1.0)] = 120.0,
+    audit_log: Annotated[
+        Path,
+        typer.Option("--audit-log", file_okay=True, dir_okay=False),
+    ] = Path(".codex/molecule-ranker/codex-cli-audit.jsonl"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Ask Codex CLI for an engineering automation plan."""
+    request = _codex_request(
+        task=task,
+        artifacts=[],
+        workflow="engineering_automation",
+        schema=_assistant_schema("engineering"),
+        prompt_sections={
+            "allowed_actions": [
+                "run tests",
+                "run lint",
+                "run typecheck",
+                "inspect local artifacts",
+                "summarize failures",
+            ],
+            "disallowed_actions": [
+                "change biomedical scores without scoring modules",
+                "invent biomedical evidence",
+            ],
+        },
+    )
+    response = _invoke_codex_request(
+        request,
+        mode=mode,
+        cwd=cwd,
+        timeout=timeout,
+        audit_log=audit_log,
+    )
+    _print_codex_response(response, json_output=json_output)
 
 
 @review_app.command("create")
@@ -1403,6 +2583,154 @@ def review_compare(
         _echo_json(comparison.model_dump(mode="json"))
         return
     typer.echo(render_comparison_markdown(comparison))
+
+
+@review_app.command("codex-questions")
+def review_codex_questions(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    review_item_id: Annotated[str, typer.Argument(help="Review item identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    codex_mode: Annotated[
+        str,
+        typer.Option(
+            "--codex-mode",
+            help="Codex execution mode: dry_run, enabled, or disabled.",
+        ),
+    ] = "dry_run",
+    codex_command: Annotated[
+        str,
+        typer.Option("--codex-command", help="Codex CLI command or path."),
+    ] = "codex",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Draft Codex-backed review questions and store them separately from decisions."""
+    try:
+        store = ReviewWorkspaceStore(db_path)
+        workspace = store.get_workspace(workspace_id)
+        artifact = _run_review_codex_assistant(
+            workspace,
+            db_path=db_path,
+            codex_mode=codex_mode,
+            codex_command=codex_command,
+            action="questions",
+            review_item_id=review_item_id,
+        )
+        store.add_codex_review_artifact(workspace_id, artifact)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(artifact.model_dump(mode="json"))
+        return
+    typer.echo(f"Codex review questions stored: {artifact.artifact_id}")
+    typer.echo("Codex output is review assistance only; it is not a reviewer decision.")
+
+
+@review_app.command("codex-summary")
+def review_codex_summary(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    review_item_id: Annotated[str, typer.Argument(help="Review item identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    codex_mode: Annotated[
+        str,
+        typer.Option(
+            "--codex-mode",
+            help="Codex execution mode: dry_run, enabled, or disabled.",
+        ),
+    ] = "dry_run",
+    codex_command: Annotated[
+        str,
+        typer.Option("--codex-command", help="Codex CLI command or path."),
+    ] = "codex",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Draft a Codex-backed candidate dossier summary from existing review artifacts."""
+    try:
+        store = ReviewWorkspaceStore(db_path)
+        workspace = store.get_workspace(workspace_id)
+        artifact = _run_review_codex_assistant(
+            workspace,
+            db_path=db_path,
+            codex_mode=codex_mode,
+            codex_command=codex_command,
+            action="summary",
+            review_item_id=review_item_id,
+        )
+        store.add_codex_review_artifact(workspace_id, artifact)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(artifact.model_dump(mode="json"))
+        return
+    typer.echo(f"Codex dossier summary stored: {artifact.artifact_id}")
+    typer.echo(
+        "Codex output does not alter evidence, assay results, generated molecules, or scores."
+    )
+
+
+@review_app.command("codex-compare")
+def review_codex_compare(
+    workspace_id: Annotated[str, typer.Argument(help="Review workspace identifier.")],
+    item_a: Annotated[str, typer.Argument(help="First review item identifier.")],
+    item_b: Annotated[str, typer.Argument(help="Second review item identifier.")],
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite review database path."),
+    ] = Path(".review/molecule-ranker-review.sqlite"),
+    codex_mode: Annotated[
+        str,
+        typer.Option(
+            "--codex-mode",
+            help="Codex execution mode: dry_run, enabled, or disabled.",
+        ),
+    ] = "dry_run",
+    codex_command: Annotated[
+        str,
+        typer.Option("--codex-command", help="Codex CLI command or path."),
+    ] = "codex",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Draft a Codex-backed candidate comparison for expert review."""
+    try:
+        store = ReviewWorkspaceStore(db_path)
+        workspace = store.get_workspace(workspace_id)
+        artifact = _run_review_codex_assistant(
+            workspace,
+            db_path=db_path,
+            codex_mode=codex_mode,
+            codex_command=codex_command,
+            action="compare",
+            item_a=item_a,
+            item_b=item_b,
+        )
+        store.add_codex_review_artifact(workspace_id, artifact)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(artifact.model_dump(mode="json"))
+        return
+    typer.echo(f"Codex candidate comparison stored: {artifact.artifact_id}")
+    typer.echo("Codex output is separate from final reviewer decisions.")
 
 
 @review_app.command("dossier")
@@ -3152,6 +4480,403 @@ def _render_workspace_markdown(workspace: ReviewWorkspace) -> str:
             )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _select_project_runs(runs: list[Any], run_ids: list[str]) -> list[Any]:
+    if not run_ids:
+        selected = runs
+    else:
+        requested = set(run_ids)
+        selected = [run for run in runs if run.run_id in requested]
+        missing = requested - {run.run_id for run in selected}
+        if missing:
+            raise ValueError(f"Unknown run IDs: {', '.join(sorted(missing))}")
+    if len(selected) < 2:
+        raise ValueError("At least two registered runs are required.")
+    return selected
+
+
+def _codex_status_check(command_parts: list[str], resolved: str | None) -> dict[str, Any]:
+    if resolved is None:
+        return {"status": "unavailable", "stdout": "", "stderr": "Codex CLI was not found."}
+    check_command = [resolved, *command_parts[1:], "--version"]
+    try:
+        completed = subprocess.run(
+            check_command,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            shell=False,
+            env={"PATH": os.environ.get("PATH", "")},
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "timed_out", "stdout": "", "stderr": "Version check timed out."}
+    except OSError as exc:
+        return {"status": "failed", "stdout": "", "stderr": redact_secrets(str(exc))}
+    status = "ok" if completed.returncode == 0 else "failed"
+    return {
+        "status": status,
+        "return_code": completed.returncode,
+        "stdout": redact_secrets(completed.stdout.strip()[:1000]),
+        "stderr": redact_secrets(completed.stderr.strip()[:1000]),
+    }
+
+
+def _run_codex_task(
+    task: CodexTask,
+    *,
+    dry_run: bool,
+    command: str,
+    allow_shell_commands: bool = False,
+    allowed_commands: list[str] | None = None,
+) -> CodexTaskResult:
+    config = CodexBackboneConfig(
+        enable_codex_backbone=True,
+        codex_cli_command=command,
+        codex_working_dir=Path(task.working_directory),
+        codex_timeout_seconds=task.timeout_seconds,
+        codex_require_json=task.require_json,
+        codex_dry_run=dry_run,
+        codex_allow_shell_commands=allow_shell_commands,
+        codex_allowed_commands=allowed_commands or [],
+        codex_store_transcripts=True,
+    )
+    return CodexBackboneProvider(config).run_task(task)
+
+
+def _build_codex_run_task(
+    run_dir: Path,
+    *,
+    task_type: Literal["summarize_run", "explain_ranking", "plan_followup_run"],
+    candidate: str | None = None,
+) -> CodexTask:
+    artifacts = _codex_run_artifact_paths(run_dir)
+    if not artifacts:
+        raise ValueError(f"No supported run artifacts found in: {run_dir}")
+    candidates_path = run_dir / "candidates.json"
+    if not candidates_path.exists():
+        raise ValueError(f"Missing candidates.json in run directory: {run_dir}")
+    artifact_refs = [str(path.resolve()) for path in artifacts]
+    prompt_payload: dict[str, Any] = {
+        "run_directory": str(run_dir.resolve()),
+        "artifact_refs": artifact_refs,
+        "constraints": [
+            "Use only these existing artifacts.",
+            "Do not create or modify evidence, molecules, assay results, citations, or scores.",
+            (
+                "Do not claim cure, treatment, safety, efficacy, binding, activity, "
+                "or synthesizability."
+            ),
+            "No medical advice, synthesis routes, lab protocols, dosing, or treatment guidance.",
+        ],
+    }
+    if task_type == "summarize_run":
+        prompt_payload["task"] = "Summarize this molecule-ranker run for expert review."
+    elif task_type == "explain_ranking":
+        if not candidate:
+            raise ValueError("--candidate is required for explain-candidate.")
+        prompt_payload.update(
+            {
+                "task": "Explain why this candidate is ranked where it is.",
+                "candidate_name": candidate,
+                "instructions": [
+                    "Use candidate records, score breakdowns, and evidence summaries only.",
+                    "Include artifact_refs in the JSON response.",
+                    "List unsupported claims under not_claimed.",
+                ],
+            }
+        )
+    elif task_type == "plan_followup_run":
+        prompt_payload.update(
+            {
+                "task": "Suggest safe molecule-ranker CLI follow-up commands.",
+                "instructions": [
+                    "Only propose molecule-ranker CLI commands.",
+                    "Do not suggest shell pipelines, network installers, destructive commands, "
+                    "lab protocols, synthesis steps, dosing, or treatment actions.",
+                ],
+            }
+        )
+    return CodexTask(
+        task_id=slugify(f"{run_dir.name}-{task_type}-{candidate or 'run'}"),
+        task_type=task_type,
+        prompt=json.dumps(prompt_payload, indent=2, sort_keys=True),
+        working_directory=str(run_dir.resolve()),
+        input_artifact_paths=artifact_refs,
+        allowed_commands=[],
+        forbidden_commands=[],
+        expected_output_format="json",
+        timeout_seconds=300,
+        require_json=True,
+        metadata={"artifact_refs": artifact_refs, "candidate": candidate},
+    )
+
+
+def _build_codex_compare_runs_task(run_a_dir: Path, run_b_dir: Path) -> CodexTask:
+    artifacts = [*_codex_run_artifact_paths(run_a_dir), *_codex_run_artifact_paths(run_b_dir)]
+    if not artifacts:
+        raise ValueError("No supported run artifacts found for comparison.")
+    artifact_refs = [str(path.resolve()) for path in artifacts]
+    prompt = {
+        "task": "Compare two molecule-ranker runs using existing artifacts only.",
+        "run_a_dir": str(run_a_dir.resolve()),
+        "run_b_dir": str(run_b_dir.resolve()),
+        "artifact_refs": artifact_refs,
+        "constraints": [
+            "Use only provided artifacts.",
+            "Compare workflow outputs and artifact-backed differences.",
+            "Do not create or modify evidence, molecules, assay results, citations, or scores.",
+            (
+                "Do not claim cure, treatment, safety, efficacy, binding, activity, "
+                "or synthesizability."
+            ),
+            "No medical advice, synthesis routes, lab protocols, dosing, or treatment guidance.",
+        ],
+        "output": {
+            "comparison_summary": "string",
+            "shared_strengths": ["artifact-backed strings"],
+            "differences": ["artifact-backed strings"],
+            "risks": ["risk or limitation strings"],
+            "artifact_refs": ["artifact paths used"],
+        },
+    }
+    return CodexTask(
+        task_id=slugify(f"compare-runs-{run_a_dir.name}-{run_b_dir.name}"),
+        task_type="compare_runs",
+        prompt=json.dumps(prompt, indent=2, sort_keys=True),
+        working_directory=str(Path.cwd().resolve()),
+        input_artifact_paths=artifact_refs,
+        allowed_commands=[],
+        forbidden_commands=[],
+        expected_output_format="json",
+        timeout_seconds=300,
+        require_json=True,
+        metadata={"artifact_refs": artifact_refs},
+    )
+
+
+def _codex_run_artifact_paths(run_dir: Path) -> list[Path]:
+    return select_relevant_artifacts("inspect_artifacts", run_dir)
+
+
+def _codex_cli_payload(result: CodexTaskResult, output_path: Path) -> dict[str, Any]:
+    return {
+        "task_id": result.task_id,
+        "task_type": result.task_type,
+        "status": result.status,
+        "output_path": str(output_path),
+        "artifact_refs": list(result.artifacts_read),
+        "guardrail_warnings": list(result.guardrail_warnings),
+        "output_json": result.output_json,
+    }
+
+
+def _project_codex_config(root_dir: Path, *, mode: str) -> CodexBackboneConfig:
+    normalized = mode.strip().lower()
+    if normalized not in {"enabled", "dry_run", "disabled"}:
+        raise ValueError("Codex mode must be one of: enabled, dry_run, disabled.")
+    return CodexBackboneConfig(
+        enable_codex_backbone=normalized != "disabled",
+        codex_working_dir=root_dir.resolve(),
+        codex_dry_run=normalized == "dry_run",
+        codex_require_json=True,
+        codex_store_transcripts=True,
+    )
+
+
+def _review_codex_config(
+    db_path: Path,
+    *,
+    mode: str,
+    codex_command: str,
+) -> CodexBackboneConfig:
+    normalized = mode.strip().lower()
+    if normalized not in {"enabled", "dry_run", "disabled"}:
+        raise ValueError("Codex mode must be one of: enabled, dry_run, disabled.")
+    working_dir = db_path.resolve().parent
+    return CodexBackboneConfig(
+        enable_codex_backbone=normalized != "disabled",
+        codex_cli_command=codex_command,
+        codex_working_dir=working_dir,
+        codex_dry_run=normalized == "dry_run",
+        codex_require_json=True,
+        codex_store_transcripts=True,
+        codex_guardrails_enabled=True,
+    )
+
+
+def _run_review_codex_assistant(
+    workspace: ReviewWorkspace,
+    *,
+    db_path: Path,
+    codex_mode: str,
+    codex_command: str,
+    action: Literal["questions", "summary", "compare"],
+    review_item_id: str | None = None,
+    item_a: str | None = None,
+    item_b: str | None = None,
+) -> CodexReviewArtifact:
+    config = _review_codex_config(
+        db_path,
+        mode=codex_mode,
+        codex_command=codex_command,
+    )
+    provider = CodexBackboneProvider(config)
+    assistant = CodexReviewAssistant(provider, working_directory=config.codex_working_dir or ".")
+    if action == "questions":
+        if review_item_id is None:
+            raise ValueError("review_item_id is required for Codex review questions.")
+        return assistant.draft_questions(workspace, review_item_id)
+    if action == "summary":
+        if review_item_id is None:
+            raise ValueError("review_item_id is required for Codex dossier summary.")
+        return assistant.summarize_dossier(workspace, review_item_id)
+    if item_a is None or item_b is None:
+        raise ValueError("Two review item identifiers are required for Codex comparison.")
+    return assistant.compare_candidates(workspace, item_a, item_b)
+
+
+def _project_summary_payload(workspace: Any) -> dict[str, Any]:
+    workspace_id = (
+        workspace.workspace_id if hasattr(workspace, "workspace_id") else workspace.project_id
+    )
+    return {
+        "workspace_id": workspace_id,
+        "name": getattr(workspace, "name", workspace_id),
+        "run_count": len(workspace.runs),
+        "artifact_count": len(workspace.artifacts),
+        "codex_output_count": len(getattr(workspace, "codex_outputs", [])),
+        "runs": [
+            {
+                "run_id": run.run_id,
+                "disease_name": run.disease_name,
+                "candidate_count": run.candidate_count,
+                "generated_candidate_count": run.generated_candidate_count,
+                "target_count": run.target_count,
+                "artifact_refs": [artifact.artifact_id for artifact in run.artifacts],
+            }
+            for run in workspace.runs
+        ],
+        "artifact_refs": [artifact.artifact_id for artifact in workspace.artifacts],
+    }
+
+
+def _codex_request(
+    *,
+    task: str,
+    artifacts: list[Path],
+    workflow: str,
+    schema: dict[str, Any],
+    prompt_sections: dict[str, Any] | None = None,
+) -> CodexRequest:
+    artifact_refs = [
+        CodexArtifact.from_path(path, artifact_id=f"artifact-{index}")
+        for index, path in enumerate(artifacts, start=1)
+    ]
+    sections = {
+        "workflow": workflow,
+        "artifact_grounding": [
+            "Use only registered or supplied artifacts as factual biomedical sources.",
+            "If evidence is missing, say it is missing rather than filling the gap.",
+            "Summaries may describe uncertainty and limitations.",
+        ],
+    }
+    if prompt_sections:
+        sections.update(prompt_sections)
+    return CodexRequest(
+        task=task,
+        prompt_sections=sections,
+        artifacts=artifact_refs,
+        expected_json_schema=schema,
+        output_format="json",
+        metadata={"workflow": workflow},
+    )
+
+
+def _assistant_schema(kind: str) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": ["summary", "limitations", "follow_up_tasks"],
+        "properties": {
+            "summary": {"type": "string"},
+            "key_points": {"type": "array"},
+            "review_questions": {"type": "array"},
+            "follow_up_tasks": {"type": "array"},
+            "limitations": {"type": "array"},
+            "workflow": {"type": "string"},
+            "kind": {"type": "string"},
+        },
+        "metadata": {"kind": kind},
+    }
+
+
+def _invoke_codex_request(
+    request: CodexRequest,
+    *,
+    mode: str,
+    cwd: Path,
+    timeout: float,
+    audit_log: Path,
+) -> Any:
+    provider_mode = mode.lower()
+    if provider_mode not in {"enabled", "dry_run", "disabled"}:
+        raise typer.BadParameter("--mode must be enabled, dry_run, or disabled")
+    provider = CodexCLIProvider(
+        CodexProviderConfig(
+            mode=provider_mode,  # type: ignore[arg-type]
+            timeout_seconds=timeout,
+            working_dir=str(cwd),
+            audit_log_path=str(audit_log),
+        )
+    )
+    try:
+        return provider.invoke(request)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _print_codex_response(response: Any, *, json_output: bool) -> None:
+    payload = response.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+        if response.status in {"error", "guardrail_violation"}:
+            raise typer.Exit(code=1)
+        return
+    typer.echo(f"Codex status: {response.status}")
+    if response.parsed_json is not None:
+        typer.echo(json.dumps(response.parsed_json, indent=2, sort_keys=True))
+    elif response.stdout:
+        typer.echo(response.stdout)
+    if response.stderr:
+        typer.echo(response.stderr, err=True)
+    if response.guardrail_violations:
+        typer.echo("Guardrail violations:", err=True)
+        for violation in response.guardrail_violations:
+            typer.echo(f"- {violation.rule}: {violation.text_excerpt}", err=True)
+    typer.echo(f"Audit log: {response.audit_log_path}")
+    if response.status in {"error", "guardrail_violation"}:
+        raise typer.Exit(code=1)
+
+
+def _run_engineering_command(command: list[str], *, cwd: Path) -> dict[str, Any]:
+    started = datetime.now(UTC)
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    duration = (datetime.now(UTC) - started).total_seconds()
+    return {
+        "command": command,
+        "returncode": completed.returncode,
+        "duration_seconds": duration,
+        "stdout_excerpt": completed.stdout[-4000:],
+        "stderr_excerpt": completed.stderr[-4000:],
+    }
 
 
 def _echo_json(payload: dict[str, Any]) -> None:

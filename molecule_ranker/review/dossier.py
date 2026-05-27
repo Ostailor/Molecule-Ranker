@@ -247,6 +247,10 @@ def _build_sections(
             },
         },
         {
+            "title": "Codex review assistance",
+            "content": _codex_review_assistance_content(workspace, item),
+        },
+        {
             "title": "Recommended follow-up questions",
             "content": {
                 "requested_followups": [
@@ -380,6 +384,22 @@ def _limitations_for_item(item: Any) -> list[str]:
     else:
         limitations.insert(0, EXISTING_ORIGIN_NOTICE)
     return limitations
+
+
+def _codex_review_assistance_content(workspace: ReviewWorkspace, item: Any) -> dict[str, Any]:
+    artifacts = [
+        artifact.model_dump(mode="json")
+        for artifact in workspace.codex_review_artifacts
+        if item.review_item_id in artifact.review_item_ids
+    ]
+    return {
+        "assistance_count": len(artifacts),
+        "assistance_artifacts": artifacts,
+        "boundary_note": (
+            "Codex review assistance is stored separately from expert decisions, "
+            "biomedical evidence, assay results, generated molecules, and score fields."
+        ),
+    }
 
 
 def _citation_metadata(literature_summary: dict[str, Any]) -> list[dict[str, Any]]:

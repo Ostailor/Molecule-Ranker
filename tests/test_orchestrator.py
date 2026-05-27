@@ -203,6 +203,7 @@ def test_orchestrator_runs_agent_pipeline_and_writes_artifacts(tmp_path):
         "DevelopabilityAssessmentAgent",
         "ExperimentalEvidenceAgent",
         "EvidenceScoringAgent",
+        "CodexBackboneAgent",
         "ReviewWorkspaceAgent",
         "ReportWriterAgent",
     ]

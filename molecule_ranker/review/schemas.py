@@ -77,6 +77,14 @@ FollowupRequestType = Literal[
 ]
 RequestPriority = Literal["low", "medium", "high"]
 RequestStatus = Literal["open", "completed", "cancelled"]
+CodexReviewTaskType = Literal[
+    "codex_review_questions",
+    "codex_dossier_summary",
+    "codex_candidate_compare",
+    "codex_conflicting_evidence",
+    "codex_experimental_summary",
+    "codex_project_update",
+]
 
 
 class TimezoneAwareModel(BaseModel):
@@ -243,6 +251,32 @@ class CandidateDossier(TimezoneAwareModel):
         return self
 
 
+class CodexReviewArtifact(TimezoneAwareModel):
+    artifact_id: str = ""
+    workspace_id: str
+    review_item_ids: list[str] = Field(default_factory=list)
+    task_type: CodexReviewTaskType
+    status: str
+    output_json: dict[str, Any] | None = None
+    output_text: str = ""
+    artifact_refs: list[str] = Field(default_factory=list)
+    guardrail_warnings: list[str] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def fill_artifact_id(self) -> Self:
+        if not self.artifact_id:
+            self.artifact_id = _hashed_id(
+                "codex-review",
+                self.workspace_id,
+                self.task_type,
+                ",".join(self.review_item_ids),
+                self.generated_at.isoformat(),
+            )
+        return self
+
+
 class CandidateComparison(TimezoneAwareModel):
     comparison_id: str = ""
     candidates: list[dict[str, Any]] = Field(default_factory=list)
@@ -347,6 +381,7 @@ class ReviewWorkspace(TimezoneAwareModel):
     decisions: list[ReviewerDecision] = Field(default_factory=list)
     comments: list[ReviewerComment] = Field(default_factory=list)
     followup_requests: list[FollowupRequest] = Field(default_factory=list)
+    codex_review_artifacts: list[CodexReviewArtifact] = Field(default_factory=list)
     audit_events: list[ReviewAuditEvent] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

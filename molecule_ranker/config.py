@@ -121,6 +121,18 @@ class RankerConfig(BaseModel):
     require_qc_passed_for_score: bool = True
     include_inconclusive_results: bool = True
     strict_experimental_linking: bool = True
+    enable_codex_backbone: bool = False
+    strict_codex_backbone: bool = False
+    codex_tasks: list[str] = Field(
+        default_factory=lambda: [
+            "summarize_run",
+            "explain_top_candidates",
+            "draft_review_questions",
+            "plan_followup_run",
+        ]
+    )
+    codex_store_transcripts: bool = True
+    codex_max_tasks_per_run: int = Field(default=5, ge=1)
 
     @model_validator(mode="after")
     def sync_generation_aliases(self) -> RankerConfig:
@@ -252,5 +264,10 @@ class RankerConfig(BaseModel):
             "require_qc_passed_for_score": self.require_qc_passed_for_score,
             "include_inconclusive_results": self.include_inconclusive_results,
             "strict_experimental_linking": self.strict_experimental_linking,
+            "enable_codex_backbone": self.enable_codex_backbone,
+            "strict_codex_backbone": self.strict_codex_backbone,
+            "codex_tasks": list(self.codex_tasks),
+            "codex_store_transcripts": self.codex_store_transcripts,
+            "codex_max_tasks_per_run": self.codex_max_tasks_per_run,
             "ranker_config": trace_metadata,
         }

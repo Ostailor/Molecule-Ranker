@@ -139,6 +139,7 @@ def test_generated_dossier_has_required_sections_and_direct_evidence_warning():
         "Generated molecule provenance",
         "Key uncertainties",
         "Reviewer decisions and comments",
+        "Codex review assistance",
         "Recommended follow-up questions",
         "Limitations and disclaimers",
         "Source provenance and artifact paths",
