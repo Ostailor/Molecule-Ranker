@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · molecule-ranker</title>
+  <link rel="stylesheet" href="/static/dashboard/dashboard.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">molecule-ranker V0.8</div>
+        <nav class="nav" aria-label="Dashboard">
+          <a href="/dashboard">Projects</a>
+          {% if project is defined %}
+            <a href="/dashboard/projects/{{ project.workspace_id }}">Project</a>
+            <a href="/dashboard/projects/{{ project.workspace_id }}/activity">Activity</a>
+            <a href="/dashboard/projects/{{ project.workspace_id }}/runs">Runs</a>
+            <a href="/dashboard/projects/{{ project.workspace_id }}/review">Review</a>
+            <a href="/dashboard/projects/{{ project.workspace_id }}/codex">Codex</a>
+          {% endif %}
+          <a href="/dashboard/notifications">Notifications</a>
+          <a href="/dashboard/audit">Audit</a>
+          <a href="/dashboard/admin">Admin</a>
+          {% if user is defined %}
+            <form method="post" action="/logout">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
+              <button class="link-button" type="submit">Logout</button>
+            </form>
+          {% endif %}
+        </nav>
+      </div>
+    </header>
+    <main class="content">
+      <aside class="research-disclaimer">
+        Internal research use only. Source-backed evidence remains authoritative. This dashboard
+        does not provide medical advice, treatment guidance, dosing, synthesis instructions, or
+        lab protocols.
+      </aside>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

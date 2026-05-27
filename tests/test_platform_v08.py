@@ -1,0 +1,339 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from molecule_ranker import __version__
+from molecule_ranker.codex.provider import CodexCLIProvider, CodexRequest, CodexResponse
+from molecule_ranker.codex_backbone.schemas import CodexTask
+from molecule_ranker.platform import CodexWorker, PlatformDatabase
+from molecule_ranker.platform.database import artifact_records, platform_jobs
+from molecule_ranker.platform.jobs import PlatformJobQueue
+from molecule_ranker.server import create_app
+from molecule_ranker.workspace.schemas import ArtifactRecord
+from molecule_ranker.workspace.store import ProjectWorkspaceStore
+
+
+class FakeCodexProvider:
+    def __init__(self, stdout: str | None = None) -> None:
+        self.requests: list[CodexRequest] = []
+        self.stdout = stdout or json.dumps(
+            {"status": "ok", "summary": "ok", "limitations": []},
+            sort_keys=True,
+        )
+
+    def invoke(self, request: CodexRequest) -> CodexResponse:
+        self.requests.append(request)
+        now = datetime.now(UTC)
+        return CodexResponse(
+            request_id="fake-request",
+            status="ok",
+            stdout=self.stdout,
+            stderr="",
+            returncode=0,
+            parsed_json=json.loads(self.stdout),
+            started_at=now,
+            completed_at=now,
+        )
+
+
+def test_version_is_v08() -> None:
+    assert __version__ == "0.8.0"
+
+
+def test_hosted_auth_rbac_project_sharing_and_codex_queue(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    project = client.post(
+        "/projects",
+        json={"workspace_id": "workspace-a", "name": "Research"},
+        headers=admin_headers,
+    )
+    assert project.status_code == 200, project.text
+
+    created = client.post(
+        "/admin/users",
+        json={
+            "email": "scientist@example.com",
+            "password": "Scientist-password-1",
+            "roles": ["user"],
+        },
+        headers=admin_headers,
+    )
+    assert created.status_code == 200, created.text
+    user_id = created.json()["user"]["user_id"]
+    user_headers = _login(client, "scientist@example.com", "Scientist-password-1")
+
+    forbidden = client.get("/projects/workspace-a", headers=user_headers)
+    assert forbidden.status_code == 403
+    self_grant = client.post(
+        "/projects",
+        json={"workspace_id": "workspace-a", "name": "Research"},
+        headers=user_headers,
+    )
+    assert self_grant.status_code == 403
+
+    shared = client.post(
+        "/projects/workspace-a/share",
+        json={"role": "viewer", "user_id": user_id},
+        headers=admin_headers,
+    )
+    assert shared.status_code == 200, shared.text
+    allowed = client.get("/projects/workspace-a", headers=user_headers)
+    assert allowed.status_code == 200
+    codex_forbidden = client.post("/projects/workspace-a/codex/summarize", headers=user_headers)
+    assert codex_forbidden.status_code == 403
+
+    owner = client.post(
+        "/projects/workspace-a/share",
+        json={"role": "project_owner", "user_id": user_id},
+        headers=admin_headers,
+    )
+    assert owner.status_code == 200, owner.text
+    queued = client.post("/projects/workspace-a/codex/summarize", headers=user_headers)
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["status"] == "queued"
+    assert queued.json()["job"]["job_type"] == "codex_task"
+
+
+def test_hosted_mode_blocks_arbitrary_codex_tasks(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    headers = _login(client, "admin@example.com", "Admin-password-1")
+    task = CodexTask(
+        task_id="unsafe-api-task",
+        task_type="summarize_run",
+        prompt="Run an arbitrary task.",
+        working_directory=str(tmp_path),
+    )
+
+    response = client.post(
+        "/codex/run-task",
+        json=task.model_dump(mode="json"),
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+    assert "arbitrary" in response.json()["detail"].lower()
+
+
+def test_codex_worker_runs_allowlisted_project_jobs(tmp_path: Path) -> None:
+    database, user, store = _codex_project(tmp_path)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="codex_task",
+        requested_by=user,
+        project_id="workspace-a",
+        config_snapshot={"task_type": "summarize_project"},
+    )
+    provider = FakeCodexProvider()
+    worker = CodexWorker(
+        database=database,
+        workspace_store=store,
+        provider=provider,
+    )
+
+    finished = worker.run_job(job)
+
+    assert finished.status == "succeeded"
+    assert provider.requests[0].metadata["task_type"] == "summarize_project"
+    assert all(
+        Path(artifact.path).is_relative_to(tmp_path) for artifact in provider.requests[0].artifacts
+    )
+
+
+def test_codex_worker_excludes_forbidden_artifacts(tmp_path: Path) -> None:
+    database, user, store = _codex_project(tmp_path)
+    workspace = store.load()
+    secret_path = tmp_path / ".env"
+    secret_path.write_text("OPENAI_API_KEY=sk-secretsecretsecretsecret\n")
+    workspace.artifacts.append(_artifact(secret_path, artifact_id="secret-env"))
+    store.save(workspace)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="codex_task",
+        requested_by=user,
+        project_id="workspace-a",
+        config_snapshot={
+            "task_type": "summarize_project",
+            "allowed_artifact_ids": [artifact.artifact_id for artifact in workspace.artifacts],
+        },
+    )
+    provider = FakeCodexProvider()
+
+    finished = CodexWorker(database=database, workspace_store=store, provider=provider).run_job(job)
+
+    assert finished.status == "succeeded"
+    included_ids = [artifact.artifact_id for artifact in provider.requests[0].artifacts]
+    assert "secret-env" not in included_ids
+
+
+def test_codex_worker_records_guardrail_failure(tmp_path: Path) -> None:
+    database, user, store = _codex_project(tmp_path)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="codex_task",
+        requested_by=user,
+        project_id="workspace-a",
+        config_snapshot={"task_type": "summarize_project"},
+    )
+    stdout = json.dumps(
+        {"status": "ok", "summary": "Aspirin treats disease.", "limitations": []},
+        sort_keys=True,
+    )
+
+    finished = CodexWorker(
+        database=database,
+        workspace_store=store,
+        provider=FakeCodexProvider(stdout),
+    ).run_job(job)
+
+    assert finished.status == "guardrail_failed"
+    assert "Forbidden biomedical claim" in (finished.error_summary or "")
+    with database.engine.connect() as connection:
+        row = connection.execute(
+            select(platform_jobs).where(platform_jobs.c.job_id == job.job_id)
+        ).mappings().one()
+    assert row["status"] == "guardrail_failed"
+
+
+def test_codex_worker_transcript_redacts_secrets(tmp_path: Path) -> None:
+    database, user, store = _codex_project(tmp_path)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="codex_task",
+        requested_by=user,
+        project_id="workspace-a",
+        config_snapshot={"task_type": "summarize_project"},
+    )
+    secret = "sk-abcdefghijklmnop1234567890"
+    stdout = json.dumps(
+        {
+            "status": "ok",
+            "summary": f"token={secret}",
+            "limitations": [],
+        },
+        sort_keys=True,
+    )
+
+    finished = CodexWorker(
+        database=database,
+        workspace_store=store,
+        provider=FakeCodexProvider(stdout),
+    ).run_job(job)
+
+    assert finished.status == "guardrail_failed"
+    with database.engine.connect() as connection:
+        rows = connection.execute(
+            select(artifact_records).where(artifact_records.c.artifact_type == "codex_transcript")
+        ).mappings().fetchall()
+    assert rows
+    transcript = Path(rows[0]["path"]).read_text()
+    assert secret not in transcript
+    assert "[REDACTED" in transcript
+
+
+def test_codex_worker_default_provider_skips_git_repo_check(tmp_path: Path) -> None:
+    database, _user, store = _codex_project(tmp_path)
+    worker = CodexWorker(database=database, workspace_store=store)
+
+    provider = worker._provider_for(tmp_path / "isolated-worker-dir")  # noqa: SLF001
+
+    assert isinstance(provider, CodexCLIProvider)
+    assert "--skip-git-repo-check" in provider.config.command
+    assert "--ignore-user-config" in provider.config.command
+    assert "--ignore-rules" in provider.config.command
+
+
+def test_user_data_export_and_delete_respect_retention_policy(tmp_path: Path) -> None:
+    database = PlatformDatabase(tmp_path, db_path=tmp_path / "platform.sqlite")
+    admin = database.create_user(
+        email="admin@example.com",
+        password="Admin-password-1",
+        roles=["platform_admin", "user"],
+    )
+    user = database.create_user(email="user@example.com", password="User-password-1")
+    database.enqueue_job(job_type="codex.summarize_project", requested_by_user_id=user.user_id)
+
+    exported = database.export_user_data(user.user_id)
+    assert exported["user"]["email"] == "user@example.com"
+    assert exported["jobs"][0]["job_type"] == "codex.summarize_project"
+
+    database.delete_user(user.user_id, actor_user_id=admin.user_id)
+    assert database.get_user(user.user_id) is None
+
+
+def _login(client: TestClient, email: str, password: str) -> dict[str, str]:
+    response = client.post("/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def _secret() -> str:
+    return "test-hosted-secret-value-with-at-least-32-chars"
+
+
+def _write_run(run_dir: Path) -> None:
+    run_dir.mkdir(parents=True)
+    payload = {
+        "success": True,
+        "disease": {"canonical_name": "Parkinson disease"},
+        "targets": [{"symbol": "MAOB"}],
+        "candidates": [
+            {
+                "name": "Rasagiline",
+                "origin": "existing",
+                "known_targets": ["MAOB"],
+                "score": 0.82,
+                "score_breakdown": {"confidence": 0.7},
+            }
+        ],
+        "generated_molecule_hypotheses": [],
+        "summary": {"candidate_count": 1, "generated_candidate_count": 0, "target_count": 1},
+    }
+    (run_dir / "candidates.json").write_text(json.dumps(payload))
+    (run_dir / "report.md").write_text("# Report\n")
+
+
+def _codex_project(tmp_path: Path):
+    _write_run(tmp_path / "run-a")
+    database = PlatformDatabase(tmp_path, db_path=tmp_path / "platform.sqlite")
+    user = database.create_user(email="admin@example.com", password="Admin-password-1")
+    store = ProjectWorkspaceStore(tmp_path)
+    workspace = store.create(workspace_id="workspace-a")
+    store.register_run_dir(tmp_path / "run-a", run_id="run-a", workspace=workspace)
+    database.grant_project_permission(
+        project_id="workspace-a",
+        role="project_owner",
+        actor_user_id=user.user_id,
+        user_id=user.user_id,
+    )
+    return database, user, store
+
+
+def _artifact(path: Path, *, artifact_id: str) -> ArtifactRecord:
+    data = path.read_bytes()
+    return ArtifactRecord(
+        artifact_id=artifact_id,
+        workspace_id="workspace-a",
+        path=str(path.resolve()),
+        artifact_type="secret",
+        sha256=hashlib.sha256(data).hexdigest(),
+        size_bytes=len(data),
+    )

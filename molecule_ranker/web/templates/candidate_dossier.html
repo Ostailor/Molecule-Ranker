@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>{{ display_candidate_name(candidate) }}</h1>
+  <p class="notice">
+    Candidate dossier for expert review. Generated candidates, if present, are computational
+    hypotheses and not experimental evidence.
+  </p>
+</header>
+<section class="grid">
+  <div class="metric"><strong>Origin</strong><span>{{ candidate.get("origin", "unknown") }}</span></div>
+  <div class="metric"><strong>Score</strong><span>{{ candidate.get("score", "") }}</span></div>
+  <div class="metric"><strong>Run</strong><span>{{ dashboard_run.run.run_id }}</span></div>
+</section>
+<section class="split">
+  <div class="panel">
+    <h2>Source-backed evidence</h2>
+    {% if evidence %}
+      <pre>{{ evidence | tojson(indent=2) }}</pre>
+    {% else %}
+      <p>No source-backed evidence summary recorded for this candidate.</p>
+    {% endif %}
+  </div>
+  <div class="panel">
+    <h2>Model predictions</h2>
+    {% if predictions %}
+      <pre>{{ predictions | tojson(indent=2) }}</pre>
+    {% else %}
+      <p>No model prediction summary recorded for this candidate.</p>
+    {% endif %}
+  </div>
+</section>
+{% if candidate.get("origin") == "generated" or candidate.get("selfies") or candidate.get("smiles") %}
+  <section class="section">
+    <h2>Generated molecule status</h2>
+    <p><span class="tag hypothesis">Computational hypothesis</span></p>
+  </section>
+{% endif %}
+<section class="section">
+  <h2>Team comments</h2>
+  <p class="notice">
+    Comments are collaboration notes, not biomedical evidence, and they do not change scores.
+  </p>
+  {% if comments %}
+    {% for comment in comments %}
+      <div class="panel">
+        <p>{{ comment.body }}</p>
+        <p class="muted">Comment by {{ comment.author_user_id }} · {{ comment.created_at }}</p>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No candidate comments recorded.</p>
+  {% endif %}
+</section>
+{% endblock %}

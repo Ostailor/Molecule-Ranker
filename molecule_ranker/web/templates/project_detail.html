@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>{{ project.name }}</h1>
+  <p class="muted">Project ID: <code>{{ project.workspace_id }}</code></p>
+</header>
+<section class="grid">
+  <div class="metric"><strong>Runs</strong><span>{{ project.runs | length }}</span></div>
+  <div class="metric"><strong>Artifacts</strong><span>{{ project.artifacts | length }}</span></div>
+  <div class="metric"><strong>Codex outputs</strong><span>{{ project.codex_outputs | length }}</span></div>
+</section>
+<section class="section">
+  <h2>Research boundaries</h2>
+  <div class="panel">
+    Evidence, model predictions, generated molecular hypotheses, experimental results, review
+    decisions, and Codex summaries are tracked as separate records.
+  </div>
+</section>
+<section class="section">
+  <h2>Recent activity</h2>
+  <div class="panel">
+    {% for item in activity %}
+      <p><strong>{{ item.activity_type }}</strong> {{ item.summary }}</p>
+    {% else %}
+      <p>No project activity recorded.</p>
+    {% endfor %}
+  </div>
+</section>
+<section class="section">
+  <h2>Runs</h2>
+  <table>
+    <thead>
+      <tr><th>Run</th><th>Disease</th><th>Candidates</th><th>Generated hypotheses</th></tr>
+    </thead>
+    <tbody>
+      {% for run in project.runs %}
+        <tr>
+          <td><a href="/dashboard/projects/{{ project.workspace_id }}/runs/{{ run.run_id }}">{{ run.run_id }}</a></td>
+          <td>{{ run.disease_name }}</td>
+          <td>{{ run.candidate_count }}</td>
+          <td>{{ run.generated_candidate_count }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4">No registered runs.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

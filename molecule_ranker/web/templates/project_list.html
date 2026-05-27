@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Projects</h1>
+  <p class="muted">Only projects visible through your user, team, or organization permissions are shown.</p>
+</header>
+<section class="section">
+  <table>
+    <thead>
+      <tr><th>Project</th><th>Runs</th><th>Artifacts</th><th>Updated</th></tr>
+    </thead>
+    <tbody>
+      {% for item in projects %}
+        <tr>
+          <td><a href="/dashboard/projects/{{ item.workspace_id }}">{{ item.name }}</a></td>
+          <td>{{ item.runs | length }}</td>
+          <td>{{ item.artifacts | length }}</td>
+          <td>{{ item.updated_at.isoformat() }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4">No authorized projects.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

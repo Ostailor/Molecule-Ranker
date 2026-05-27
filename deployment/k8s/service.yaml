@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: molecule-ranker-web
+  labels:
+    app: molecule-ranker
+spec:
+  type: ClusterIP
+  selector:
+    app: molecule-ranker
+    component: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8765

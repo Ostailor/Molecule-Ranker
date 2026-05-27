@@ -1,0 +1,21 @@
+[Unit]
+Description=molecule-ranker background worker
+After=network-online.target molecule-ranker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=molecule-ranker
+Group=molecule-ranker
+WorkingDirectory=/opt/molecule-ranker
+EnvironmentFile=/etc/molecule-ranker/molecule-ranker.env
+ExecStart=/opt/molecule-ranker/.venv/bin/molecule-ranker worker run --root /var/lib/molecule-ranker/projects --database-url ${MOLECULE_RANKER_DATABASE_URL}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/molecule-ranker
+
+[Install]
+WantedBy=multi-user.target

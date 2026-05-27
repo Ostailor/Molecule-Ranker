@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from sqlalchemy import select
+
+from molecule_ranker.platform.database import PlatformDatabase, artifact_records
+from molecule_ranker.platform.jobs import JobResult, PlatformJobQueue
+from molecule_ranker.workers import PipelineWorker
+
+
+def test_enqueue_job_enforces_permissions_and_stores_snapshot(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+
+    job = queue.enqueue(
+        job_type="ranking",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"disease": "Parkinson disease"},
+        priority="high",
+    )
+
+    stored = queue.get(job.job_id)
+    assert stored is not None
+    assert stored.status == "queued"
+    assert stored.requested_by_user_id == user.user_id
+    assert stored.project_id == "project-1"
+    assert stored.config_snapshot["disease"] == "Parkinson disease"
+    assert stored.priority == "high"
+
+
+def test_worker_runs_mocked_job_and_registers_artifact(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+    job = queue.enqueue(job_type="ranking", requested_by=user, project_id="project-1")
+    output_path = tmp_path / "result.json"
+
+    def handler(_job):
+        output_path.write_text('{"ok": true}\n')
+        return JobResult(result={"ok": True}, artifact_paths=[output_path])
+
+    finished = PipelineWorker(database=database, handlers={"ranking": handler}).run_once()
+
+    assert finished is not None
+    assert finished.job_id == job.job_id
+    assert finished.status == "succeeded"
+    assert finished.result_artifact_ids
+    with database.engine.connect() as connection:
+        rows = connection.execute(select(artifact_records)).mappings().fetchall()
+    assert len(rows) == 1
+    assert rows[0]["project_id"] == "project-1"
+    assert rows[0]["provenance_json"]["job_id"] == job.job_id
+
+
+def test_failed_job_records_error_summary(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="developability",
+        requested_by=user,
+        project_id="project-1",
+    )
+
+    def handler(_job):
+        raise RuntimeError("mock worker failed")
+
+    finished = PipelineWorker(database=database, handlers={"developability": handler}).run_once()
+
+    assert finished is not None
+    assert finished.job_id == job.job_id
+    assert finished.status == "failed"
+    assert "mock worker failed" in (finished.error_summary or "")
+
+
+def test_cancelled_queued_job_does_not_run(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+    job = queue.enqueue(job_type="generation", requested_by=user, project_id="project-1")
+    calls = 0
+
+    def handler(_job):
+        nonlocal calls
+        calls += 1
+        return JobResult()
+
+    cancelled = queue.cancel(job.job_id, actor_user_id=user.user_id)
+    finished = PipelineWorker(database=database, handlers={"generation": handler}).run_once()
+
+    assert cancelled.status == "cancelled"
+    assert finished is None
+    assert calls == 0
+
+
+def _database_with_project_user(tmp_path: Path):
+    database = PlatformDatabase(tmp_path, db_path=tmp_path / "platform.sqlite")
+    user = database.create_user(email="scientist@example.com", password="Scientist-password-1")
+    database.grant_project_permission(
+        project_id="project-1",
+        role="editor",
+        actor_user_id=user.user_id,
+        user_id=user.user_id,
+    )
+    return database, user

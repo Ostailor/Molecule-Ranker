@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading"><h1>Memberships</h1></header>
+<table>
+  <thead><tr><th>Membership</th><th>User</th><th>Organization</th><th>Team</th><th>Role</th></tr></thead>
+  <tbody>
+    {% for item in memberships %}
+      <tr>
+        <td>{{ item.membership_id }}</td><td>{{ item.user_id }}</td><td>{{ item.org_id }}</td><td>{{ item.team_id or "" }}</td><td>{{ item.role }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5">No memberships.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

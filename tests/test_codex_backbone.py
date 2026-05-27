@@ -15,6 +15,7 @@ from molecule_ranker.codex_backbone import (
 from molecule_ranker.codex_backbone.guardrails import (
     check_output,
     collect_allowed_refs_from_artifacts,
+    detect_forbidden_biomedical_claims,
     detect_protocol_or_synthesis_text,
     detect_unbacked_citations,
 )
@@ -90,6 +91,18 @@ def test_codex_task_schema_validation(tmp_path: Path) -> None:
                 "metadata": {},
             }
         )
+
+
+def test_output_guardrail_allows_negated_research_limitations() -> None:
+    text = (
+        "No claims are made about cure, treatment, binding, activity, safety, "
+        "synthesizability, dosing, or clinical use."
+    )
+
+    assert detect_forbidden_biomedical_claims(text) == []
+    assert detect_forbidden_biomedical_claims("Aspirin treats disease.") == [
+        "Forbidden biomedical claim: unsupported cure/treatment/prevention claim."
+    ]
 
 
 def test_disabled_provider_returns_disabled_result(tmp_path: Path) -> None:

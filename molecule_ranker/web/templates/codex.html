@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Codex assistant page</h1>
+  <p class="notice">
+    Codex-generated summaries are assistant outputs, not evidence. They must remain grounded in
+    registered artifacts and cannot invent citations, assay results, molecules, scores, protocols,
+    dosing, synthesis instructions, or treatment guidance.
+  </p>
+</header>
+{% if can_run_codex %}
+  <p class="panel">
+    You have <code>codex:run</code> permission. Hosted Codex execution must be queued through
+    the guarded API and processed by CodexWorker.
+  </p>
+{% endif %}
+<section class="section">
+  <h2>Codex-generated summaries</h2>
+  <table>
+    <thead>
+      <tr><th>Task</th><th>Status</th><th>Created</th><th>Artifact references</th><th>Assistant output</th></tr>
+    </thead>
+    <tbody>
+      {% for output in codex_outputs %}
+        <tr>
+          <td>{{ output.task_type }}</td>
+          <td>{{ output.status }}</td>
+          <td>{{ output.created_at }}</td>
+          <td>
+            {% for ref in output.artifact_refs %}
+              <span class="tag">{{ ref }}</span>
+            {% endfor %}
+          </td>
+          <td>{{ output.summary }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5">No Codex-generated summaries recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -43,11 +43,17 @@ def test_api_health(tmp_path: Path) -> None:
     client = TestClient(create_app(root_dir=tmp_path))
 
     response = client.get("/health")
+    ready = client.get("/ready")
+    version = client.get("/version")
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["local_only"] is True
     assert response.json()["codex_enabled"] is False
+    assert ready.status_code == 200
+    assert ready.json()["ok"] is True
+    assert version.status_code == 200
+    assert "version" in version.json()
 
 
 def test_codex_endpoint_disabled_by_default(tmp_path: Path) -> None:
@@ -57,10 +63,11 @@ def test_codex_endpoint_disabled_by_default(tmp_path: Path) -> None:
     response = client.post("/codex/run-task", json=task.model_dump(mode="json"))
 
     assert response.status_code == 403
-    assert "disabled" in response.json()["detail"].lower()
+    assert "arbitrary" in response.json()["detail"].lower()
+    assert response.json()["error"]["request_id"]
 
 
-def test_codex_endpoint_works_with_mocked_provider(tmp_path: Path) -> None:
+def test_arbitrary_codex_endpoint_is_blocked_with_mocked_provider(tmp_path: Path) -> None:
     provider = FakeCodexProvider()
     client = TestClient(
         create_app(
@@ -73,11 +80,9 @@ def test_codex_endpoint_works_with_mocked_provider(tmp_path: Path) -> None:
 
     response = client.post("/codex/run-task", json=task.model_dump(mode="json"))
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "succeeded"
-    assert payload["result"]["output_json"]["summary"] == "ok"
-    assert provider.tasks[0].task_id == "api-test"
+    assert response.status_code == 403
+    assert "arbitrary" in response.json()["detail"].lower()
+    assert provider.tasks == []
 
 
 def test_project_codex_summarize_works_with_mocked_provider(tmp_path: Path) -> None:

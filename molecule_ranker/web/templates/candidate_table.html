@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Candidate ranking table</h1>
+  <p class="muted">Scores are model outputs and must be interpreted with source-backed evidence.</p>
+</header>
+<table>
+  <thead>
+    <tr><th>Candidate</th><th>Origin</th><th>Score</th><th>Confidence</th><th>Known targets</th></tr>
+  </thead>
+  <tbody>
+    {% for candidate in candidates %}
+      <tr>
+        <td>
+          <a href="/dashboard/projects/{{ project.workspace_id }}/candidates/{{ display_candidate_name(candidate) | urlencode }}">{{ display_candidate_name(candidate) }}</a>
+        </td>
+        <td>{{ candidate.get("origin", "existing") }}</td>
+        <td>{{ candidate.get("score", "") }}</td>
+        <td>{{ candidate.get("confidence", candidate.get("score_breakdown", {}).get("confidence", "")) }}</td>
+        <td>
+          {% for target in candidate.get("known_targets", []) %}
+            <span class="tag">{{ target }}</span>
+          {% endfor %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5">No ranked candidates recorded.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading"><h1>Teams</h1></header>
+<table>
+  <thead><tr><th>Name</th><th>Team ID</th><th>Organization ID</th><th>Slug</th></tr></thead>
+  <tbody>
+    {% for team in teams %}
+      <tr>
+        <td>{{ team.name }}</td><td>{{ team.team_id }}</td><td>{{ team.org_id }}</td><td>{{ team.slug }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4">No teams.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

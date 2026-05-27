@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Audit log</h1>
+  <p class="muted">Administrative audit trail across users and projects.</p>
+</header>
+<table>
+  <thead>
+    <tr><th>Timestamp</th><th>Actor</th><th>Project</th><th>Event</th><th>Object</th><th>Summary</th></tr>
+  </thead>
+  <tbody>
+    {% for event in events %}
+      <tr>
+        <td>{{ event.timestamp.isoformat() }}</td>
+        <td>{{ event.actor_user_id or "" }}</td>
+        <td>{{ event.project_id or "" }}</td>
+        <td>{{ event.event_type }}</td>
+        <td>{{ event.object_type }}:{{ event.object_id }}</td>
+        <td>{{ event.summary }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6">No audit events recorded.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

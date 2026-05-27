@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: molecule-ranker
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - molecule-ranker.internal.example
+      secretName: molecule-ranker-tls
+  rules:
+    - host: molecule-ranker.internal.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: molecule-ranker-web
+                port:
+                  number: 80

@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-molecule_ranker}
+      POSTGRES_USER: ${POSTGRES_USER:-molecule_ranker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your environment}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MOLECULE_RANKER_HOSTED: "true"
+      MOLECULE_RANKER_AUTH_SECRET: ${MOLECULE_RANKER_AUTH_SECRET:?set a strong auth secret}
+      MOLECULE_RANKER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-molecule_ranker}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-molecule_ranker}
+      MOLECULE_RANKER_ROOT: /data/projects
+      MOLECULE_RANKER_ARTIFACT_ROOT: /data/artifacts
+      MOLECULE_RANKER_STORAGE_ROOT: /data/storage
+      MOLECULE_RANKER_HOST: 0.0.0.0
+      MOLECULE_RANKER_PORT: 8765
+      MOLECULE_RANKER_ALLOW_PUBLIC_BIND: "true"
+    volumes:
+      - artifact-storage:/data/artifacts
+      - platform-storage:/data/storage
+      - project-storage:/data/projects
+    ports:
+      - "127.0.0.1:8765:8765"
+    command: ["web"]
+
+  codex-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    profiles: ["codex"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MOLECULE_RANKER_HOSTED: "true"
+      MOLECULE_RANKER_ENABLE_CODEX_WORKER: "true"
+      MOLECULE_RANKER_AUTH_SECRET: ${MOLECULE_RANKER_AUTH_SECRET:?set a strong auth secret}
+      MOLECULE_RANKER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-molecule_ranker}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-molecule_ranker}
+      MOLECULE_RANKER_ROOT: /data/projects
+      MOLECULE_RANKER_ARTIFACT_ROOT: /data/artifacts
+      MOLECULE_RANKER_STORAGE_ROOT: /data/storage
+      MOLECULE_RANKER_CODEX_WORKER_WORKSPACE_ROOT: /data/storage/codex-worker
+    volumes:
+      - artifact-storage:/data/artifacts
+      - platform-storage:/data/storage
+      - project-storage:/data/projects
+    command: ["worker"]
+
+volumes:
+  postgres-data:
+  artifact-storage:
+  platform-storage:
+  project-storage:

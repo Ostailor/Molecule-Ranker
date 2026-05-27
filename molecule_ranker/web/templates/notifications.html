@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Notifications</h1>
+  <p class="muted">Mentions and assignments for your hosted research workspace.</p>
+</header>
+<section class="section">
+  {% for notification in notifications %}
+    <div class="panel">
+      <p><strong>{{ notification.title }}</strong></p>
+      <p>{{ notification.body }}</p>
+      <p class="muted">{{ notification.event_type }} · {{ notification.created_at }}</p>
+    </div>
+  {% else %}
+    <p>No notifications recorded.</p>
+  {% endfor %}
+</section>
+{% endblock %}

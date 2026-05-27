@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Active learning view</h1>
+  <p class="muted">
+    Active learning suggestions are prioritization aids for internal research planning, not lab
+    protocols or clinical recommendations.
+  </p>
+</header>
+{% if dashboard_run.active_learning %}
+  <pre>{{ dashboard_run.active_learning | tojson(indent=2) }}</pre>
+{% else %}
+  <div class="panel">No active learning batch is linked to this run.</div>
+{% endif %}
+{% endblock %}

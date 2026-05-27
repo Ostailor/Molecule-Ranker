@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading"><h1>System health</h1></header>
+<pre>{{ health | tojson(indent=2) }}</pre>
+{% endblock %}

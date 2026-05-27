@@ -1,0 +1,80 @@
+"""V0.8 hosted-platform primitives for internal molecule-ranker deployments."""
+
+from molecule_ranker.platform.auth import (
+    AuthError,
+    AuthTokenConfig,
+    OIDCConfig,
+    PasswordHasher,
+    PasswordPolicyConfig,
+    SessionTokenManager,
+)
+from molecule_ranker.platform.codex_worker import CodexWorker
+from molecule_ranker.platform.database import PlatformDatabase, PlatformDatabaseError
+from molecule_ranker.platform.export import ProjectExportPackage, export_project_package
+from molecule_ranker.platform.jobs import JobResult, PlatformJobQueue
+from molecule_ranker.platform.rbac import (
+    Permission,
+    ProjectAction,
+    filter_visible_projects,
+    has_permission,
+    is_org_member,
+    require_platform_admin,
+    require_project_access,
+    visible_project_ids,
+)
+from molecule_ranker.platform.schemas import (
+    ActivityFeedItem,
+    Assignment,
+    AuditEvent,
+    CodexWorkerJob,
+    JobRecord,
+    Membership,
+    Notification,
+    Organization,
+    PlatformAuditEvent,
+    PlatformJob,
+    ProjectComment,
+    ProjectPermission,
+    RetentionPolicy,
+    Team,
+    UserAccount,
+)
+
+__all__ = [
+    "ActivityFeedItem",
+    "Assignment",
+    "AuditEvent",
+    "AuthError",
+    "AuthTokenConfig",
+    "CodexWorkerJob",
+    "CodexWorker",
+    "JobRecord",
+    "JobResult",
+    "Membership",
+    "Notification",
+    "Organization",
+    "OIDCConfig",
+    "PasswordHasher",
+    "PasswordPolicyConfig",
+    "Permission",
+    "PlatformAuditEvent",
+    "PlatformDatabase",
+    "PlatformDatabaseError",
+    "PlatformJob",
+    "PlatformJobQueue",
+    "ProjectComment",
+    "ProjectAction",
+    "ProjectExportPackage",
+    "ProjectPermission",
+    "RetentionPolicy",
+    "SessionTokenManager",
+    "Team",
+    "UserAccount",
+    "filter_visible_projects",
+    "export_project_package",
+    "has_permission",
+    "is_org_member",
+    "require_platform_admin",
+    "require_project_access",
+    "visible_project_ids",
+]

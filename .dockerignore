@@ -1,0 +1,16 @@
+.git
+.omx
+.pytest_cache
+.ruff_cache
+.mypy_cache
+__pycache__
+*.pyc
+.venv
+.env
+.env.*
+!.env.example
+.molecule-ranker
+data
+artifacts
+storage
+deployment/.secrets

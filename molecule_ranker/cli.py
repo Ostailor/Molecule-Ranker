@@ -96,7 +96,6 @@ from molecule_ranker.project import (
     generate_project_dashboard,
     render_run_comparison_markdown,
 )
-from molecule_ranker.project.server import run_project_api_server
 from molecule_ranker.review import (
     CodexReviewArtifact,
     DossierWriterAgent,
@@ -125,6 +124,7 @@ from molecule_ranker.schemas import (
     MoleculeCandidate,
     RankingRun,
 )
+from molecule_ranker.server import run_local_server
 from molecule_ranker.utils import slugify
 from molecule_ranker.workspace import (
     ProjectWorkspaceStore as WorkspaceProjectStore,
@@ -165,11 +165,11 @@ experiment_app = typer.Typer(
     no_args_is_help=True,
 )
 project_app = typer.Typer(
-    help="V0.7 project workspace, run registry, comparison, dashboard, and local API commands.",
+    help="V0.8 project workspace, sharing, jobs, dashboard, and API commands.",
     no_args_is_help=True,
 )
 codex_app = typer.Typer(
-    help="V0.7 controlled Codex CLI assistant and engineering automation commands.",
+    help="V0.8 controlled Codex CLI assistant, worker, and engineering automation commands.",
     no_args_is_help=True,
 )
 codex_assist_app = typer.Typer(
@@ -180,13 +180,68 @@ codex_engineering_app = typer.Typer(
     help="Codex-backed engineering automation and local check loops.",
     no_args_is_help=True,
 )
+db_app = typer.Typer(
+    help="Initialize, migrate, and check the hosted platform metadata database.",
+    no_args_is_help=True,
+)
+user_app = typer.Typer(
+    help="Manage hosted platform users.",
+    no_args_is_help=True,
+)
+auth_cli_app = typer.Typer(
+    help="Manage hosted platform authentication tokens.",
+    no_args_is_help=True,
+)
+auth_token_app = typer.Typer(
+    help="Create and revoke service account tokens.",
+    no_args_is_help=True,
+)
+config_app = typer.Typer(
+    help="Show and validate production platform configuration.",
+    no_args_is_help=True,
+)
+worker_app = typer.Typer(
+    help="Run V0.8 background workers.",
+    no_args_is_help=True,
+)
+job_app = typer.Typer(
+    help="Inspect and cancel V0.8 background jobs.",
+    no_args_is_help=True,
+)
+notifications_app = typer.Typer(
+    help="List hosted platform notifications.",
+    no_args_is_help=True,
+)
+admin_app = typer.Typer(
+    help="Inspect and control hosted platform administration.",
+    no_args_is_help=True,
+)
+platform_cli_app = typer.Typer(
+    help="Hosted platform governance, exports, deletion, and retention controls.",
+    no_args_is_help=True,
+)
+platform_retention_app = typer.Typer(
+    help="Run hosted platform data retention policies.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
 app.add_typer(project_app, name="project")
 app.add_typer(codex_app, name="codex")
+app.add_typer(db_app, name="db")
+app.add_typer(user_app, name="user")
+app.add_typer(auth_cli_app, name="auth")
+app.add_typer(config_app, name="config")
+app.add_typer(worker_app, name="worker")
+app.add_typer(job_app, name="job")
+app.add_typer(notifications_app, name="notifications")
+app.add_typer(admin_app, name="admin")
+app.add_typer(platform_cli_app, name="platform")
 codex_app.add_typer(codex_assist_app, name="assist")
 codex_app.add_typer(codex_engineering_app, name="engineering")
+auth_cli_app.add_typer(auth_token_app, name="token")
+platform_cli_app.add_typer(platform_retention_app, name="retention")
 
 
 @app.callback()
@@ -230,6 +285,993 @@ def health(
 
     if not all(status.ok for status in statuses):
         raise typer.Exit(code=1)
+
+
+@app.command("serve")
+def serve(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
+    api_key: Annotated[
+        str | None,
+        typer.Option("--api-key", help="Optional local API key for non-hosted mode."),
+    ] = None,
+    hosted_mode: Annotated[
+        bool,
+        typer.Option("--hosted", help="Enable V0.8 hosted auth, RBAC, jobs, and dashboard."),
+    ] = False,
+    auth_secret: Annotated[
+        str | None,
+        typer.Option("--auth-secret", help="Hosted bearer-token signing secret."),
+    ] = None,
+    platform_db_path: Annotated[
+        Path | None,
+        typer.Option("--platform-db-path", help="Hosted SQLite platform database path."),
+    ] = None,
+    platform_database_url: Annotated[
+        str | None,
+        typer.Option("--platform-database-url", help="Hosted platform database URL."),
+    ] = None,
+    enable_codex_backbone: Annotated[
+        bool,
+        typer.Option("--enable-codex-backbone", help="Allow guarded Codex worker execution."),
+    ] = False,
+    allow_public_bind: Annotated[
+        bool,
+        typer.Option(
+            "--allow-public-bind",
+            help="Explicitly allow binding the API server to 0.0.0.0 or ::.",
+        ),
+    ] = False,
+) -> None:
+    """Start the molecule-ranker API server."""
+    _serve_api(
+        root_dir=root_dir,
+        host=host,
+        port=port,
+        api_key=api_key,
+        hosted_mode=hosted_mode,
+        auth_secret=auth_secret,
+        platform_db_path=platform_db_path,
+        platform_database_url=platform_database_url,
+        enable_codex_backbone=enable_codex_backbone,
+        allow_public_bind=allow_public_bind,
+    )
+
+
+@db_app.command("init")
+def db_init(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create the platform metadata schema if it does not exist."""
+    payload = _platform_db_action(
+        root_dir=root_dir,
+        database_url=database_url,
+        db_path=db_path,
+        action="init",
+    )
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Database initialized: {payload['database_url']}")
+    typer.echo(f"Tables OK: {payload['ok']}")
+
+
+@db_app.command("migrate")
+def db_migrate(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Apply pending platform database migrations."""
+    payload = _platform_db_action(
+        root_dir=root_dir,
+        database_url=database_url,
+        db_path=db_path,
+        action="migrate",
+    )
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Database migrated: {payload['database_url']}")
+    typer.echo("Applied migrations:")
+    for migration in payload["applied_migrations"]:
+        typer.echo(f"- {migration}")
+
+
+@db_app.command("check")
+def db_check(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Check database connectivity, migrations, and required platform tables."""
+    payload = _platform_db_action(
+        root_dir=root_dir,
+        database_url=database_url,
+        db_path=db_path,
+        action="check",
+    )
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Database: {payload['database']} {payload['database_url']}")
+    typer.echo(f"OK: {payload['ok']}")
+    if payload["missing_tables"]:
+        typer.echo("Missing tables:")
+        for table in payload["missing_tables"]:
+            typer.echo(f"- {table}")
+
+
+@config_app.command("show")
+def config_show(
+    redacted: Annotated[
+        bool,
+        typer.Option(
+            "--redacted/--no-redacted",
+            help="Print secrets redacted. Raw secret printing is intentionally disabled.",
+        ),
+    ] = True,
+) -> None:
+    """Print platform settings with secret values redacted."""
+    from molecule_ranker.platform.settings import PlatformSettings
+
+    settings = PlatformSettings.from_environment()
+    payload = settings.redacted_model_dump()
+    payload["redacted"] = True
+    if not redacted:
+        payload["redaction_note"] = "Raw secret printing is disabled."
+    _echo_json(payload)
+
+
+@config_app.command("validate")
+def config_validate() -> None:
+    """Validate production platform settings."""
+    from molecule_ranker.platform.settings import PlatformSettings, validate_settings
+
+    try:
+        payload = validate_settings(PlatformSettings.from_environment())
+    except Exception as exc:
+        typer.echo(f"Invalid configuration: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_json(payload)
+
+
+@worker_app.command("run")
+def worker_run(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    once: Annotated[bool, typer.Option("--once", help="Run one polling pass and exit.")] = False,
+    poll_interval_seconds: Annotated[
+        float,
+        typer.Option("--poll-interval", min=0.1, help="Polling interval in seconds."),
+    ] = 1.0,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the SQLite/Postgres-backed platform job worker."""
+    from molecule_ranker.platform.settings import PlatformSettings
+    from molecule_ranker.workers import CodexQueueWorker, PipelineWorker, WorkerScheduler
+    from molecule_ranker.workspace.store import ProjectWorkspaceStore
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    settings = PlatformSettings.from_environment()
+    workers: list[Any] = [PipelineWorker(database=database, root_dir=root_dir)]
+    if settings.enable_codex_worker or settings.codex_worker_enabled:
+        workers.append(
+            CodexQueueWorker(
+                database=database,
+                workspace_store=ProjectWorkspaceStore(root_dir),
+                settings=settings,
+            )
+        )
+    scheduler = WorkerScheduler(
+        workers,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+    if once:
+        job = scheduler.run_once()
+        payload = {"job": job.model_dump(mode="json") if job else None}
+        if json_output:
+            _echo_json(payload)
+            return
+        typer.echo(f"Processed job: {job.job_id if job else 'none'}")
+        return
+    typer.echo("Worker polling started. Press Ctrl+C to stop.")
+    scheduler.run_forever()
+
+
+@job_app.command("list")
+def job_list(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    status: Annotated[str | None, typer.Option("--status", help="Optional status filter.")] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project filter."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List platform background jobs."""
+    from molecule_ranker.platform.jobs import PlatformJobQueue
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    jobs = PlatformJobQueue(database).list_jobs(status=status, project_id=project_id)
+    if json_output:
+        _echo_json({"jobs": [job.model_dump(mode="json") for job in jobs]})
+        return
+    typer.echo("Job ID\tType\tStatus\tProject\tRequested by")
+    for job in jobs:
+        typer.echo(
+            "\t".join(
+                [
+                    job.job_id,
+                    job.job_type,
+                    job.status,
+                    job.project_id or "",
+                    job.requested_by_user_id,
+                ]
+            )
+        )
+
+
+@job_app.command("show")
+def job_show(
+    job_id: Annotated[str, typer.Argument(help="Platform job ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Show one platform background job."""
+    from molecule_ranker.platform.jobs import PlatformJobQueue
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    job = PlatformJobQueue(database).get(job_id)
+    if job is None:
+        typer.echo(f"Job not found: {job_id}", err=True)
+        raise typer.Exit(code=1)
+    if json_output:
+        _echo_json(job.model_dump(mode="json"))
+        return
+    typer.echo(f"Job: {job.job_id}")
+    typer.echo(f"Type: {job.job_type}")
+    typer.echo(f"Status: {job.status}")
+    typer.echo(f"Project: {job.project_id or ''}")
+    typer.echo(f"Requested by: {job.requested_by_user_id}")
+    typer.echo(f"Artifacts: {', '.join(job.result_artifact_ids) or 'none'}")
+    if job.error_summary:
+        typer.echo(f"Error: {job.error_summary}")
+
+
+@job_app.command("cancel")
+def job_cancel(
+    job_id: Annotated[str, typer.Argument(help="Platform job ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    actor_user_id: Annotated[
+        str,
+        typer.Option("--actor-user-id", help="User ID recorded in the cancellation audit event."),
+    ] = "cli",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Cancel a queued job, or request cooperative cancellation for a running job."""
+    from molecule_ranker.platform.jobs import PlatformJobQueue
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    try:
+        job = PlatformJobQueue(database).cancel(job_id, actor_user_id=actor_user_id)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(job.model_dump(mode="json"))
+        return
+    typer.echo(f"Job {job.job_id}: {job.status}")
+
+
+@notifications_app.command("list")
+def notifications_list(
+    user_id: Annotated[str, typer.Option("--user-id", help="Recipient user ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    unread_only: Annotated[bool, typer.Option("--unread-only")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List hosted platform notification records for a user."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    notifications = database.list_notifications(user_id=user_id, unread_only=unread_only)
+    payload = {"notifications": [item.model_dump(mode="json") for item in notifications]}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo("Notification ID\tType\tTitle\tProject")
+    for item in notifications:
+        typer.echo(
+            "\t".join(
+                [
+                    item.notification_id,
+                    item.event_type,
+                    item.title,
+                    item.project_id or "",
+                ]
+            )
+        )
+
+
+@admin_app.command("users")
+def admin_users(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List hosted platform users without credential material."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    users = [user.model_dump(mode="json") for user in database.list_users()]
+    if json_output:
+        _echo_json({"users": users})
+        return
+    typer.echo("User ID\tEmail\tActive\tAdmin\tProvider")
+    for user in users:
+        typer.echo(
+            "\t".join(
+                [
+                    str(user["user_id"]),
+                    str(user["email"]),
+                    str(user["is_active"]),
+                    str(user["is_admin"]),
+                    str(user["auth_provider"]),
+                ]
+            )
+        )
+
+
+@admin_app.command("orgs")
+def admin_orgs(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List hosted platform organizations."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    orgs = [item.model_dump(mode="json") for item in database.list_organizations()]
+    if json_output:
+        _echo_json({"organizations": orgs})
+        return
+    typer.echo("Organization ID\tName\tSlug")
+    for org in orgs:
+        typer.echo("\t".join([str(org["org_id"]), str(org["name"]), str(org["slug"])]))
+
+
+@admin_app.command("jobs")
+def admin_jobs(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    failed_only: Annotated[bool, typer.Option("--failed-only")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Inspect hosted platform jobs, including failed jobs."""
+    from molecule_ranker.platform.jobs import PlatformJobQueue
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    payload = {
+        "jobs": []
+        if failed_only
+        else [job.model_dump(mode="json") for job in PlatformJobQueue(database).list_jobs()],
+        "failed_jobs": database.list_failed_jobs(),
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo("Failed jobs")
+    for job in payload["failed_jobs"]:
+        typer.echo(
+            "\t".join(
+                [
+                    str(job["job_id"]),
+                    str(job["job_type"]),
+                    str(job["status"]),
+                    str(job.get("error_summary") or ""),
+                ]
+            )
+        )
+
+
+@admin_app.command("audit")
+def admin_audit(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1)] = 100,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Inspect hosted platform audit events."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    events = [event.model_dump(mode="json") for event in database.list_audit_events(limit=limit)]
+    if json_output:
+        _echo_json({"events": events})
+        return
+    typer.echo("Timestamp\tActor\tEvent\tSummary")
+    for event in events:
+        typer.echo(
+            "\t".join(
+                [
+                    str(event["timestamp"]),
+                    str(event.get("actor_user_id") or ""),
+                    str(event["event_type"]),
+                    str(event["summary"]),
+                ]
+            )
+        )
+
+
+@admin_app.command("codex-status")
+def admin_codex_status(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Inspect hosted Codex worker queue and execution status."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    status = database.codex_worker_status()
+    if json_output:
+        _echo_json(status)
+        return
+    typer.echo(f"Queued Codex jobs: {status['queued_codex_jobs']}")
+    typer.echo(f"Worker job count: {status['worker_job_count']}")
+    typer.echo(f"Status counts: {status['status_counts']}")
+
+
+@platform_cli_app.command("export-project")
+def platform_export_project(
+    project_id: Annotated[str, typer.Argument(help="Project ID to export.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", help="Export zip path. Defaults under .molecule-ranker/exports."),
+    ] = None,
+    actor_user_id: Annotated[
+        str | None,
+        typer.Option("--actor-user-id", help="User ID recorded in the audit event."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Export a project package with a redacted manifest and safe artifacts."""
+    from molecule_ranker.platform.export import export_project_package
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    try:
+        package = export_project_package(
+            database,
+            project_id=project_id,
+            output_path=output_path,
+            actor_user_id=actor_user_id,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "project_id": package.project_id,
+        "path": str(package.path),
+        "artifact_count": package.artifact_count,
+        "skipped_artifact_count": package.skipped_artifact_count,
+        "sha256": package.sha256,
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Export written: {package.path}")
+    typer.echo(f"Artifacts included: {package.artifact_count}")
+    typer.echo(f"Artifacts skipped: {package.skipped_artifact_count}")
+
+
+@platform_cli_app.command("delete-project")
+def platform_delete_project(
+    project_id: Annotated[str, typer.Argument(help="Project ID to soft-delete.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    soft: Annotated[bool, typer.Option("--soft", help="Soft-delete the project.")] = True,
+    actor_user_id: Annotated[
+        str | None,
+        typer.Option("--actor-user-id", help="User ID recorded in the audit event."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Soft-delete a project by default so it is hidden but recoverable."""
+    from molecule_ranker.platform.retention import soft_delete_project
+
+    if not soft:
+        typer.echo("Use platform purge-project for hard deletion.", err=True)
+        raise typer.Exit(code=1)
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    try:
+        project = soft_delete_project(
+            database,
+            project_id=project_id,
+            actor_user_id=actor_user_id,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {"project": _json_ready(project)}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Project soft-deleted: {project_id}")
+
+
+@platform_cli_app.command("purge-project")
+def platform_purge_project(
+    project_id: Annotated[str, typer.Argument(help="Project ID to hard-delete.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    confirm_project_id: Annotated[
+        str | None,
+        typer.Option("--confirm-project-id", help="Must exactly match the project ID."),
+    ] = None,
+    delete_files: Annotated[
+        bool,
+        typer.Option("--delete-files", help="Also delete safe artifact files under the root."),
+    ] = False,
+    actor_user_id: Annotated[
+        str | None,
+        typer.Option("--actor-user-id", help="User ID recorded in the audit event."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Hard-delete project metadata after explicit project-ID confirmation."""
+    from molecule_ranker.platform.retention import hard_delete_project
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    try:
+        payload = hard_delete_project(
+            database,
+            project_id=project_id,
+            confirm_project_id=confirm_project_id,
+            actor_user_id=actor_user_id,
+            delete_files=delete_files,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Project purged: {project_id}")
+
+
+@platform_retention_app.command("run")
+def platform_retention_run(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    artifact_retention_days: Annotated[
+        int | None,
+        typer.Option("--artifact-retention-days"),
+    ] = None,
+    codex_transcript_retention_days: Annotated[
+        int | None,
+        typer.Option("--codex-transcript-retention-days"),
+    ] = None,
+    audit_log_retention_days: Annotated[
+        int | None,
+        typer.Option("--audit-log-retention-days"),
+    ] = None,
+    cache_retention_days: Annotated[int | None, typer.Option("--cache-retention-days")] = None,
+    assay_result_retention_days: Annotated[
+        int | None,
+        typer.Option("--assay-result-retention-days"),
+    ] = None,
+    actor_user_id: Annotated[
+        str | None,
+        typer.Option("--actor-user-id", help="User ID recorded in the audit event."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run configured retention policies; defaults perform no automatic deletion."""
+    from molecule_ranker.platform.retention import DataRetentionPolicy, run_retention
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    result = run_retention(
+        database,
+        policy=DataRetentionPolicy(
+            artifact_retention_days=artifact_retention_days,
+            codex_transcript_retention_days=codex_transcript_retention_days,
+            audit_log_retention_days=audit_log_retention_days,
+            cache_retention_days=cache_retention_days,
+            assay_result_retention_days=assay_result_retention_days,
+        ),
+        actor_user_id=actor_user_id,
+    )
+    payload = result.model_dump()
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo("Retention run completed.")
+    for key, value in payload.items():
+        typer.echo(f"{key}: {value}")
+
+
+@user_app.command("create")
+def user_create(
+    email: Annotated[str, typer.Option("--email", help="User email address.")],
+    password: Annotated[str, typer.Option("--password", help="Initial local-password credential.")],
+    display_name: Annotated[
+        str | None,
+        typer.Option("--display-name", help="Optional display name."),
+    ] = None,
+    admin: Annotated[bool, typer.Option("--admin", help="Grant platform admin role.")] = False,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create a local-password platform user."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    try:
+        user = database.create_user(
+            email=email,
+            password=password,
+            display_name=display_name,
+            roles=["platform_admin", "user"] if admin else ["user"],
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {"user": user.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Created user: {user.email}")
+    typer.echo(f"User ID: {user.user_id}")
+
+
+@user_app.command("list")
+def user_list(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List platform users without credential material."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    users = database.list_users()
+    payload = {"users": [user.model_dump(mode="json") for user in users]}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo("User ID\tEmail\tActive\tAdmin\tAuth provider")
+    for user in users:
+        typer.echo(
+            "\t".join(
+                [
+                    user.user_id,
+                    user.email,
+                    str(user.is_active),
+                    str(user.is_admin),
+                    user.auth_provider,
+                ]
+            )
+        )
+
+
+@auth_token_app.command("create")
+def auth_token_create(
+    name: Annotated[str, typer.Option("--name", help="Service account token name.")],
+    user_id: Annotated[str, typer.Option("--user-id", help="User/service account user ID.")],
+    created_by_user_id: Annotated[
+        str,
+        typer.Option("--created-by-user-id", help="Admin user creating the token."),
+    ],
+    scope: Annotated[
+        list[str] | None,
+        typer.Option("--scope", help="Repeatable service token scope."),
+    ] = None,
+    expires_in_seconds: Annotated[
+        int | None,
+        typer.Option("--expires-in-seconds", min=1, help="Optional token TTL."),
+    ] = None,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create a service account token. The token is shown only in this response."""
+    from datetime import timedelta
+
+    from molecule_ranker.platform.auth import generate_opaque_token
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    token = generate_opaque_token(prefix="mrs")
+    expires_at = (
+        datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
+        if expires_in_seconds
+        else None
+    )
+    try:
+        token_id = database.create_service_account_token(
+            name=name,
+            token=token,
+            user_id=user_id,
+            created_by_user_id=created_by_user_id,
+            scopes=scope or [],
+            expires_at=expires_at,
+            metadata={},
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "token_id": token_id,
+        "access_token": token,
+        "token_type": "bearer",
+        "scopes": scope or [],
+        "expires_at": expires_at.isoformat() if expires_at else None,
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Token ID: {token_id}")
+    typer.echo(f"Token: {token}")
+    typer.echo("Store this value now; it cannot be retrieved later.")
+
+
+@auth_token_app.command("revoke")
+def auth_token_revoke(
+    token_id: Annotated[str, typer.Option("--token-id", help="Service account token ID.")],
+    actor_user_id: Annotated[
+        str,
+        typer.Option("--actor-user-id", help="Admin user revoking the token."),
+    ],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Revoke a service account token by ID."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    revoked = database.revoke_service_account_token(
+        token_id=token_id,
+        actor_user_id=actor_user_id,
+    )
+    if not revoked:
+        typer.echo("Error: token not found", err=True)
+        raise typer.Exit(code=1)
+    payload = {"revoked": True, "token_id": token_id}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Revoked token: {token_id}")
+
 
 
 @experiment_app.command("import")
@@ -795,7 +1837,7 @@ def project_init(
     ] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Create or load a V0.7 project workspace manifest."""
+    """Create or load a legacy project workspace manifest."""
     try:
         store = LegacyProjectWorkspaceStore(root_dir)
         workspace = store.load_or_create(project_id=project_id)
@@ -826,7 +1868,7 @@ def project_create(
     ] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Create or load a V0.7 project workspace."""
+    """Create or load a project workspace."""
     try:
         store = WorkspaceProjectStore(root_dir)
         workspace = store.load_or_create(workspace_id=workspace_id, name=name)
@@ -850,7 +1892,7 @@ def project_show(
     ] = Path("."),
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Show a V0.7 project workspace manifest."""
+    """Show a project workspace manifest."""
     try:
         workspace = WorkspaceProjectStore(root_dir).load_or_create()
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -915,7 +1957,7 @@ def project_run(
     ] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Register one completed run directory in the V0.7 project workspace."""
+    """Register one completed run directory in the project workspace."""
     try:
         store = WorkspaceProjectStore(root_dir)
         workspace = store.register_run_dir(run_dir, run_id=run_id)
@@ -984,7 +2026,7 @@ def project_artifacts(
     ] = Path("."),
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """List registered V0.7 project artifacts."""
+    """List registered project artifacts."""
     try:
         store = WorkspaceProjectStore(root_dir)
         workspace = store.load_or_create()
@@ -1009,6 +2051,104 @@ def project_artifacts(
                 ]
             )
         )
+
+
+@project_app.command("comment")
+def project_comment(
+    project_id: Annotated[str, typer.Option("--project-id", help="Project/workspace ID.")],
+    body: Annotated[str, typer.Option("--body", help="Comment text.")],
+    actor_user_id: Annotated[str, typer.Option("--actor-user-id", help="Comment author user ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    object_type: Annotated[str, typer.Option("--object-type")] = "project",
+    object_id: Annotated[str | None, typer.Option("--object-id")] = None,
+    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
+    candidate_id: Annotated[str | None, typer.Option("--candidate-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Add a collaboration comment; comments are not biomedical evidence."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    try:
+        comment = database.add_project_comment(
+            project_id=project_id,
+            author_user_id=actor_user_id,
+            body=body,
+            object_type=object_type,
+            object_id=object_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(comment.model_dump(mode="json"))
+        return
+    typer.echo(f"Comment added: {comment.comment_id}")
+    typer.echo("Comment is a collaboration note, not biomedical evidence.")
+
+
+@project_app.command("assign")
+def project_assign(
+    project_id: Annotated[str, typer.Option("--project-id", help="Project/workspace ID.")],
+    assigned_to_user_id: Annotated[str, typer.Option("--assigned-to-user-id")],
+    actor_user_id: Annotated[str, typer.Option("--actor-user-id")],
+    object_id: Annotated[str, typer.Option("--object-id", help="Review item/candidate ID.")],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    object_type: Annotated[str, typer.Option("--object-type")] = "review_item",
+    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
+    candidate_id: Annotated[str | None, typer.Option("--candidate-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Assign a review item without granting project permissions."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    try:
+        assignment = database.create_assignment(
+            project_id=project_id,
+            assigned_to_user_id=assigned_to_user_id,
+            assigned_by_user_id=actor_user_id,
+            object_type=object_type,
+            object_id=object_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(assignment.model_dump(mode="json"))
+        return
+    typer.echo(f"Assignment created: {assignment.assignment_id}")
+    typer.echo("Assignments do not grant permissions.")
 
 
 @project_app.command("compare")
@@ -1206,11 +2346,51 @@ def project_serve(
     ] = Path("."),
     host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
+    api_key: Annotated[
+        str | None,
+        typer.Option("--api-key", help="Optional local API key for non-hosted mode."),
+    ] = None,
+    hosted_mode: Annotated[
+        bool,
+        typer.Option("--hosted", help="Enable V0.8 hosted auth, RBAC, jobs, and dashboard."),
+    ] = False,
+    auth_secret: Annotated[
+        str | None,
+        typer.Option("--auth-secret", help="Hosted bearer-token signing secret."),
+    ] = None,
+    platform_db_path: Annotated[
+        Path | None,
+        typer.Option("--platform-db-path", help="Hosted SQLite platform database path."),
+    ] = None,
+    platform_database_url: Annotated[
+        str | None,
+        typer.Option("--platform-database-url", help="Hosted platform database URL."),
+    ] = None,
+    enable_codex_backbone: Annotated[
+        bool,
+        typer.Option("--enable-codex-backbone", help="Allow guarded Codex worker execution."),
+    ] = False,
+    allow_public_bind: Annotated[
+        bool,
+        typer.Option(
+            "--allow-public-bind",
+            help="Explicitly allow binding the API server to 0.0.0.0 or ::.",
+        ),
+    ] = False,
 ) -> None:
-    """Start a local JSON API server for the project workspace."""
-    typer.echo(f"Serving molecule-ranker project API at http://{host}:{port}")
-    typer.echo("Endpoints: /health, /project, /runs, /artifacts, /comparison")
-    run_project_api_server(root_dir, host=host, port=port)
+    """Start the project API server; hosted mode enables the V0.8 platform surface."""
+    _serve_api(
+        root_dir=root_dir,
+        host=host,
+        port=port,
+        enable_codex_backbone=enable_codex_backbone,
+        api_key=api_key,
+        hosted_mode=hosted_mode,
+        auth_secret=auth_secret,
+        platform_database_url=platform_database_url,
+        platform_db_path=platform_db_path,
+        allow_public_bind=allow_public_bind,
+    )
 
 
 @codex_app.command("status")
@@ -4881,6 +6061,98 @@ def _run_engineering_command(command: list[str], *, cwd: Path) -> dict[str, Any]
 
 def _echo_json(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    return value
+
+
+def _serve_api(
+    *,
+    root_dir: Path,
+    host: str,
+    port: int,
+    api_key: str | None,
+    hosted_mode: bool,
+    auth_secret: str | None,
+    platform_db_path: Path | None,
+    platform_database_url: str | None,
+    enable_codex_backbone: bool,
+    allow_public_bind: bool,
+) -> None:
+    typer.echo(f"Serving molecule-ranker API at http://{host}:{port}")
+    if hosted_mode:
+        typer.echo("Hosted endpoints: /auth/login, /dashboard, /ops/health, /projects")
+    else:
+        typer.echo("Local endpoints: /health, /projects, /projects/{id}/artifacts")
+    run_local_server(
+        root_dir=root_dir,
+        host=host,
+        port=port,
+        enable_codex_backbone=enable_codex_backbone,
+        api_key=api_key,
+        hosted_mode=hosted_mode,
+        auth_secret=auth_secret,
+        platform_database_url=platform_database_url,
+        platform_db_path=platform_db_path,
+        allow_public_bind=allow_public_bind,
+    )
+
+
+def _platform_db_action(
+    *,
+    root_dir: Path,
+    database_url: str | None,
+    db_path: Path | None,
+    action: str,
+) -> dict[str, Any]:
+    from molecule_ranker.platform.migrations import (
+        check_database,
+        database_from_config,
+        init_database,
+        run_migrations,
+    )
+
+    try:
+        database = database_from_config(
+            root_dir=root_dir,
+            database_url=database_url,
+            db_path=db_path,
+            initialize=False,
+        )
+        if action == "init":
+            return init_database(database)
+        if action == "migrate":
+            run_migrations(database)
+            return check_database(database)
+        if action == "check":
+            return check_database(database)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    raise typer.Exit(code=1)
+
+
+def _platform_database(
+    *,
+    root_dir: Path,
+    database_url: str | None,
+    db_path: Path | None,
+) -> Any:
+    from molecule_ranker.platform.migrations import database_from_config
+
+    return database_from_config(
+        root_dir=root_dir,
+        database_url=database_url,
+        db_path=db_path,
+        initialize=True,
+    )
 
 
 def _print_human_summary(result: RankingRun, output_dir: Path, *, verbose: bool) -> None:

@@ -1,0 +1,268 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f7fa;
+  --surface: #ffffff;
+  --surface-alt: #edf3f7;
+  --text: #17212b;
+  --muted: #5b6875;
+  --border: #cfd9e3;
+  --accent: #0b6b76;
+  --accent-strong: #084b55;
+  --warning-bg: #fff8dc;
+  --warning-border: #d7a600;
+  --danger: #9b1c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+a {
+  color: var(--accent-strong);
+}
+
+.shell {
+  min-height: 100vh;
+}
+
+.topbar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar-inner,
+.content {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+}
+
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 62px;
+  gap: 16px;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.nav a,
+.link-button {
+  color: var(--accent-strong);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.link-button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.content {
+  padding: 22px 0 44px;
+}
+
+.research-disclaimer,
+.notice,
+.warning {
+  border: 1px solid var(--warning-border);
+  background: var(--warning-bg);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0 0 18px;
+}
+
+.page-heading {
+  margin: 0 0 18px;
+}
+
+.page-heading h1 {
+  margin: 0 0 4px;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.panel,
+.metric {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.metric strong {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.metric span {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.section {
+  margin-top: 22px;
+}
+
+.section h2 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--border);
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--surface-alt);
+  color: #23313f;
+  font-size: 13px;
+}
+
+tr:last-child td {
+  border-bottom: 0;
+}
+
+pre,
+code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+pre {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin: 8px 0 0;
+  overflow-x: auto;
+}
+
+.tag {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin: 1px 3px 1px 0;
+  background: #f8fafc;
+  font-size: 12px;
+}
+
+.tag.hypothesis {
+  border-color: #7c6f12;
+  background: #fff7c2;
+}
+
+.tag.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.login {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 22px;
+}
+
+label {
+  display: block;
+  margin: 12px 0 4px;
+  font-weight: 600;
+}
+
+input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.button {
+  display: inline-block;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  padding: 9px 12px;
+  margin-top: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 720px) {
+  .topbar-inner {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 12px 0;
+  }
+
+  table {
+    display: block;
+    overflow-x: auto;
+  }
+}

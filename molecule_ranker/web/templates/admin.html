@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Admin controls</h1>
+  <p class="muted">Administrative controls for internal hosted deployments.</p>
+</header>
+<section class="section">
+  <h2>Control areas</h2>
+  <div class="panel">
+    <p><a href="/dashboard/admin/users">Users</a></p>
+    <p><a href="/dashboard/admin/organizations">Organizations</a></p>
+    <p><a href="/dashboard/admin/teams">Teams</a></p>
+    <p><a href="/dashboard/admin/memberships">Memberships</a></p>
+    <p><a href="/dashboard/admin/service-accounts">Service accounts</a></p>
+    <p><a href="/dashboard/admin/audit">Audit events</a></p>
+    <p><a href="/dashboard/admin/jobs">Job queue</a></p>
+    <p><a href="/dashboard/admin/health">System health</a></p>
+    <p><a href="/dashboard/admin/codex-worker">Codex worker status</a></p>
+  </div>
+</section>
+<section class="section">
+  <h2>Users</h2>
+  <table>
+    <thead>
+      <tr><th>Email</th><th>Name</th><th>Active</th><th>Admin</th><th>Provider</th></tr>
+    </thead>
+    <tbody>
+      {% for item in users %}
+        <tr>
+          <td>{{ item.email }}</td>
+          <td>{{ item.display_name or "" }}</td>
+          <td>{{ item.is_active }}</td>
+          <td>{{ item.is_admin }}</td>
+          <td>{{ item.auth_provider }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5">No users.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="section">
+  <h2>Organizations</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Organization ID</th><th>Slug</th></tr></thead>
+    <tbody>
+      {% for org in organizations %}
+        <tr><td>{{ org.name }}</td><td>{{ org.org_id }}</td><td>{{ org.slug }}</td></tr>
+      {% else %}
+        <tr><td colspan="3">No organizations.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="section">
+  <h2>Teams</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Team ID</th><th>Organization ID</th><th>Slug</th></tr></thead>
+    <tbody>
+      {% for team in teams %}
+        <tr>
+          <td>{{ team.name }}</td>
+          <td>{{ team.team_id }}</td>
+          <td>{{ team.org_id }}</td>
+          <td>{{ team.slug }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4">No teams.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

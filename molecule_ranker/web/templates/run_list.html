@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Runs</h1>
+  <p class="muted">{{ project.name }}</p>
+</header>
+<table>
+  <thead>
+    <tr><th>Run</th><th>Disease</th><th>Candidates</th><th>Generated hypotheses</th><th>Targets</th></tr>
+  </thead>
+  <tbody>
+    {% for run in runs %}
+      <tr>
+        <td><a href="/dashboard/projects/{{ project.workspace_id }}/runs/{{ run.run_id }}">{{ run.run_id }}</a></td>
+        <td>{{ run.disease_name }}</td>
+        <td>{{ run.candidate_count }}</td>
+        <td>{{ run.generated_candidate_count }}</td>
+        <td>{{ run.target_count }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5">No registered runs.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

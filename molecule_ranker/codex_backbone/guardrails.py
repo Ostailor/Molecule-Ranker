@@ -85,19 +85,19 @@ PROHIBITED_REQUEST_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 BIOMEDICAL_CLAIM_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
-        re.compile(r"\b[A-Z][A-Za-z0-9_-]*\s+(?:cures?|treats?|prevents?)\b", re.I),
+        re.compile(r"\b[A-Z][A-Za-z0-9_-]*\s+(?:cures?|treats?|prevents?)\b"),
         "unsupported cure/treatment/prevention claim",
     ),
     (
-        re.compile(r"\b[A-Z][A-Za-z0-9_-]*\s+(?:is|are|was|were)\s+(?:safe|efficacious)\b", re.I),
+        re.compile(r"\b[A-Z][A-Za-z0-9_-]*\s+(?:is|are|was|were)\s+(?:safe|efficacious)\b"),
         "unsupported safety or efficacy claim",
     ),
     (
-        re.compile(r"\b[A-Z][A-Za-z0-9_-]*\s+(?:is|are|was|were)\s+active\b", re.I),
+        re.compile(r"\b[A-Z][A-Za-z0-9_-]*\s+(?:is|are|was|were)\s+active\b"),
         "unsupported activity claim",
     ),
     (
-        re.compile(r"\b[A-Z][A-Za-z0-9_-]*\s+binds?\s+(?:to\s+)?[A-Za-z0-9_-]+\b", re.I),
+        re.compile(r"\b[A-Z][A-Za-z0-9_-]*\s+binds?\s+(?:to\s+)?[A-Za-z0-9_-]+\b"),
         "unsupported binding claim",
     ),
     (

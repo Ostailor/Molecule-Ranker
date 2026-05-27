@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Generated molecule table</h1>
+  <p class="notice">
+    Generated molecules are computational hypotheses. They are not experimental evidence and are
+    not instructions for synthesis, dosing, protocols, or patient treatment.
+  </p>
+</header>
+<table>
+  <thead>
+    <tr><th>Molecule</th><th>Label</th><th>Rationale</th><th>Predicted score</th></tr>
+  </thead>
+  <tbody>
+    {% for molecule in molecules %}
+      <tr>
+        <td>
+          <a href="/dashboard/projects/{{ project.workspace_id }}/candidates/{{ display_candidate_name(molecule) | urlencode }}">{{ display_candidate_name(molecule) }}</a>
+        </td>
+        <td><span class="tag hypothesis">Computational hypothesis</span></td>
+        <td>{{ molecule.get("rationale", molecule.get("hypothesis_rationale", "")) | safe_dashboard_text }}</td>
+        <td>{{ molecule.get("score", molecule.get("developability_score", "")) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4">No generated molecule hypotheses recorded.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

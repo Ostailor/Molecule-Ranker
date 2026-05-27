@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading"><h1>Codex worker status</h1></header>
+<pre>{{ codex_status | tojson(indent=2) }}</pre>
+{% endblock %}

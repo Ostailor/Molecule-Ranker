@@ -445,14 +445,46 @@ def _extract_json_object(stdout: str) -> dict[str, Any]:
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            raise ValueError("Codex CLI output did not contain a JSON object.") from None
-        parsed = json.loads(stripped[start : end + 1])
+        parsed = _extract_json_object_from_jsonl(stripped)
+        if parsed is None:
+            start = stripped.find("{")
+            end = stripped.rfind("}")
+            if start < 0 or end <= start:
+                raise ValueError("Codex CLI output did not contain a JSON object.") from None
+            parsed = json.loads(stripped[start : end + 1])
     if not isinstance(parsed, dict):
         raise ValueError("Codex CLI JSON output must be an object.")
     return parsed
+
+
+def _extract_json_object_from_jsonl(stdout: str) -> dict[str, Any] | None:
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        item = event.get("item")
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start < 0 or end <= start:
+                continue
+            parsed = json.loads(text[start : end + 1])
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def _validate_expected_json(

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Experimental results view</h1>
+  <p class="notice">
+    Experimental evidence is shown separately from model predictions. Neither section provides
+    clinical conclusions, dosing, protocols, or treatment advice.
+  </p>
+</header>
+<section class="split">
+  <div class="panel">
+    <h2>Experimental evidence</h2>
+    {% if dashboard_run.experimental_results %}
+      {% for result in dashboard_run.experimental_results %}
+        <pre>{{ result | tojson(indent=2) }}</pre>
+      {% endfor %}
+    {% else %}
+      <p>No experimental results linked to this run.</p>
+    {% endif %}
+  </div>
+  <div class="panel">
+    <h2>Model predictions</h2>
+    {% if predictions %}
+      {% for prediction in predictions %}
+        <pre>{{ prediction | tojson(indent=2) }}</pre>
+      {% endfor %}
+    {% else %}
+      <p>No model prediction summaries recorded.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

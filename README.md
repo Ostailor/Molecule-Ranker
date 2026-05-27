@@ -1,37 +1,44 @@
 # molecule-ranker
 
-`molecule-ranker` is an agent-first drug discovery research prototype. Given a
-disease name, V0.7 resolves the disease through public biomedical data sources,
+`molecule-ranker` is an internal research platform for source-backed molecule
+ranking. Given a disease name, V0.8 resolves the disease through public
+biomedical data sources,
 discovers evidence-backed targets, retrieves existing molecules linked to those
 targets, retrieves real literature evidence, ranks the molecules as transparent
 research hypotheses, and can optionally generate target-conditioned in-silico
 molecule hypotheses from those retrieved structures. V0.4 added computational
 developability triage for existing and generated molecules. V0.5 added a local
 expert review workspace for human-in-the-loop triage, dossiers, follow-up
-requests, validation handoffs, feedback ingestion, and audit trails. V0.6 adds
+requests, validation handoffs, feedback ingestion, and audit trails. V0.6 added
 an experimental feedback loop and active-learning prioritization from
-user-imported assay result files. V0.7 adds a controlled Codex CLI provider as
+user-imported assay result files. V0.7 added a controlled Codex CLI provider as
 the orchestration LLM layer for project planning, artifact inspection,
 multi-run comparison summaries, review-assistant workflows, follow-up planning,
-and engineering automation. Codex CLI can authenticate through local ChatGPT
-sign-in, so V0.7 LLM workflows do not require an OpenAI API key when Codex CLI
-is already authenticated locally.
+and engineering automation. V0.8 keeps CLI/local mode working and adds hosted
+internal-platform primitives: user accounts, organizations, teams, RBAC,
+project sharing, an authenticated dashboard, SQLite/PostgreSQL platform
+metadata, job queueing, controlled Codex worker orchestration, audit logs, operational
+health, admin controls, and data export/delete/retention controls. Codex CLI can
+authenticate through local ChatGPT sign-in, so local LLM workflows do not
+require an OpenAI API key when Codex CLI is already authenticated locally.
 
 The app does not discover cures, does not claim generated molecules treat or are
 active against a disease, does not provide medical advice, and does not provide
-dosage or patient treatment instructions. Ranked molecules and generated
-structures are research hypotheses that require independent validation.
+synthesis instructions, lab protocols, dosage, or patient treatment
+instructions. V0.8 is an internal research platform MVP, not a regulated
+clinical product. Ranked molecules and generated structures are research
+hypotheses that require independent validation.
 Generated molecules are computational hypotheses only: they are not known
 actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V0.7
+## Current Scope Through V0.8
 
-V0.7 implements existing-molecule ranking, opt-in generated hypotheses,
+V0.8 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
-available as a guarded orchestration layer:
+available as a guarded orchestration layer and hosted-mode platform services:
 
 - Resolve disease names to public biomedical disease entities with ambiguity handling.
 - Retrieve real disease-associated targets with richer target identifiers and metadata.
@@ -89,8 +96,15 @@ available as a guarded orchestration layer:
   decisions, or score updates.
 - Run Codex guardrails and evals for JSON validity, artifact grounding,
   citation fabrication, forbidden biomedical claims, and safe command planning.
+- Run hosted mode with bearer-token authentication, user accounts,
+  organizations, teams, project-level owner/editor/viewer permissions, audit
+  logs, `/dashboard`, `/ops/health`, admin user controls, data export/delete,
+  retention policies, and a central SQLite/PostgreSQL platform database.
+- Queue hosted Codex work as allowlisted project jobs. Hosted API callers cannot
+  submit arbitrary Codex prompts or shell-capable tasks; a `CodexWorker` builds
+  server-side tasks from registered project artifacts.
 
-V0.7 does not:
+V0.8 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -117,14 +131,273 @@ V0.7 does not:
   scores.
 - Let Codex directly alter scores without calling molecule-ranker scoring
   modules.
+- Expose cache files, secrets, bearer tokens, API keys, or hidden environment
+  files through the hosted API, dashboard, audit logs, artifacts, or Codex
+  prompts.
+- Provide external ELN/LIMS integrations or regulated clinical-product
+  workflows.
 
 Unit tests use mocked data only to test behavior deterministically. Production
 code uses real public biomedical data adapters and fails if required data cannot
 be retrieved.
 
-## V0.7 Codex CLI Orchestration
+## V0.8 Hosted Mode
 
-V0.7 makes Codex CLI the primary LLM agent backbone for molecule-ranker. Codex
+Start the local API surface as before:
+
+```bash
+uv run molecule-ranker project serve --root . --host 127.0.0.1 --port 8765
+```
+
+Start the hosted MVP surface for internal use:
+
+```bash
+uv run molecule-ranker project serve \
+  --root . \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --hosted \
+  --auth-secret "$MOLECULE_RANKER_AUTH_SECRET" \
+  --platform-db-path .molecule-ranker/platform.sqlite
+```
+
+Use `--platform-database-url sqlite:////absolute/path/platform.sqlite` when a
+database URL is easier to inject from deployment configuration. For hosted
+production, use a PostgreSQL URL such as
+`postgresql+psycopg://user:password@host:5432/molecule_ranker`.
+
+Hosted mode is intended for internal research teams. It requires bearer-token
+authentication for project, artifact, audit, job, dashboard, and admin routes.
+Create/bootstrap users through the CLI/API or by initializing the platform
+database in application code. Artifact files may stay on local/object storage;
+the platform database stores paths, hashes, and provenance metadata.
+
+Database lifecycle commands:
+
+```bash
+uv run molecule-ranker db init --db-path .molecule-ranker/platform.sqlite
+uv run molecule-ranker db migrate --database-url "$MOLECULE_RANKER_DATABASE_URL"
+uv run molecule-ranker db check --database-url "$MOLECULE_RANKER_DATABASE_URL"
+```
+
+The platform database never stores plaintext passwords, API keys, Codex/ChatGPT
+credentials, or unredacted secret-like audit metadata.
+
+Authentication commands:
+
+```bash
+uv run molecule-ranker user create \
+  --email admin@example.com \
+  --password 'Strong-password-1' \
+  --admin \
+  --db-path .molecule-ranker/platform.sqlite
+
+uv run molecule-ranker user list --db-path .molecule-ranker/platform.sqlite
+
+uv run molecule-ranker auth token create \
+  --name automation \
+  --user-id user-... \
+  --created-by-user-id user-... \
+  --scope project:read \
+  --scope run:create \
+  --db-path .molecule-ranker/platform.sqlite
+
+uv run molecule-ranker auth token revoke \
+  --token-id sat-... \
+  --actor-user-id user-... \
+  --db-path .molecule-ranker/platform.sqlite
+```
+
+### V0.8 Platform Controls
+
+Authentication modes:
+
+- `local_password`: internal/self-hosted deployments with strong password
+  hashing and expiring bearer tokens.
+- Service account tokens: automation tokens are hashed at rest, scoped, and
+  shown only at creation time.
+- OIDC: configurable issuer/client placeholders are present, but OIDC is
+  optional and disabled cleanly when not configured.
+
+RBAC is enforced for hosted API routes, dashboard pages, artifact downloads,
+jobs, Codex tasks, and admin controls. Organization roles are `owner`, `admin`,
+`scientist`, `reviewer`, `viewer`, and `service_account`. Project roles are
+`project_owner`, `editor`, `reviewer`, `viewer`, and `runner`. Permission checks
+cover `project:create`, `project:read`, `project:update`, `project:delete`,
+`run:create`, `run:read`, `run:cancel`, `artifact:read`, `artifact:export`,
+`review:read`, `review:write`, `experiment:import`, `experiment:read`,
+`codex:run`, `codex:read`, `admin:manage_users`, `admin:manage_org`, and
+`admin:view_audit`. Viewers are read-only, reviewers can review/comment without
+changing project config, runners can enqueue/run jobs without managing users,
+and Codex work requires explicit `codex:run` permission. Admin actions still
+write audit events.
+
+The hosted dashboard is server-rendered and login-gated. It includes project and
+run views, ranking tables, generated molecule tables, developability,
+experimental results, active learning, review queues, candidate dossiers, Codex
+assistant output, audit logs, notifications, and admin pages. Every dashboard
+view keeps research-use disclaimers visible, labels generated molecules as
+computational hypotheses, separates experimental evidence from model
+predictions, and shows Codex output separately from evidence.
+
+Codex CLI remains the LLM backbone, but hosted mode never invokes arbitrary
+API-triggered shell execution. Hosted Codex work is queued as a project job and
+executed by a controlled `CodexWorker` with scoped artifact context, isolated
+working directories, allowlisted task types, transcript redaction, and
+pre/post-guardrails. Codex outputs are not evidence, assay results, molecules,
+review decisions, or scores.
+
+Observability includes structured JSON logs, request IDs, job IDs,
+project/run IDs, health/readiness/version endpoints, audit logs, and metrics
+such as `pipeline_runs_total`, `jobs_queued_total`, `jobs_failed_total`,
+`codex_tasks_total`, `codex_guardrail_failures_total`,
+`artifacts_written_total`, `auth_failures_total`, and
+`api_request_duration_seconds`. Logs and metrics must not include passwords,
+API keys, service tokens, Codex credentials, full imported assay files, or full
+copyrighted article text.
+
+Data governance controls include project export packages, user/project export
+metadata, soft delete by default, hard delete only with explicit project-ID
+confirmation, artifact retention, Codex transcript retention, audit retention,
+cache retention, and assay-result retention. Exports exclude secrets and cache
+files and include artifact manifests with hashes.
+
+Deployment options:
+
+- Local CLI mode: regular `molecule-ranker rank`, project, review, experiment,
+  and Codex CLI commands still work without hosted services.
+- Local web mode: run `molecule-ranker serve` on `127.0.0.1` with SQLite.
+- Docker Compose internal deployment: use the provided compose files with
+  mounted artifact/project storage and secrets supplied through environment
+  variables.
+- Optional Kubernetes manifests: deployment examples are provided under
+  `deployment/k8s/` for teams that already operate Kubernetes.
+
+### V0.8 Usage Examples
+
+Create an admin user:
+
+```bash
+uv run molecule-ranker user create \
+  --email admin@example.com \
+  --password 'Strong-password-1' \
+  --display-name "Platform Admin" \
+  --admin \
+  --db-path .molecule-ranker/platform.sqlite
+```
+
+Start the hosted server on localhost:
+
+```bash
+uv run molecule-ranker serve \
+  --root . \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --hosted \
+  --auth-secret "$MOLECULE_RANKER_AUTH_SECRET" \
+  --platform-db-path .molecule-ranker/platform.sqlite
+```
+
+Start a background worker:
+
+```bash
+uv run molecule-ranker worker run \
+  --db-path .molecule-ranker/platform.sqlite
+```
+
+Create a project in local CLI mode:
+
+```bash
+uv run molecule-ranker project create \
+  --root ./research/parkinsons \
+  --workspace-id parkinsons \
+  --name "Parkinson Research"
+```
+
+Run a source-backed project job locally and register the output:
+
+```bash
+uv run molecule-ranker rank "Parkinson disease" \
+  --top 10 \
+  --output-dir ./research/parkinsons/results
+
+uv run molecule-ranker project run \
+  ./research/parkinsons/results/parkinson-disease \
+  --root ./research/parkinsons \
+  --run-id run-001
+```
+
+Open the hosted dashboard after login:
+
+```bash
+open http://127.0.0.1:8765/dashboard
+```
+
+Create a scoped service account token:
+
+```bash
+uv run molecule-ranker auth token create \
+  --name automation \
+  --user-id user-service-account \
+  --created-by-user-id user-admin \
+  --scope project:read \
+  --scope run:create \
+  --scope artifact:read \
+  --db-path .molecule-ranker/platform.sqlite
+```
+
+Queue a hosted Codex-backed project summary. The API enqueues the job; a worker
+runs Codex later through `CodexWorker`.
+
+```bash
+TOKEN="$(curl -s http://127.0.0.1:8765/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"Strong-password-1"}' \
+  | jq -r '.access_token')"
+
+curl -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8765/projects/parkinsons/codex/summarize
+```
+
+Export a project package:
+
+```bash
+uv run molecule-ranker platform export-project parkinsons \
+  --output ./exports/parkinsons-export.zip \
+  --actor-user-id user-admin \
+  --db-path .molecule-ranker/platform.sqlite
+```
+
+Run retention cleanup. Defaults perform no automatic deletion unless retention
+days are configured.
+
+```bash
+uv run molecule-ranker platform retention run \
+  --actor-user-id user-admin \
+  --cache-retention-days 7 \
+  --codex-transcript-retention-days 90 \
+  --db-path .molecule-ranker/platform.sqlite
+```
+
+Deploy with Docker Compose:
+
+```bash
+cp .env.example .env
+# edit .env with real secrets and database settings
+docker compose up --build
+```
+
+API authentication uses bearer tokens. `POST /auth/login` returns a short-lived
+access token plus a refresh token; `POST /auth/refresh` issues a new access
+token; `POST /auth/logout` invalidates the session. Browser cookie sessions are
+not used in V0.8, so CSRF protection is not part of the API bearer-token flow.
+OIDC settings are present as placeholders and `/auth/oidc/*` routes return a
+clean disabled response unless configured.
+
+## V0.8 Codex CLI Orchestration
+
+V0.8 keeps Codex CLI as the primary LLM agent backbone for molecule-ranker. Codex
 CLI is used because OpenAI documents Codex as included with ChatGPT Plus, Pro,
 Business, Enterprise/Edu, and other eligible plans, and the CLI can run through
 local ChatGPT authentication instead of requiring project-specific OpenAI API
@@ -1185,10 +1458,10 @@ does not write a normal `report.md` that looks successful.
 - V0.6: experimental feedback loop and active learning from assay results.
 - V0.7: Codex CLI LLM backbone, project workspace, multi-run management, and
   local API server.
-- V0.8: production deployment, auth, user roles, team collaboration, and hosted
-  dashboard.
-- V0.9: external integrations for ELN/LIMS, registry, assay providers, and data
-  warehouse.
+- V0.8: production deployment, authentication, roles, team collaboration, and
+  hosted dashboard.
+- V0.9: external integrations for ELN/LIMS, compound registry, assay providers,
+  and data warehouse.
 - V1.0: validated internal research platform MVP.
 
 ## Development

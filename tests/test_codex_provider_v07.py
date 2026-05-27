@@ -66,6 +66,39 @@ def test_codex_provider_validates_json_output_schema(tmp_path: Path) -> None:
     assert response.parsed_json == {"summary": "ok"}
 
 
+def test_codex_provider_parses_codex_jsonl_agent_message(tmp_path: Path) -> None:
+    script = tmp_path / "codex_jsonl_stub.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import json",
+                "print(json.dumps({'type': 'thread.started'}))",
+                "payload = {'summary': 'ok', 'limitations': []}",
+                "event = {'type': 'item.completed', 'item': {'type': 'agent_message'}}",
+                "event['item']['text'] = json.dumps(payload)",
+                "print(json.dumps(event))",
+            ]
+        )
+        + "\n"
+    )
+    response = CodexCLIProvider(
+        CodexProviderConfig(
+            mode="enabled",
+            command=[sys.executable, str(script)],
+            working_dir=str(tmp_path),
+            audit_log_path=str(tmp_path / "audit.jsonl"),
+        )
+    ).invoke(
+        CodexRequest(
+            task="Summarize artifacts.",
+            expected_json_schema={"required": ["summary"]},
+        )
+    )
+
+    assert response.status == "ok"
+    assert response.parsed_json == {"summary": "ok", "limitations": []}
+
+
 def test_codex_assist_plan_cli_dry_run_outputs_json(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(

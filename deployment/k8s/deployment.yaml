@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: molecule-ranker-web
+  labels:
+    app: molecule-ranker
+    component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: molecule-ranker
+      component: web
+  template:
+    metadata:
+      labels:
+        app: molecule-ranker
+        component: web
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: molecule-ranker-artifacts
+        - name: storage
+          persistentVolumeClaim:
+            claimName: molecule-ranker-storage
+        - name: projects
+          persistentVolumeClaim:
+            claimName: molecule-ranker-projects
+      containers:
+        - name: web
+          image: molecule-ranker:0.8.0
+          imagePullPolicy: IfNotPresent
+          args: ["web"]
+          ports:
+            - containerPort: 8765
+          envFrom:
+            - secretRef:
+                name: molecule-ranker-secrets
+          env:
+            - name: MOLECULE_RANKER_HOST
+              value: "0.0.0.0"
+            - name: MOLECULE_RANKER_PORT
+              value: "8765"
+            - name: MOLECULE_RANKER_ALLOW_PUBLIC_BIND
+              value: "true"
+            - name: MOLECULE_RANKER_ROOT
+              value: /data/projects
+            - name: MOLECULE_RANKER_ARTIFACT_ROOT
+              value: /data/artifacts
+            - name: MOLECULE_RANKER_STORAGE_ROOT
+              value: /data/storage
+          volumeMounts:
+            - name: artifacts
+              mountPath: /data/artifacts
+            - name: storage
+              mountPath: /data/storage
+            - name: projects
+              mountPath: /data/projects
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8765
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8765
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: molecule-ranker-worker
+  labels:
+    app: molecule-ranker
+    component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: molecule-ranker
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: molecule-ranker
+        component: worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: worker
+          image: molecule-ranker:0.8.0
+          imagePullPolicy: IfNotPresent
+          args: ["worker"]
+          envFrom:
+            - secretRef:
+                name: molecule-ranker-secrets
+          env:
+            - name: MOLECULE_RANKER_ROOT
+              value: /data/projects
+            - name: MOLECULE_RANKER_ARTIFACT_ROOT
+              value: /data/artifacts
+            - name: MOLECULE_RANKER_STORAGE_ROOT
+              value: /data/storage
+          volumeMounts:
+            - name: artifacts
+              mountPath: /data/artifacts
+            - name: storage
+              mountPath: /data/storage
+            - name: projects
+              mountPath: /data/projects
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: molecule-ranker-artifacts
+        - name: storage
+          persistentVolumeClaim:
+            claimName: molecule-ranker-storage
+        - name: projects
+          persistentVolumeClaim:
+            claimName: molecule-ranker-projects

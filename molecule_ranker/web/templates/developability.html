@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Developability view</h1>
+  <p class="muted">Developability triage is computational screening, not laboratory validation.</p>
+</header>
+<table>
+  <thead>
+    <tr><th>Candidate</th><th>Origin</th><th>Developability score</th><th>Assessment</th></tr>
+  </thead>
+  <tbody>
+    {% for candidate in dashboard_run.candidates + dashboard_run.generated_molecules %}
+      <tr>
+        <td>{{ display_candidate_name(candidate) }}</td>
+        <td>{{ candidate.get("origin", "generated" if candidate in dashboard_run.generated_molecules else "existing") }}</td>
+        <td>{{ candidate.get("developability_score", "") }}</td>
+        <td><pre>{{ candidate.get("developability_summary", candidate.get("developability_assessment", {})) | tojson(indent=2) }}</pre></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4">No developability data recorded.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,39 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MOLECULE_RANKER_HOSTED: "true"
+      MOLECULE_RANKER_AUTH_SECRET: local-development-secret-change-me-32
+      MOLECULE_RANKER_PLATFORM_DB_PATH: /data/storage/platform.sqlite
+      MOLECULE_RANKER_ROOT: /data/projects
+      MOLECULE_RANKER_ARTIFACT_ROOT: /data/artifacts
+      MOLECULE_RANKER_STORAGE_ROOT: /data/storage
+      MOLECULE_RANKER_HOST: 0.0.0.0
+      MOLECULE_RANKER_PORT: 8765
+      MOLECULE_RANKER_ALLOW_PUBLIC_BIND: "true"
+    volumes:
+      - ./data/artifacts:/data/artifacts
+      - ./data/storage:/data/storage
+      - ./data/projects:/data/projects
+    ports:
+      - "127.0.0.1:8765:8765"
+    command: ["web"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["worker"]
+    environment:
+      MOLECULE_RANKER_HOSTED: "true"
+      MOLECULE_RANKER_PLATFORM_DB_PATH: /data/storage/platform.sqlite
+      MOLECULE_RANKER_ROOT: /data/projects
+      MOLECULE_RANKER_ARTIFACT_ROOT: /data/artifacts
+      MOLECULE_RANKER_STORAGE_ROOT: /data/storage
+    volumes:
+      - ./data/artifacts:/data/artifacts
+      - ./data/storage:/data/storage
+      - ./data/projects:/data/projects
+    command: ["worker"]

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading"><h1>Organizations</h1></header>
+<table>
+  <thead><tr><th>Name</th><th>Organization ID</th><th>Slug</th></tr></thead>
+  <tbody>
+    {% for org in organizations %}
+      <tr><td>{{ org.name }}</td><td>{{ org.org_id }}</td><td>{{ org.slug }}</td></tr>
+    {% else %}
+      <tr><td colspan="3">No organizations.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
