@@ -17,6 +17,27 @@
   </div>
 </section>
 <section class="section">
+  <h2>Artifact downloads</h2>
+  <p class="muted">Downloads are limited to registered project artifacts and block secret, cache, and out-of-project paths.</p>
+  <table>
+    <thead>
+      <tr><th>Artifact</th><th>Type</th><th>Size</th><th>Action</th></tr>
+    </thead>
+    <tbody>
+      {% for artifact in project.artifacts %}
+        <tr>
+          <td>{{ artifact.artifact_id }}</td>
+          <td>{{ artifact.artifact_type }}</td>
+          <td>{{ artifact.size_bytes }}</td>
+          <td><a class="button small-button" href="/dashboard/projects/{{ project.workspace_id }}/artifacts/{{ artifact.artifact_id }}/download">Download</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4">No registered artifacts are available for download.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="section">
   <h2>Recent activity</h2>
   <div class="panel">
     {% for item in activity %}

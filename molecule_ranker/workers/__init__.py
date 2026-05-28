@@ -1,4 +1,4 @@
-"""Background worker entry points for the V0.9 platform queue."""
+"""Background worker entry points for the V1.0 platform queue."""
 
 from molecule_ranker.workers.base import BaseWorker, JobHandler
 from molecule_ranker.workers.codex_worker import CodexQueueWorker

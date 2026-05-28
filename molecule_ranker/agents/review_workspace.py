@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from molecule_ranker.agents.base import BaseAgent, PipelineContext
+from molecule_ranker.contracts import with_artifact_contract_metadata
 from molecule_ranker.review.dashboard import generate_static_review_dashboard
 from molecule_ranker.review.queue_builder import build_review_workspace
 from molecule_ranker.review.schemas import Reviewer
@@ -60,6 +61,7 @@ class ReviewWorkspaceAgent(BaseAgent):
             **workspace.model_dump(mode="json"),
             "summary": _queue_summary(workspace.review_items),
         }
+        queue_payload = with_artifact_contract_metadata(queue_payload, "review_queue")
         queue_path.write_text(json.dumps(queue_payload, indent=2, sort_keys=True) + "\n")
 
         summary = _queue_summary(workspace.review_items)

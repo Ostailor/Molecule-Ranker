@@ -9,8 +9,9 @@ from typing import Any, Literal
 
 from molecule_ranker.codex_backbone.guardrails import redact_secrets
 from molecule_ranker.integrations.credentials import redact_secret_values
+from molecule_ranker.release import WAREHOUSE_CONTRACT_VERSION
 
-WAREHOUSE_SCHEMA_VERSION = "mr_warehouse_v0.9.0"
+WAREHOUSE_SCHEMA_VERSION = WAREHOUSE_CONTRACT_VERSION
 WarehouseExportFormat = Literal["csv", "parquet", "sql"]
 
 SECRET_FIELD_MARKERS = (

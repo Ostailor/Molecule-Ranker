@@ -361,7 +361,7 @@ class ActivityFeedItem(PlatformSchema):
 
 
 class JobRecord(PlatformSchema):
-    """Compatibility record for the initial V0.9 SQLite job queue."""
+    """Compatibility record for the initial V1.0 SQLite job queue."""
 
     job_id: str
     job_type: str

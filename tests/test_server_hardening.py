@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from molecule_ranker.release import API_CONTRACT_VERSION, ARTIFACT_CONTRACT_VERSION
 from molecule_ranker.server import create_app
 from molecule_ranker.server.security import public_bind_allowed
 from molecule_ranker.workspace.schemas import ArtifactRecord
@@ -27,6 +28,8 @@ def test_health_ready_version_and_secure_headers(tmp_path: Path) -> None:
     assert ready.json()["ok"] is True
     assert version.status_code == 200
     assert version.json()["version"]
+    assert version.json()["api_contract_version"] == API_CONTRACT_VERSION
+    assert version.json()["artifact_contract_version"] == ARTIFACT_CONTRACT_VERSION
     assert favicon.status_code == 204
 
 

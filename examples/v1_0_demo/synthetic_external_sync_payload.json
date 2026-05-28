@@ -1,0 +1,35 @@
+{
+  "synthetic": true,
+  "payload_type": "integration_dry_run_example",
+  "external_system_id": "ExampleExternalSystemA",
+  "mode": "dry_run",
+  "disclaimer": "Synthetic payload for connector contract demonstration only; not biomedical evidence.",
+  "records": [
+    {
+      "external_record_id": "SYNTH-EXT-001",
+      "external_record_type": "candidate_annotation",
+      "internal_entity_type": "candidate",
+      "internal_entity_id": "EXAMPLE-CANDIDATE-A",
+      "display_name": "ExampleCandidateA",
+      "mapping_status": "pending_review",
+      "metadata": {
+        "disease": "ExampleDiseaseA",
+        "target": "ExampleTargetA",
+        "note": "Fake mapping row for dry-run demonstration."
+      }
+    },
+    {
+      "external_record_id": "SYNTH-EXT-002",
+      "external_record_type": "generated_hypothesis_annotation",
+      "internal_entity_type": "generated_hypothesis",
+      "internal_entity_id": "EXAMPLE-GENERATED-A",
+      "display_name": "ExampleGeneratedHypothesisA",
+      "mapping_status": "pending_review",
+      "metadata": {
+        "disease": "ExampleDiseaseA",
+        "target": "ExampleTargetA",
+        "note": "Generated hypothesis row is not evidence."
+      }
+    }
+  ]
+}

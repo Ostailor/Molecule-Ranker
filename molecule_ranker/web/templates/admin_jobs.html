@@ -2,12 +2,18 @@
 {% block content %}
 <header class="page-heading"><h1>Job queue</h1></header>
 <section class="section">
+  <h2>Status guide</h2>
+  <div class="panel">
+    <p>Queued means waiting for a worker. Running means a worker has claimed the job. Failed jobs show the operator-facing error and should be retried only after the cause is fixed.</p>
+  </div>
+</section>
+<section class="section">
   <h2>Failed jobs</h2>
   <table>
     <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Error</th></tr></thead>
     <tbody>
       {% for item in failed_jobs %}
-        <tr><td>{{ item.job_id }}</td><td>{{ item.job_type }}</td><td>{{ item.status }}</td><td>{{ item.error_summary or "" }}</td></tr>
+        <tr><td>{{ item.job_id }}</td><td>{{ item.job_type }}</td><td><span class="status-badge status-{{ item.status }}">{{ item.status }}</span></td><td>{{ item.error_summary or "" }}</td></tr>
       {% else %}
         <tr><td colspan="4">No failed jobs.</td></tr>
       {% endfor %}
@@ -20,7 +26,7 @@
     <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Project</th></tr></thead>
     <tbody>
       {% for job in jobs %}
-        <tr><td>{{ job.job_id }}</td><td>{{ job.job_type }}</td><td>{{ job.status }}</td><td>{{ job.project_id or "" }}</td></tr>
+        <tr><td>{{ job.job_id }}</td><td>{{ job.job_type }}</td><td><span class="status-badge status-{{ job.status }}">{{ job.status }}</span></td><td>{{ job.project_id or "" }}</td></tr>
       {% else %}
         <tr><td colspan="4">No jobs.</td></tr>
       {% endfor %}

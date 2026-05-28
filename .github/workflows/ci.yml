@@ -7,9 +7,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  MOLECULE_RANKER_CI_OFFLINE: "true"
+
 jobs:
-  unit:
-    name: Unit checks
+  static:
+    name: Ruff, pyright, API contract, docs
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -18,7 +25,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
@@ -29,19 +36,67 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups --frozen
 
-      - name: Lint
+      - name: Ruff
         run: uv run ruff check .
 
-      - name: Type check
+      - name: Pyright
         run: uv run pyright
 
-      - name: Unit tests
-        run: uv run pytest
+      - name: API contract export check
+        run: |
+          uv run molecule-ranker api export-openapi --output openapi-v1.json
+          python - <<'PY'
+          import json
+          schema = json.load(open("openapi-v1.json"))
+          paths = schema.get("paths", {})
+          required = ["/api/v1/health", "/api/v1/ready", "/api/v1/metrics"]
+          missing = [path for path in required if path not in paths]
+          if missing:
+              raise SystemExit(f"missing OpenAPI V1 paths: {missing}")
+          PY
 
-  live-smoke:
-    name: Live smoke tests
+      - name: docs link check
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          roots = [pathlib.Path("README.md"), pathlib.Path("docs"), pathlib.Path("deployment")]
+          markdown = []
+          for root in roots:
+              if root.is_file():
+                  markdown.append(root)
+              elif root.exists():
+                  markdown.extend(root.rglob("*.md"))
+          pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+          failures = []
+          for path in markdown:
+              text = path.read_text()
+              for target in pattern.findall(text):
+                  target = target.strip()
+                  if not target or target.startswith(("#", "http://", "https://", "mailto:")):
+                      continue
+                  local = target.split("#", 1)[0]
+                  if not local:
+                      continue
+                  candidate = (path.parent / local).resolve()
+                  if not candidate.exists():
+                      failures.append(f"{path}: missing link target {target}")
+          if failures:
+              print("\n".join(failures))
+              sys.exit(1)
+          PY
+
+      - name: Upload OpenAPI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-v1
+          path: openapi-v1.json
+
+  unit:
+    name: Unit tests
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -49,7 +104,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
@@ -60,5 +115,157 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups --frozen
 
-      - name: Live smoke tests
-        run: uv run pytest -m live tests_live/
+      - name: Unit tests
+        run: uv run pytest tests -m "not live and not network"
+
+  integration:
+    name: Integration tests with mocked services
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Integration tests
+        run: |
+          uv run pytest tests_integration
+          uv run pytest tests/test_integration_*.py tests/test_integrations_v09.py tests/test_sync_engine.py tests/test_webhook_ingestion.py -m "not live and not network"
+
+  validation:
+    name: Validation tests and reports
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Validation tests
+        run: uv run pytest tests_validation
+
+      - name: Generate validation report
+        run: uv run molecule-ranker validate release --root "$RUNNER_TEMP/release-validation" --json | tee validation-release.json
+
+      - name: Upload validation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: |
+            validation-release.json
+            ${{ runner.temp }}/release-validation/.molecule-ranker/validation/release/golden_validation_report.json
+            ${{ runner.temp }}/release-validation/.molecule-ranker/validation/release/golden_validation_report.md
+
+  security-guardrails:
+    name: Security guardrail tests and audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Security guardrail tests
+        run: uv run pytest tests_validation/test_guardrail_audit.py tests_validation/test_security_audit.py
+
+      - name: Security audit report
+        run: |
+          mkdir -p "$RUNNER_TEMP/security-audit"
+          uv run molecule-ranker validate security \
+            --root "$RUNNER_TEMP/security-audit" \
+            --db-path "$RUNNER_TEMP/security-audit/platform.sqlite" \
+            --json | tee security-audit.json
+
+      - name: Upload security audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit
+          path: |
+            security-audit.json
+            ${{ runner.temp }}/security-audit/security_audit.json
+            ${{ runner.temp }}/security-audit/security_audit.md
+
+  contracts:
+    name: Artifact and API contract validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Artifact contract validation
+        run: |
+          uv run molecule-ranker validate golden --workflow all --root "$RUNNER_TEMP/contracts" --json
+          for workflow_dir in "$RUNNER_TEMP/contracts/.molecule-ranker/validation/golden"/*; do
+            if [ -d "$workflow_dir" ]; then
+              uv run molecule-ranker validate artifacts "$workflow_dir" --json
+            fi
+          done
+
+      - name: API contract export check
+        run: uv run molecule-ranker api export-openapi --output openapi-v1.json
+
+      - name: Upload API contract artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-v1-contracts
+          path: openapi-v1.json
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Docker build
+        run: docker build -f deployment/Dockerfile -t molecule-ranker:ci .

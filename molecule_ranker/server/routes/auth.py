@@ -138,7 +138,7 @@ def oidc_login(request: Request) -> dict[str, Any]:
     config = _oidc_config(request)
     if not config.enabled:
         raise HTTPException(status_code=404, detail="OIDC is not configured.")
-    raise HTTPException(status_code=501, detail="OIDC login is not implemented in V0.9.")
+    raise HTTPException(status_code=501, detail="OIDC login is not implemented in V1.0.")
 
 
 @router.get("/auth/oidc/callback")
@@ -146,7 +146,7 @@ def oidc_callback(request: Request) -> dict[str, Any]:
     config = _oidc_config(request)
     if not config.enabled:
         raise HTTPException(status_code=404, detail="OIDC is not configured.")
-    raise HTTPException(status_code=501, detail="OIDC callback is not implemented in V0.9.")
+    raise HTTPException(status_code=501, detail="OIDC callback is not implemented in V1.0.")
 
 
 @router.post("/auth/token/create")

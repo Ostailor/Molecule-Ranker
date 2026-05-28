@@ -8,10 +8,18 @@
     dosing, synthesis instructions, or treatment guidance.
   </p>
 </header>
+<section class="section">
+  <h2>Execution boundary</h2>
+  {% if codex_enabled %}
+    <p class="notice">Codex is configured for this deployment. Execution requires codex:run permission and is scoped to registered project artifacts.</p>
+  {% else %}
+    <p class="warning">Codex is disabled until configured. Assistant outputs can be viewed, but new hosted Codex jobs require setup; execution requires codex:run permission and a scoped worker configuration.</p>
+  {% endif %}
+</section>
 {% if can_run_codex %}
   <p class="panel">
     You have <code>codex:run</code> permission. Hosted Codex execution must be queued through
-    the guarded API and processed by CodexWorker.
+    the guarded API and processed by CodexWorker scoped to registered project artifacts.
   </p>
 {% endif %}
 <section class="section">

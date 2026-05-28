@@ -1,6 +1,6 @@
-# molecule-ranker V0.8 Deployment
+# molecule-ranker V1.0 Deployment
 
-V0.8 is an internal research-platform MVP. It is not a regulated clinical product and
+V1.0 is a validated internal research-platform MVP. It is not a regulated clinical product and
 does not provide medical advice, dosing, synthesis instructions, lab protocols, or
 patient treatment guidance.
 
@@ -99,9 +99,30 @@ Use:
 
 - `GET /health` for process liveness.
 - `GET /ready` for hosted database readiness.
-- `GET /version` for deployed version checks.
+- `GET /version` for deployed version and contract checks. A V1.0 deployment
+  must report `version=1.0.0`, `api_contract_version=api.v1`,
+  `artifact_contract_version=artifacts.v1`,
+  `data_contract_version=data-contracts.v1`, and
+  `warehouse_contract_version=mr_warehouse_v1.0.0`.
 
 The Dockerfile health check uses `/health`; Kubernetes readiness uses `/ready`.
+
+## Backup, restore, and disaster recovery
+
+Before every V1.0 release cut and after every hosted deployment:
+
+- Back up the platform database with the organization-approved PostgreSQL dump
+  mechanism, or copy the SQLite database only after stopping writers.
+- Back up `/data/artifacts`, `/data/projects`, and `/data/storage` together so
+  artifact manifests, hashes, run metadata, and review workspaces remain
+  consistent.
+- Exclude cache directories, `.env` files, local Codex credentials, API keys,
+  service tokens, and secret-manager mounts from backup artifacts.
+- Restore into an isolated environment first, then run database migrations,
+  `molecule-ranker db check`, `GET /ready`, `GET /version`, and one synthetic
+  project export before allowing users back in.
+- Record restore time, data-loss window, package hashes, and operator identity
+  in the incident or release log.
 
 ## Codex CLI worker
 

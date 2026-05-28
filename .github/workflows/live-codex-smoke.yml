@@ -1,0 +1,37 @@
+name: Live Codex smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      codex_command:
+        description: Codex CLI command or executable path.
+        required: true
+        default: codex
+
+permissions:
+  contents: read
+
+jobs:
+  live-codex-smoke:
+    name: Live Codex smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Check Codex CLI availability
+        run: uv run molecule-ranker codex status --command "${{ inputs.codex_command }}" --json

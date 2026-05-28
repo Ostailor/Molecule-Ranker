@@ -33,6 +33,40 @@ class RunnerProtocol(Protocol):
     ) -> CodexRunnerResult: ...
 
 
+class NullCodexProvider:
+    """Deterministic Codex provider for default validation and tests."""
+
+    def run_task(self, task: CodexTask) -> CodexTaskResult:
+        now = datetime.now(UTC)
+        output_json = {
+            "provider": "NullCodexProvider",
+            "task_id": task.task_id,
+            "task_type": task.task_type,
+            "artifact_refs": list(task.input_artifact_paths),
+            "creates_evidence_items": False,
+            "message": "Deterministic validation output; no live Codex or OpenAI API used.",
+        }
+        output_text = json.dumps(output_json, indent=2, sort_keys=True)
+        return CodexTaskResult(
+            task_id=task.task_id,
+            task_type=task.task_type,
+            status="succeeded",
+            output_text=output_text,
+            output_json=output_json,
+            stdout=output_text,
+            stderr="",
+            return_code=0,
+            artifacts_read=list(task.input_artifact_paths),
+            artifacts_written=[],
+            commands_observed=[],
+            guardrail_warnings=[],
+            usage_summary={"provider": "NullCodexProvider"},
+            started_at=now,
+            completed_at=now,
+            metadata={"provider": "NullCodexProvider", "live_validation": False},
+        )
+
+
 class CodexBackboneProvider:
     """Primary LLM provider implementation backed by authenticated Codex CLI."""
 

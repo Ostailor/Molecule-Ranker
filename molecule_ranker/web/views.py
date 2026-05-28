@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette import status
 
@@ -28,6 +28,7 @@ from molecule_ranker.platform.rbac import (
 )
 from molecule_ranker.platform.schemas import UserAccount
 from molecule_ranker.server.dependencies import platform_database, workspace_store
+from molecule_ranker.server.security import reject_suspicious_identifier, safe_artifact_path
 from molecule_ranker.web.components import (
     candidate_by_name,
     candidate_comment_key,
@@ -141,6 +142,43 @@ def project_list_alias(
     return project_list_page(request, user, database, store)
 
 
+@router.post("/dashboard/projects/create")
+async def project_create_submit(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    body = await request.body()
+    if not _csrf_token_valid(request, body):
+        raise HTTPException(status_code=403, detail="CSRF token required.")
+    form = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    workspace_id = str((form.get("workspace_id") or [""])[0]).strip() or None
+    name = str((form.get("name") or [""])[0]).strip() or None
+    if store.workspace_path.exists():
+        existing = store.load()
+        require_project_access(database, user, project_id=existing.workspace_id, action="admin")
+    workspace = store.create(workspace_id=workspace_id, name=name)
+    database.grant_project_permission(
+        project_id=workspace.workspace_id,
+        role="owner",
+        actor_user_id=user.user_id,
+        user_id=user.user_id,
+    )
+    database.write_audit(
+        "dashboard_project_created",
+        actor_user_id=user.user_id,
+        project_id=workspace.workspace_id,
+        summary=f"Created project {workspace.workspace_id} from hosted dashboard.",
+        object_type="project",
+        object_id=workspace.workspace_id,
+    )
+    return RedirectResponse(
+        f"/dashboard/projects/{workspace.workspace_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
 @router.get("/dashboard/integrations", response_class=HTMLResponse)
 def integrations_page(
     request: Request,
@@ -165,7 +203,7 @@ def integrations_page(
                     system.name,
                     system.system_type,
                     system.vendor or "",
-                    system.default_mode,
+                    _mode_badge(system.default_mode),
                     system.enabled,
                 ]
                 for system in systems
@@ -179,7 +217,7 @@ def integrations_page(
                     connector.name,
                     connector.kind,
                     connector.provider,
-                    connector.mode,
+                    _mode_badge(connector.mode),
                     True,
                 ]
                 for connector in connectors
@@ -714,6 +752,33 @@ def candidate_dossier_page(
     raise HTTPException(status_code=404, detail="Candidate not found.")
 
 
+@router.get(
+    "/dashboard/projects/{project_id}/artifacts/{artifact_id}/download",
+    response_class=FileResponse,
+)
+def dashboard_artifact_download(
+    project_id: str,
+    artifact_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> FileResponse:
+    reject_suspicious_identifier(artifact_id, label="artifact ID")
+    workspace = _project_or_404(store=store, project_id=project_id)
+    require_project_access(database, user, project_id=project_id, action="read")
+    artifact = next((item for item in workspace.artifacts if item.artifact_id == artifact_id), None)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    path = safe_artifact_path(Path(artifact.path), root_dir=store.root_dir)
+    return FileResponse(
+        path,
+        filename=path.name,
+        media_type="application/octet-stream",
+        headers={"X-Artifact-ID": artifact.artifact_id},
+    )
+
+
 @router.get("/dashboard/projects/{project_id}/codex", response_class=HTMLResponse)
 def codex_assistant_page(
     project_id: str,
@@ -733,6 +798,7 @@ def codex_assistant_page(
             "user": user,
             "project": workspace,
             "codex_outputs": codex_outputs(workspace),
+            "codex_enabled": bool(request.app.state.enable_codex_backbone),
             "can_run_codex": has_permission(
                 user,
                 "codex:run",
@@ -1046,8 +1112,10 @@ def _integration_html(title: str, body: str) -> HTMLResponse:
         "</head><body>"
         f"<header class=\"integration-header\"><h1>{_h(title)}</h1></header>"
         "<main class=\"integration-content\">"
-        "<p class=\"notice\">External integrations default to read-only or dry-run. "
-        "Secrets are redacted and connector writes require explicit permission.</p>"
+        "<p class=\"notice\"><strong>Dry-run/read-only by default.</strong> "
+        "External integrations do not write externally unless a connector is explicitly "
+        "write-enabled. <strong>Write-enabled requires explicit permission</strong>, approved "
+        "credentials, and operator review. Secrets are redacted.</p>"
         f"{body}</main></body></html>\n"
     )
 
@@ -1085,7 +1153,14 @@ def _link(href: str, label: Any) -> str:
 
 
 def _is_html(value: Any) -> bool:
-    return isinstance(value, str) and value.startswith("<a ")
+    return isinstance(value, str) and (value.startswith("<a ") or value.startswith("<span "))
+
+
+def _mode_badge(mode: Any) -> str:
+    normalized = str(mode or "dry_run")
+    label = normalized.replace("_", " ")
+    css = normalized.replace("_", "-")
+    return f"<span class=\"mode-badge {css}\">{_h(label)}</span>"
 
 
 def _h(value: Any) -> str:

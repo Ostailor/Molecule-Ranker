@@ -46,6 +46,10 @@ class ReadyResponse(BaseModel):
 
 class VersionResponse(BaseModel):
     version: str
+    api_contract_version: str | None = None
+    artifact_contract_version: str | None = None
+    data_contract_version: str | None = None
+    warehouse_contract_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,12 +82,17 @@ class InMemoryRateLimiter:
 CACHE_MARKERS = (".cache", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache")
 SENSITIVE_PATH_PREFIXES = (
     "/auth",
+    "/api/v1/auth",
     "/login",
     "/logout",
     "/projects/",
+    "/api/v1/projects/",
     "/codex",
+    "/api/v1/codex",
     "/jobs/run-next",
+    "/api/v1/jobs/run-next",
     "/admin",
+    "/api/v1/admin",
     "/data",
 )
 
@@ -264,7 +273,7 @@ def _rate_limited_response(
     path = request.url.path
     limit: int | None = None
     bucket = ""
-    if path.startswith("/auth") or path in {"/login", "/logout"}:
+    if path.startswith("/auth") or path.startswith("/api/v1/auth") or path in {"/login", "/logout"}:
         limit = config.auth_rate_limit
         bucket = "auth"
     elif "/codex" in path or path.startswith("/codex"):

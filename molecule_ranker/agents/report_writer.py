@@ -15,6 +15,7 @@ from molecule_ranker.agents.base import (
     BaseAgent,
     PipelineContext,
 )
+from molecule_ranker.contracts import with_artifact_contract_metadata
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
 from molecule_ranker.developability.schemas import (
     DevelopabilityAssessment as StructuredDevelopabilityAssessment,
@@ -282,28 +283,35 @@ class ReportWriterAgent(BaseAgent):
 
         (output_dir / "candidates.json").write_text(
             _json_dumps(
-                {
-                    "success": True,
-                    "disease": context.disease,
-                    "targets": context.targets,
-                    "candidates": self._candidate_payload(context),
-                    "generated_molecule_hypotheses": self._generated_hypothesis_payload(context),
-                    "developability_assessments": self._developability_payload(context),
-                    "developability_run": self._developability_run_payload(context),
-                    "literature_evidence_summary": self._literature_summary_payload(context),
-                    "literature_queries": self._literature_queries_payload(context),
-                    "literature_papers": self._literature_papers_payload(context),
-                    "extracted_claims": self._extracted_claims_payload(context),
-                    "summary": {
-                        "target_count": len(context.targets),
-                        "candidate_count": len(context.candidates),
-                        "generated_candidate_count": len(context.generated_candidates),
-                        "evidence_item_count": len(
-                            list(self._all_evidence(context.targets, context.candidates))
+                with_artifact_contract_metadata(
+                    {
+                        "success": True,
+                        "disease": context.disease,
+                        "targets": context.targets,
+                        "candidates": self._candidate_payload(context),
+                        "generated_molecule_hypotheses": self._generated_hypothesis_payload(
+                            context
                         ),
+                        "developability_assessments": self._developability_payload(context),
+                        "developability_run": self._developability_run_payload(context),
+                        "literature_evidence_summary": self._literature_summary_payload(
+                            context
+                        ),
+                        "literature_queries": self._literature_queries_payload(context),
+                        "literature_papers": self._literature_papers_payload(context),
+                        "extracted_claims": self._extracted_claims_payload(context),
+                        "summary": {
+                            "target_count": len(context.targets),
+                            "candidate_count": len(context.candidates),
+                            "generated_candidate_count": len(context.generated_candidates),
+                            "evidence_item_count": len(
+                                list(self._all_evidence(context.targets, context.candidates))
+                            ),
+                        },
+                        "limitations": limitations,
                     },
-                    "limitations": limitations,
-                }
+                    "candidates",
+                )
             )
         )
         generation_run = self._generation_run(context)
@@ -320,16 +328,23 @@ class ReportWriterAgent(BaseAgent):
             )
             (output_dir / "generated_molecules.json").write_text(_json_dumps(generated_payload))
             (output_dir / "generated_candidates.json").write_text(_json_dumps(generated_payload))
-            (output_dir / "generation_trace.json").write_text(_json_dumps(generation_trace_payload))
+            (output_dir / "generation_trace.json").write_text(
+                _json_dumps(generation_trace_payload)
+            )
         (output_dir / "report.md").write_text(str(context.config["report_md"]))
         (output_dir / "developability_assessments.json").write_text(
             _json_dumps(
                 {
-                    "success": True,
-                    "disease": context.disease,
-                    "assessments": self._developability_payload(context),
-                    "developability_run": self._developability_run_payload(context),
-                    "limitations": limitations,
+                    **with_artifact_contract_metadata(
+                        {
+                            "success": True,
+                            "disease": context.disease,
+                            "assessments": self._developability_payload(context),
+                            "developability_run": self._developability_run_payload(context),
+                            "limitations": limitations,
+                        },
+                        "developability_assessments",
+                    )
                 }
             )
         )
@@ -343,13 +358,18 @@ class ReportWriterAgent(BaseAgent):
         (output_dir / "trace.json").write_text(
             _json_dumps(
                 {
-                    "success": True,
-                    "disease": context.disease,
-                    "traces": context.traces,
-                    "config": context.config.get("ranker_config", {}),
-                    "developability_run": self._developability_run_payload(context),
-                    "limitations": limitations,
-                    "artifacts": artifacts,
+                    **with_artifact_contract_metadata(
+                        {
+                            "success": True,
+                            "disease": context.disease,
+                            "traces": context.traces,
+                            "config": context.config.get("ranker_config", {}),
+                            "developability_run": self._developability_run_payload(context),
+                            "limitations": limitations,
+                            "artifacts": artifacts,
+                        },
+                        "trace",
+                    )
                 }
             )
         )
@@ -410,44 +430,49 @@ class ReportWriterAgent(BaseAgent):
         retained = generation_run.retained if generation_run is not None else []
         rejected = generation_run.rejected if generation_run is not None else []
         generated = generation_run.generated if generation_run is not None else []
-        return {
-            "success": True,
-            "disease": context.disease,
-            "generation_enabled": True,
-            "objectives": generation_run.objectives if generation_run is not None else [],
-            "seeds": generation_run.seeds if generation_run is not None else [],
-            "generated_count": len(generated),
-            "retained_count": len(retained) or len(context.generated_candidates),
-            "rejected_count": len(rejected),
-            "retained_generated_molecules": [
-                self._generated_molecule_payload(candidate) for candidate in retained
-            ]
-            or [
-                {
-                    **candidate.model_dump(mode="json"),
-                    "developability": self._generated_hypothesis_developability_payload(
-                        candidate
-                    ),
-                    "developability_summary": self._generated_hypothesis_summary(candidate),
-                    "rejection_reasons": [],
-                }
-                for candidate in context.generated_candidates
-            ],
-            "rejected_generated_molecules": [
-                {
-                    "generated_molecule": self._generated_molecule_payload(candidate),
-                    "rejection_reasons": self._generated_rejection_reasons(candidate),
-                    "developability": self._generated_developability_payload(candidate),
-                    "developability_summary": self._developability_summary_from_payload(
-                        self._generated_developability_payload(candidate)
-                    ),
-                }
-                for candidate in rejected
-            ],
-            "warnings": list(generation_run.warnings) if generation_run is not None else [],
-            "generation_config": self._generation_config_payload(context),
-            "limitations": limitations,
-        }
+        return with_artifact_contract_metadata(
+            {
+                "success": True,
+                "disease": context.disease,
+                "generation_enabled": True,
+                "objectives": generation_run.objectives if generation_run is not None else [],
+                "seeds": generation_run.seeds if generation_run is not None else [],
+                "generated_count": len(generated),
+                "retained_count": len(retained) or len(context.generated_candidates),
+                "rejected_count": len(rejected),
+                "retained_generated_molecules": [
+                    self._generated_molecule_payload(candidate) for candidate in retained
+                ]
+                or [
+                    {
+                        **candidate.model_dump(mode="json"),
+                        "developability": self._generated_hypothesis_developability_payload(
+                            candidate
+                        ),
+                        "developability_summary": self._generated_hypothesis_summary(
+                            candidate
+                        ),
+                        "rejection_reasons": [],
+                    }
+                    for candidate in context.generated_candidates
+                ],
+                "rejected_generated_molecules": [
+                    {
+                        "generated_molecule": self._generated_molecule_payload(candidate),
+                        "rejection_reasons": self._generated_rejection_reasons(candidate),
+                        "developability": self._generated_developability_payload(candidate),
+                        "developability_summary": self._developability_summary_from_payload(
+                            self._generated_developability_payload(candidate)
+                        ),
+                    }
+                    for candidate in rejected
+                ],
+                "warnings": list(generation_run.warnings) if generation_run is not None else [],
+                "generation_config": self._generation_config_payload(context),
+                "limitations": limitations,
+            },
+            "generated_candidates",
+        )
 
     def _generation_trace_payload(
         self,
@@ -457,32 +482,37 @@ class ReportWriterAgent(BaseAgent):
         trace_metadata = self._novel_molecule_trace_metadata(context)
         run_metadata = generation_run.metadata if generation_run is not None else {}
         developability = self._developability_summary_payload(context)
-        return {
-            "seed_selection_trace": trace_metadata.get("seed_selection", {}),
-            "objective_building_trace": trace_metadata.get("objective_building", {}),
-            "generator_trace": trace_metadata.get("generator_trace", {}),
-            "validation_filtering_trace": trace_metadata.get(
-                "validation_filtering_trace",
-                {},
-            ),
-            "scoring_trace": trace_metadata.get("scoring_trace", {}),
-            "random_seed": self._generation_config_payload(context).get("generation_random_seed"),
-            "generator_method": run_metadata.get(
-                "generation_method",
-                trace_metadata.get("generator"),
-            ),
-            "generator_version": run_metadata.get("generator_version", "v0.3"),
-            "run_timestamp": run_metadata.get("run_timestamp"),
-            "developability_filtering_trace": {
-                "enabled": developability["enabled"],
-                "assessed_generated_count": developability["assessed_generated_count"],
-                "retained_count": developability["retained_count"],
-                "deprioritized_count": developability["deprioritized_count"],
-                "rejected_count": developability["rejected_count"],
-                "risk_distribution": developability["risk_levels"],
-                "alert_distribution": developability["alerts"],
+        return with_artifact_contract_metadata(
+            {
+                "seed_selection_trace": trace_metadata.get("seed_selection", {}),
+                "objective_building_trace": trace_metadata.get("objective_building", {}),
+                "generator_trace": trace_metadata.get("generator_trace", {}),
+                "validation_filtering_trace": trace_metadata.get(
+                    "validation_filtering_trace",
+                    {},
+                ),
+                "scoring_trace": trace_metadata.get("scoring_trace", {}),
+                "random_seed": self._generation_config_payload(context).get(
+                    "generation_random_seed"
+                ),
+                "generator_method": run_metadata.get(
+                    "generation_method",
+                    trace_metadata.get("generator"),
+                ),
+                "generator_version": run_metadata.get("generator_version", "v0.3"),
+                "run_timestamp": run_metadata.get("run_timestamp"),
+                "developability_filtering_trace": {
+                    "enabled": developability["enabled"],
+                    "assessed_generated_count": developability["assessed_generated_count"],
+                    "retained_count": developability["retained_count"],
+                    "deprioritized_count": developability["deprioritized_count"],
+                    "rejected_count": developability["rejected_count"],
+                    "risk_distribution": developability["risk_levels"],
+                    "alert_distribution": developability["alerts"],
+                },
             },
-        }
+            "generation_trace",
+        )
 
     def _novel_molecule_trace_metadata(self, context: PipelineContext) -> dict[str, Any]:
         for trace in context.traces:
@@ -2642,30 +2672,33 @@ class ReportWriterAgent(BaseAgent):
     ) -> dict[str, Any]:
         summary = self._developability_summary_payload(context)
         run_payload = self._developability_run_payload(context)
-        return {
-            "success": bool(summary["enabled"]),
-            "disease": context.disease,
-            "enabled": summary["enabled"],
-            "assessed_existing_count": summary["assessed_existing_count"],
-            "assessed_generated_count": summary["assessed_generated_count"],
-            "retained_count": summary["retained_count"],
-            "deprioritized_count": summary["deprioritized_count"],
-            "rejected_count": summary["rejected_count"],
-            "risk_distribution": summary["risk_levels"],
-            "alert_distribution": summary["alerts"],
-            "admet_endpoint_coverage": summary["admet_endpoints"],
-            "assessments": self._developability_payload(context),
-            "warnings": (run_payload or {}).get("warnings", []),
-            "limitations": [
-                *limitations,
-                "Developability scores are computational triage heuristics.",
-                "They do not establish safety, efficacy, or synthesizability.",
-                "No synthesis routes, protocols, reagents, or procedures are provided.",
-                "No patient-specific clinical recommendations are provided.",
-            ],
-            "config": self._developability_config_payload(context),
-            "generated_at": datetime.now(UTC).isoformat(),
-        }
+        return with_artifact_contract_metadata(
+            {
+                "success": bool(summary["enabled"]),
+                "disease": context.disease,
+                "enabled": summary["enabled"],
+                "assessed_existing_count": summary["assessed_existing_count"],
+                "assessed_generated_count": summary["assessed_generated_count"],
+                "retained_count": summary["retained_count"],
+                "deprioritized_count": summary["deprioritized_count"],
+                "rejected_count": summary["rejected_count"],
+                "risk_distribution": summary["risk_levels"],
+                "alert_distribution": summary["alerts"],
+                "admet_endpoint_coverage": summary["admet_endpoints"],
+                "assessments": self._developability_payload(context),
+                "warnings": (run_payload or {}).get("warnings", []),
+                "limitations": [
+                    *limitations,
+                    "Developability scores are computational triage heuristics.",
+                    "They do not establish safety, efficacy, or synthesizability.",
+                    "No synthesis routes, protocols, reagents, or procedures are provided.",
+                    "No patient-specific clinical recommendations are provided.",
+                ],
+                "config": self._developability_config_payload(context),
+                "generated_at": datetime.now(UTC).isoformat(),
+            },
+            "developability",
+        )
 
     def _developability_summary_payload(self, context: PipelineContext) -> dict[str, Any]:
         run = self._developability_run(context)
@@ -3074,22 +3107,31 @@ class ReportWriterAgent(BaseAgent):
         summary = self._experimental_results_summary(context, evidence, results)
         active_learning = self._active_learning_payload(context)
         return {
-            "experimental_results": {
-                "success": True,
-                "summary": summary,
-                "results": results,
-                "limitations": self._experimental_limitation_lines(),
-            },
-            "experimental_evidence": {
-                "success": True,
-                **{
-                    key: value
-                    for key, value in evidence.items()
-                    if key not in {"results"}
+            "experimental_results": with_artifact_contract_metadata(
+                {
+                    "success": True,
+                    "summary": summary,
+                    "results": results,
+                    "limitations": self._experimental_limitation_lines(),
                 },
-                "limitations": self._experimental_limitation_lines(),
-            },
-            "active_learning_batch": active_learning,
+                "experimental_results",
+            ),
+            "experimental_evidence": with_artifact_contract_metadata(
+                {
+                    "success": True,
+                    **{
+                        key: value
+                        for key, value in evidence.items()
+                        if key not in {"results"}
+                    },
+                    "limitations": self._experimental_limitation_lines(),
+                },
+                "experimental_evidence",
+            ),
+            "active_learning_batch": with_artifact_contract_metadata(
+                active_learning,
+                "active_learning_batch",
+            ),
         }
 
     def _experimental_evidence_payload(self, context: PipelineContext) -> dict[str, Any]:

@@ -1,0 +1,28 @@
+{
+  "artifact_contract_version": "artifacts.v1",
+  "created_for": "molecule-ranker V1.0 release demo",
+  "disclaimer": "Synthetic demo artifact only; not biomedical evidence, not assay data, not a citation source, and not a validated active.",
+  "project": {
+    "name": "Synthetic V1.0 Demo",
+    "workspace_id": "demo-v1-synthetic"
+  },
+  "artifacts": [
+    {
+      "artifact_id": "demo-run-summary",
+      "artifact_type": "run_summary",
+      "path": "synthetic_run_summary.json",
+      "provenance": {
+        "mode": "synthetic_demo",
+        "source_system": "molecule-ranker",
+        "source_record_id": "demo-v1-synthetic"
+      }
+    }
+  ],
+  "scientific_integrity": {
+    "contains_assay_results": false,
+    "contains_citations": false,
+    "contains_generated_validated_actives": false,
+    "contains_medical_advice": false,
+    "contains_synthesis_instructions": false
+  }
+}

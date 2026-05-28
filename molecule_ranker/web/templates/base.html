@@ -10,7 +10,7 @@
   <div class="shell">
     <header class="topbar">
       <div class="topbar-inner">
-        <div class="brand">molecule-ranker V0.9</div>
+        <div class="brand">molecule-ranker V1.0</div>
         <nav class="nav" aria-label="Dashboard">
           <a href="/dashboard">Projects</a>
           {% if project is defined %}
@@ -20,6 +20,7 @@
             <a href="/dashboard/projects/{{ project.workspace_id }}/review">Review</a>
             <a href="/dashboard/projects/{{ project.workspace_id }}/codex">Codex</a>
           {% endif %}
+          <a href="/dashboard/integrations">Integrations</a>
           <a href="/dashboard/notifications">Notifications</a>
           <a href="/dashboard/audit">Audit</a>
           <a href="/dashboard/admin">Admin</a>

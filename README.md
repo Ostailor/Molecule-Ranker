@@ -1,48 +1,38 @@
 # molecule-ranker
 
-`molecule-ranker` is an internal research platform for source-backed molecule
-ranking. Given a disease name, V0.9 resolves the disease through public
-biomedical data sources,
-discovers evidence-backed targets, retrieves existing molecules linked to those
-targets, retrieves real literature evidence, ranks the molecules as transparent
-research hypotheses, and can optionally generate target-conditioned in-silico
-molecule hypotheses from those retrieved structures. V0.4 added computational
-developability triage for existing and generated molecules. V0.5 added a local
-expert review workspace for human-in-the-loop triage, dossiers, follow-up
-requests, validation handoffs, feedback ingestion, and audit trails. V0.6 added
-an experimental feedback loop and active-learning prioritization from
-user-imported assay result files. V0.7 added a controlled Codex CLI provider as
-the orchestration LLM layer for project planning, artifact inspection,
-multi-run comparison summaries, review-assistant workflows, follow-up planning,
-and engineering automation. V0.8 kept CLI/local mode working and added hosted
-internal-platform primitives: user accounts, organizations, teams, RBAC,
-project sharing, an authenticated dashboard, SQLite/PostgreSQL platform
-metadata, job queueing, controlled Codex worker orchestration, audit logs, operational
-health, admin controls, and data export/delete/retention controls. V0.9 adds
-guarded external research-system integrations for ELN/LIMS, compound registry,
-assay providers, generic REST APIs, generic file/SFTP-style drops, data
-warehouses, and signed webhooks. Benchling is the first concrete connector.
-Codex CLI can authenticate through local ChatGPT sign-in, so local LLM workflows do not
-require an OpenAI API key when Codex CLI is already authenticated locally.
+`molecule-ranker` is a validated internal research platform MVP for
+source-backed molecule ranking and research operations. V1.0 supports
+source-backed ranking, generated molecule hypotheses, developability triage,
+literature evidence, experimental feedback, review workflows, Codex-backed
+orchestration, hosted platform mode, and guarded external integrations.
 
-The app does not discover cures, does not claim generated molecules treat or are
-active against a disease, does not provide medical advice, and does not provide
-synthesis instructions, lab protocols, dosage, or patient treatment
-instructions. V0.9 is an internal research platform MVP, not a regulated
-clinical product. Ranked molecules and generated structures are research
-hypotheses that require independent validation.
+V1.0 is for internal research use only. It is not a regulated clinical product.
+It does not provide medical advice, synthesis instructions, lab protocols,
+dosing, or patient treatment guidance. It does not claim that molecules cure,
+treat, are safe, or are active. Codex is an orchestration and summarization
+layer, not scientific truth. Data provenance, audit logs, and guardrails are
+core design principles.
+
+Given a disease name, V1.0 resolves the disease through public biomedical data
+sources, discovers evidence-backed targets, retrieves existing molecules linked
+to those targets, retrieves real literature evidence, ranks molecules as
+transparent research hypotheses, and can optionally generate
+target-conditioned in-silico molecule hypotheses from retrieved structures.
 Generated molecules are computational hypotheses only: they are not known
 actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V0.9
+## Current Scope Through V1.0
 
-V0.9 implements existing-molecule ranking, opt-in generated hypotheses,
+V1.0 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives:
+external integration primitives. V1.0 is a stabilization, validation,
+release-readiness, and operational-quality release; it does not add major new
+science capabilities, model families, generation expansion, ADMET expansion, or
+new integration families.
 
 - Resolve disease names to public biomedical disease entities with ambiguity handling.
 - Retrieve real disease-associated targets with richer target identifiers and metadata.
@@ -123,7 +113,7 @@ external integration primitives:
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V0.9 does not:
+V1.0 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -162,7 +152,173 @@ Unit tests use mocked data only to test behavior deterministically. Production
 code uses real public biomedical data adapters and fails if required data cannot
 be retrieved.
 
-## V0.9 Hosted Mode
+## Quickstart
+
+Install dependencies and verify the version:
+
+```bash
+uv sync --all-groups
+uv run molecule-ranker version
+```
+
+Run a source-backed ranking workflow locally. Generation, docking, external
+writes, Codex, review workflows, and experimental evidence are disabled unless
+explicitly configured or enabled.
+
+```bash
+uv run molecule-ranker rank "<disease-name>" \
+  --top 5 \
+  --output-dir results/<disease-slug>
+```
+
+Register a project workspace and attach the run artifacts:
+
+```bash
+uv run molecule-ranker project create \
+  --root ./research/example \
+  --workspace-id example-project \
+  --name "Example Project"
+
+uv run molecule-ranker project run \
+  results/example-disease-a/example-disease-a \
+  --root ./research/example \
+  --run-id run-001
+```
+
+Use the synthetic V1.0 demo for an offline, non-biomedical walkthrough:
+
+```bash
+cd examples/v1_0_demo
+./demo_commands.sh
+```
+
+The demo uses clearly fake names such as `ExampleCandidateA`,
+`ExampleTargetA`, and `ExampleDiseaseA`. It does not contain fake real-world
+biomedical claims, fake citations, fake assay outcomes, lab protocols, dosing,
+or synthesis instructions.
+
+## V1.0 Release Readiness
+
+V1.0 release readiness is tracked as machine-readable gates in
+`molecule_ranker.release`. The release manifest declares the validated internal
+research platform scope, scientific-integrity constraints, non-goals, and
+versioned contracts:
+
+- API contract: `api.v1`.
+- Artifact contract: `artifacts.v1`.
+- Integration data-contract family: `data-contracts.v1`.
+- Warehouse schema contract: `mr_warehouse_v1.0.0`.
+
+The V1.0 gate set covers golden workflows, release validation, security and
+guardrails, provenance/reproducibility, integration contracts, hosted
+deployment hardening, platform docs, operator runbooks, synthetic demo
+artifacts, backup/restore checks, and release packaging. See
+`docs/v1.0-release-readiness.md`, `docs/contracts/v1.0-api-and-artifacts.md`,
+and the runbooks under `docs/runbooks/`.
+
+### Golden Workflow Validation
+
+Run deterministic golden workflow validation without live external services:
+
+```bash
+uv run molecule-ranker validate golden --workflow all
+```
+
+Golden workflows use mocked external services and synthetic non-biomedical
+test data by default. Live validation is separate and opt-in.
+
+### Release Validation
+
+Run the deterministic release validation suite:
+
+```bash
+uv run molecule-ranker validate release
+```
+
+Run the release packaging checks and generate release artifacts:
+
+```bash
+uv run molecule-ranker release check
+uv run molecule-ranker release manifest --output release_manifest.json
+uv run molecule-ranker release notes --output RELEASE_NOTES.md
+```
+
+Release validation checks artifact contracts, API contracts, golden workflow
+outputs, security guardrails, hosted deployment readiness, docs/runbooks, demo
+artifacts, backup/restore evidence, and packaging metadata. Default validation
+does not call live public APIs, real Benchling or warehouse systems, or live
+Codex.
+
+## Hosted Deployment Quickstart
+
+Create the platform database, create an admin user, and start the hosted
+dashboard locally:
+
+```bash
+uv run molecule-ranker db init --db-path .molecule-ranker/platform.sqlite
+
+uv run molecule-ranker user create \
+  --email admin@example.com \
+  --password 'Strong-password-1' \
+  --display-name "Platform Admin" \
+  --admin \
+  --db-path .molecule-ranker/platform.sqlite
+
+uv run molecule-ranker serve \
+  --root . \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --hosted \
+  --auth-secret "$MOLECULE_RANKER_AUTH_SECRET" \
+  --platform-db-path .molecule-ranker/platform.sqlite
+```
+
+Then open:
+
+```bash
+open http://127.0.0.1:8765/dashboard
+```
+
+Production deployments must set a strong secret key, configure allowed hosts,
+disable debug mode, enable authentication, configure audit logging, define
+retention policies, and configure backup storage. Codex is enabled only when
+configured; Codex worker jobs are scoped to registered project artifacts and
+require `codex:run` permission. Integrations default to dry-run/read-only and
+external writes require explicit write-enabled configuration and permission.
+
+## Docs Index
+
+- User overview: `docs/user/overview.md`
+- Ranking workflow: `docs/user/ranking_workflow.md`
+- Generated molecules: `docs/user/generated_molecules.md`
+- Developability: `docs/user/developability.md`
+- Literature evidence: `docs/user/literature_evidence.md`
+- Experimental feedback: `docs/user/experimental_feedback.md`
+- Review workflow: `docs/user/review_workflow.md`
+- Active learning: `docs/user/active_learning.md`
+- Integrations: `docs/user/integrations.md`
+- Codex assistant: `docs/user/codex_assistant.md`
+- Dashboard: `docs/user/dashboard.md`
+- Limitations: `docs/user/limitations.md`
+- Admin users and roles: `docs/admin/users_and_roles.md`
+- Admin security checklist: `docs/admin/security_checklist.md`
+- V1.0 API and artifact contracts: `docs/contracts/v1.0-api-and-artifacts.md`
+
+## Runbooks Index
+
+- Deployment: `docs/runbooks/deployment.md`
+- Local development: `docs/runbooks/local_development.md`
+- Production config: `docs/runbooks/production_config.md`
+- Backup and restore: `docs/runbooks/backup_restore.md`
+- Worker operations: `docs/runbooks/worker_operations.md`
+- Codex worker: `docs/runbooks/codex_worker.md`
+- Integration sync: `docs/runbooks/integration_sync.md`
+- Security incidents: `docs/runbooks/security_incidents.md`
+- Data retention: `docs/runbooks/data_retention.md`
+- Troubleshooting: `docs/runbooks/troubleshooting.md`
+- Release process: `docs/runbooks/release_process.md`
+
+## V1.0 Hosted Mode
 
 Start the local API surface as before:
 
@@ -229,7 +385,7 @@ uv run molecule-ranker auth token revoke \
   --db-path .molecule-ranker/platform.sqlite
 ```
 
-### V0.9 Platform Controls
+### V1.0 Platform Controls
 
 Authentication modes:
 
@@ -294,7 +450,7 @@ Deployment options:
 - Optional Kubernetes manifests: deployment examples are provided under
   `deployment/k8s/` for teams that already operate Kubernetes.
 
-### V0.9 Usage Examples
+### V1.0 Usage Examples
 
 Create an admin user:
 
@@ -409,9 +565,9 @@ cp .env.example .env
 docker compose up --build
 ```
 
-## V0.9 External Integrations
+## V1.0 External Integrations
 
-V0.9 adds a guarded external integration framework for internal research-system
+V1.0 hardens the guarded external integration framework for internal research-system
 handoffs and imports. Supported connector categories are:
 
 - ELN/LIMS systems.
@@ -430,7 +586,7 @@ connector. Warehouse exports support curated molecule-ranker tables such as
 `mr_developability_assessments`, `mr_assay_results`,
 `mr_review_decisions`, `mr_active_learning_suggestions`, `mr_sync_jobs`, and
 `mr_artifacts`. Databricks SQL and Snowflake connectors are optional dependency
-paths. SiLA is present only as a metadata adapter placeholder; V0.9 does not
+paths. SiLA is present only as a metadata adapter placeholder; V1.0 does not
 control instruments or devices.
 
 Integration safety boundaries:
@@ -576,13 +732,13 @@ uv run molecule-ranker integration webhook test \
 API authentication uses bearer tokens. `POST /auth/login` returns a short-lived
 access token plus a refresh token; `POST /auth/refresh` issues a new access
 token; `POST /auth/logout` invalidates the session. Browser cookie sessions are
-not used in V0.9, so CSRF protection is not part of the API bearer-token flow.
+not used in V1.0, so CSRF protection is not part of the API bearer-token flow.
 OIDC settings are present as placeholders and `/auth/oidc/*` routes return a
 clean disabled response unless configured.
 
-## V0.9 Codex CLI Orchestration
+## V1.0 Codex CLI Orchestration
 
-V0.9 keeps Codex CLI as the primary LLM agent backbone for molecule-ranker. Codex
+V1.0 keeps Codex CLI as the primary LLM agent backbone for molecule-ranker. Codex
 CLI is used because OpenAI documents Codex as included with ChatGPT Plus, Pro,
 Business, Enterprise/Edu, and other eligible plans, and the CLI can run through
 local ChatGPT authentication instead of requiring project-specific OpenAI API
@@ -1602,14 +1758,21 @@ The pipeline stops on:
 On failure, the CLI prints a clear error and exits with a non-zero status. It
 does not write a normal `report.md` that looks successful.
 
-## Limitations
+## Known Limitations
 
 - Public databases may be incomplete, stale, unavailable, or rate-limited.
 - Source records may use inconsistent identifiers and terminology.
 - Scores are heuristic and not experimentally validated.
 - No wet-lab validation is performed by this software.
+- V1.0 is for internal research use only.
+- V1.0 is not a regulated clinical product.
+- Codex is an orchestration and summarization layer, not scientific truth.
 - No clinical recommendation, diagnosis, prescription, dosage, or treatment
   guidance is provided.
+- No synthesis instructions, lab protocols, or experimental execution
+  instructions are provided.
+- molecule-ranker does not claim that molecules cure, treat, are safe, or are
+  active.
 - Approved status does not imply safety or relevance for the queried disease.
 - Absence of evidence is not evidence of absence.
 - Literature evidence can be absent for a candidate; absence is labeled rather
@@ -1622,15 +1785,17 @@ does not write a normal `report.md` that looks successful.
   invented evidence.
 - Generated molecule hypotheses are not known actives and are ranked separately
   from existing molecules by default.
-- V0.4 implements heuristic developability triage and rule-based ADMET risk
-  flags, not validated ADMET prediction, default docking, retrosynthesis,
-  synthesis planning, or wet-lab prediction.
-- V0.5 review workspaces are local SQLite artifacts and static files, not a
-  multi-user production system.
+- Developability triage and rule-based ADMET risk flags are computational
+  heuristics, not validated safety evidence.
+- Docking is disabled by default and docking scores do not prove binding.
+- Review workflows support expert triage and handoff, but review decisions are
+  not biomedical evidence.
 - Review decisions and expert feedback are not biomedical evidence.
+- Experimental evidence is disabled unless configured and imported from files.
+- Integration writes are disabled by default; dry-run/read-only modes are the
+  default.
 - Validation handoff packets are high-level planning artifacts and do not
   include lab protocols.
-- No synthesis instructions are provided.
 
 ## Roadmap
 
@@ -1648,6 +1813,10 @@ does not write a normal `report.md` that looks successful.
 - V0.9: external integrations for ELN/LIMS, compound registry, assay providers,
   and data warehouse.
 - V1.0: validated internal research platform MVP.
+- V1.1: usability improvements and team workflows.
+- V1.2: deeper connector coverage.
+- V1.3: advanced model evaluation and benchmark suite.
+- V2.0: validated enterprise research platform.
 
 ## Development
 

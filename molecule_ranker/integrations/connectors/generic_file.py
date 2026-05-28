@@ -82,7 +82,7 @@ class GenericFileConnector(AssayConnector):
         return self._call("generate_manifest", self._generate_manifest)
 
     def sftp_connect(self) -> None:
-        raise ConnectorError("SFTP support is a V0.9 placeholder; no SSH sessions are opened.")
+        raise ConnectorError("SFTP support is a V1.0 placeholder; no SSH sessions are opened.")
 
     def _list_assay_runs(self) -> list[dict[str, Any]]:
         return []

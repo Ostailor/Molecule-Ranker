@@ -1,0 +1,92 @@
+name: Connector smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      connector_name:
+        description: Connector display name.
+        required: true
+        default: Connector Smoke
+      system_type:
+        description: Connector system type.
+        required: true
+        default: generic_rest
+      vendor:
+        description: Connector vendor label.
+        required: true
+        default: synthetic
+      base_url:
+        description: Connector base URL for metadata only unless connector code uses it.
+        required: true
+        default: https://example.invalid/connector-smoke
+
+permissions:
+  contents: read
+
+jobs:
+  connector-smoke:
+    name: Connector smoke with provided secrets
+    runs-on: ubuntu-latest
+    env:
+      CONNECTOR_SMOKE_TOKEN: ${{ secrets.CONNECTOR_SMOKE_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Create dry-run connector and optional credential reference
+        run: |
+          mkdir -p "$RUNNER_TEMP/connector-smoke"
+          uv run molecule-ranker integration system create \
+            --name "${{ inputs.connector_name }}" \
+            --system-type "${{ inputs.system_type }}" \
+            --vendor "${{ inputs.vendor }}" \
+            --base-url "${{ inputs.base_url }}" \
+            --mode dry_run \
+            --root "$RUNNER_TEMP/connector-smoke" \
+            --db-path "$RUNNER_TEMP/connector-smoke/platform.sqlite" \
+            --json | tee "$RUNNER_TEMP/connector-smoke/system.json"
+          SYSTEM_ID="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload = json.loads(Path(os.environ["RUNNER_TEMP"], "connector-smoke", "system.json").read_text())
+          print(payload["system"]["external_system_id"])
+          PY
+          )"
+          echo "SYSTEM_ID=$SYSTEM_ID" >> "$GITHUB_ENV"
+          if [ -n "${CONNECTOR_SMOKE_TOKEN:-}" ]; then
+            uv run molecule-ranker integration credential create \
+              --external-system-id "$SYSTEM_ID" \
+              --credential-type api_key \
+              --secret-env-var CONNECTOR_SMOKE_TOKEN \
+              --root "$RUNNER_TEMP/connector-smoke" \
+              --json
+          else
+            echo "::warning::CONNECTOR_SMOKE_TOKEN secret not provided; credential reference check skipped."
+          fi
+
+      - name: Run connector dry-run sync
+        run: |
+          uv run molecule-ranker integration sync run \
+            --external-system-id "$SYSTEM_ID" \
+            --direction import \
+            --object-type assay_results \
+            --project-id connector-smoke-project \
+            --dry-run \
+            --root "$RUNNER_TEMP/connector-smoke" \
+            --db-path "$RUNNER_TEMP/connector-smoke/platform.sqlite" \
+            --json

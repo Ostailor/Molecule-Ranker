@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import select
 
 from molecule_ranker.codex_backbone.guardrails import is_secret_path, redact_secrets
+from molecule_ranker.contracts import with_artifact_contract_metadata
 from molecule_ranker.platform.database import (
     active_learning_batches,
     activity_feed,
@@ -171,13 +172,16 @@ def _project_export_payload(
             .fetchall()
         ]
     artifact_manifest = [_artifact_manifest_item(row) for row in artifacts]
-    return {
-        "exported_at": datetime.now(UTC).isoformat(),
-        "project_id": project_id,
-        "project": _sanitize_record(project),
-        "artifact_manifest": artifact_manifest,
-        **table_payloads,
-    }
+    return with_artifact_contract_metadata(
+        {
+            "exported_at": datetime.now(UTC).isoformat(),
+            "project_id": project_id,
+            "project": _sanitize_record(project),
+            "artifact_manifest": artifact_manifest,
+            **table_payloads,
+        },
+        "project_export",
+    )
 
 
 def _artifact_manifest_item(row: dict[str, Any]) -> dict[str, Any]:

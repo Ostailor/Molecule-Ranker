@@ -1,0 +1,68 @@
+name: Release validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-validation:
+    name: Release validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Pyright
+        run: uv run pyright
+
+      - name: Tests
+        run: uv run pytest
+
+      - name: Release validation
+        run: uv run molecule-ranker validate release --root "$RUNNER_TEMP/release-validation" --json | tee validation-release.json
+
+      - name: Security audit report
+        run: |
+          mkdir -p "$RUNNER_TEMP/security-audit"
+          uv run molecule-ranker validate security \
+            --root "$RUNNER_TEMP/security-audit" \
+            --db-path "$RUNNER_TEMP/security-audit/platform.sqlite" \
+            --json | tee security-audit.json
+
+      - name: API contract export
+        run: uv run molecule-ranker api export-openapi --output openapi-v1.json
+
+      - name: Docker build
+        run: docker build -f deployment/Dockerfile -t molecule-ranker:release-validation .
+
+      - name: Upload release validation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-artifacts
+          path: |
+            openapi-v1.json
+            validation-release.json
+            security-audit.json
+            ${{ runner.temp }}/release-validation/.molecule-ranker/validation/release/golden_validation_report.json
+            ${{ runner.temp }}/release-validation/.molecule-ranker/validation/release/golden_validation_report.md
+            ${{ runner.temp }}/security-audit/security_audit.json
+            ${{ runner.temp }}/security-audit/security_audit.md

@@ -534,7 +534,7 @@ class PlatformDatabaseError(ValueError):
 
 
 class PlatformDatabase:
-    """Central V0.9 platform metadata database.
+    """Central V1.0 platform metadata database.
 
     SQLite is the local/dev default. PostgreSQL URLs are supported for hosted
     deployments through SQLAlchemy and psycopg.

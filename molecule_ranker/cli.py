@@ -97,6 +97,14 @@ from molecule_ranker.project import (
     generate_project_dashboard,
     render_run_comparison_markdown,
 )
+from molecule_ranker.release import (
+    build_release_manifest,
+    release_manifest,
+    render_release_notes,
+    run_release_checks,
+    write_release_notes,
+)
+from molecule_ranker.release.manifest import write_release_manifest
 from molecule_ranker.review import (
     CodexReviewArtifact,
     DossierWriterAgent,
@@ -127,6 +135,7 @@ from molecule_ranker.schemas import (
 )
 from molecule_ranker.server import run_local_server
 from molecule_ranker.utils import slugify
+from molecule_ranker.validation import run_golden_workflows
 from molecule_ranker.workspace import (
     ProjectWorkspaceStore as WorkspaceProjectStore,
 )
@@ -166,11 +175,11 @@ experiment_app = typer.Typer(
     no_args_is_help=True,
 )
 project_app = typer.Typer(
-    help="V0.9 project workspace, sharing, jobs, dashboard, and API commands.",
+    help="V1.0 project workspace, sharing, jobs, dashboard, and API commands.",
     no_args_is_help=True,
 )
 codex_app = typer.Typer(
-    help="V0.9 controlled Codex CLI assistant, worker, and engineering automation commands.",
+    help="V1.0 controlled Codex CLI assistant, worker, and engineering automation commands.",
     no_args_is_help=True,
 )
 codex_assist_app = typer.Typer(
@@ -201,12 +210,20 @@ config_app = typer.Typer(
     help="Show and validate production platform configuration.",
     no_args_is_help=True,
 )
+validate_app = typer.Typer(
+    help="Run V1.0 validation suites.",
+    no_args_is_help=True,
+)
+api_app = typer.Typer(
+    help="Inspect and export frozen V1.0 hosted API contracts.",
+    no_args_is_help=True,
+)
 worker_app = typer.Typer(
-    help="Run V0.9 background workers.",
+    help="Run V1.0 background workers.",
     no_args_is_help=True,
 )
 job_app = typer.Typer(
-    help="Inspect and cancel V0.9 background jobs.",
+    help="Inspect and cancel V1.0 background jobs.",
     no_args_is_help=True,
 )
 notifications_app = typer.Typer(
@@ -257,6 +274,10 @@ integration_benchling_app = typer.Typer(
     help="Benchling connector helpers.",
     no_args_is_help=True,
 )
+release_app = typer.Typer(
+    help="Inspect V1.0 release readiness gates and contract identifiers.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
@@ -266,12 +287,15 @@ app.add_typer(db_app, name="db")
 app.add_typer(user_app, name="user")
 app.add_typer(auth_cli_app, name="auth")
 app.add_typer(config_app, name="config")
+app.add_typer(validate_app, name="validate")
+app.add_typer(api_app, name="api")
 app.add_typer(worker_app, name="worker")
 app.add_typer(job_app, name="job")
 app.add_typer(notifications_app, name="notifications")
 app.add_typer(admin_app, name="admin")
 app.add_typer(platform_cli_app, name="platform")
 app.add_typer(integration_app, name="integration")
+app.add_typer(release_app, name="release")
 codex_app.add_typer(codex_assist_app, name="assist")
 codex_app.add_typer(codex_engineering_app, name="engineering")
 auth_cli_app.add_typer(auth_token_app, name="token")
@@ -294,6 +318,274 @@ def main() -> None:
 def version() -> None:
     """Print the package version."""
     typer.echo(__version__)
+
+
+@release_app.command("manifest")
+def release_manifest_command(
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional release manifest JSON output."),
+    ] = None,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Repository root."),
+    ] = Path("."),
+) -> None:
+    """Write or print the V1.0 release manifest."""
+    manifest = build_release_manifest(root_dir)
+    if output is not None:
+        target = write_release_manifest(manifest, output)
+        typer.echo(str(target.resolve()))
+        return
+    _echo_json(release_manifest(root_dir))
+
+
+@release_app.command("check")
+def release_check_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Repository root."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+    run_commands: Annotated[
+        bool,
+        typer.Option(
+            "--run-commands/--no-run-commands",
+            help="Run expensive release checks instead of verify-only checks.",
+        ),
+    ] = False,
+) -> None:
+    """Check V1.0 release packaging and release-readiness evidence."""
+    report = run_release_checks(root_dir, run_commands=run_commands)
+    if json_output:
+        _echo_json(report)
+    else:
+        typer.echo(f"Release check: {report['status']}")
+        typer.echo(
+            "Checks: "
+            f"{report['summary']['pass']} pass, "
+            f"{report['summary']['warn']} warn, "
+            f"{report['summary']['fail']} fail"
+        )
+        for check in report["checks"]:
+            if check["status"] != "pass":
+                typer.echo(f"- {check['status']}: {check['check_id']}: {check['message']}")
+    if report["status"] != "pass":
+        raise typer.Exit(code=1)
+
+
+@release_app.command("notes")
+def release_notes_command(
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Release notes Markdown output."),
+    ] = Path("RELEASE_NOTES.md"),
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Repository root."),
+    ] = Path("."),
+) -> None:
+    """Write V1.0 release notes."""
+    notes = render_release_notes(build_release_manifest(root_dir))
+    target = write_release_notes(notes, output)
+    typer.echo(str(target.resolve()))
+
+
+@validate_app.command("golden")
+def validate_golden_command(
+    workflow: Annotated[
+        str,
+        typer.Option("--workflow", help="Golden workflow ID to run, or all."),
+    ] = "all",
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    live: Annotated[
+        bool,
+        typer.Option("--live", help="Opt in to live validation hooks when implemented."),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run deterministic V1.0 golden workflow validation."""
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "golden"
+    try:
+        report = run_golden_workflows(workflow=workflow, output_dir=output_dir, live=live)
+    except KeyError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = report.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Golden workflow validation: {report.status}")
+        typer.echo(f"Workflows: {report.workflow_count}")
+        typer.echo(f"Report: {report.output_dir / 'golden_validation_report.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("artifacts")
+def validate_artifacts_command(
+    artifact_dir: Annotated[
+        Path,
+        typer.Argument(file_okay=False, dir_okay=True, help="Run artifact directory to validate."),
+    ],
+    migrate: Annotated[
+        bool,
+        typer.Option(
+            "--migrate/--no-migrate",
+            help="Add V1.0 contract metadata to legacy JSON artifacts.",
+        ),
+    ] = True,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Validate V1.0 artifact contracts for a run directory."""
+    from molecule_ranker.contracts import validate_artifact_directory
+
+    report = validate_artifact_directory(artifact_dir, migrate=migrate)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Artifact contract validation: {'pass' if report.valid else 'fail'}")
+        typer.echo(f"Artifacts: {report.artifact_count}")
+        typer.echo(f"Migrated: {report.migrated_count}")
+        for result in report.results:
+            if not result.valid:
+                typer.echo(f"- {result.path.name}: {'; '.join(result.errors)}")
+    if not report.valid:
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("release")
+def validate_release_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V1.0 release validation suite."""
+    from molecule_ranker.contracts import artifact_contract_for_path, validate_artifact_file
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "release"
+    golden_report = run_golden_workflows(workflow="all", output_dir=output_dir, live=False)
+    contract_results = []
+    for result in golden_report.results:
+        for artifact in result.artifacts:
+            if artifact_contract_for_path(artifact) is None:
+                continue
+            contract_results.append(validate_artifact_file(artifact, migrate=False).as_dict())
+    contract_valid = all(result["valid"] for result in contract_results)
+    payload = {
+        "status": "pass" if golden_report.status == "pass" and contract_valid else "fail",
+        "golden_status": golden_report.status,
+        "workflow_count": golden_report.workflow_count,
+        "live_validation": False,
+        "external_services": "mocked",
+        "codex_provider": "NullCodexProvider",
+        "contract_artifact_count": len(contract_results),
+        "contract_results": contract_results,
+        "output_dir": str(output_dir.resolve()),
+    }
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Release validation: {payload['status']}")
+        typer.echo(f"Workflows: {payload['workflow_count']}")
+        typer.echo(f"Contract artifacts: {payload['contract_artifact_count']}")
+        typer.echo(f"Report: {output_dir / 'golden_validation_report.md'}")
+    if payload["status"] != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("guardrails")
+def validate_guardrails_command(
+    artifact_dir: Annotated[
+        Path,
+        typer.Argument(file_okay=False, dir_okay=True, help="Run artifact directory to audit."),
+    ],
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the V1.0 guardrail audit for a run artifact directory."""
+    from molecule_ranker.validation import run_guardrail_audit
+
+    report = run_guardrail_audit(artifact_dir)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Guardrail audit: {report.status}")
+        typer.echo(f"Artifacts: {report.artifact_count}")
+        typer.echo(f"Findings: {len(report.findings)}")
+        typer.echo(f"JSON: {artifact_dir / 'guardrail_audit.json'}")
+        typer.echo(f"Markdown: {artifact_dir / 'guardrail_audit.md'}")
+        for finding in report.findings:
+            typer.echo(f"- {finding.check_id}: {finding.artifact_path}: {finding.message}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("security")
+def validate_security_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Security audit root."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", help="Optional hosted platform database URL."),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", dir_okay=False, help="Optional SQLite database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the V1.0 hosted-platform security release audit."""
+    from molecule_ranker.platform.security_audit import run_security_audit
+
+    report = run_security_audit(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Security audit: {report.status}")
+        typer.echo(f"Checks: {len(report.checks)}")
+        typer.echo(f"Findings: {len(report.findings)}")
+        typer.echo(f"JSON: {root_dir / 'security_audit.json'}")
+        typer.echo(f"Markdown: {root_dir / 'security_audit.md'}")
+        for finding in report.findings:
+            typer.echo(f"- {finding.check_id}: {finding.location}: {finding.message}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@api_app.command("export-openapi")
+def api_export_openapi_command(
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output OpenAPI JSON file."),
+    ] = Path("openapi-v1.json"),
+    root_dir: Annotated[
+        Path,
+        typer.Option(
+            "--root",
+            file_okay=False,
+            dir_okay=True,
+            help="Repository or workspace root.",
+        ),
+    ] = Path("."),
+) -> None:
+    """Export the frozen V1 OpenAPI schema."""
+    from molecule_ranker.server import create_app
+
+    target = output.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    schema = create_app(root_dir=root_dir).openapi()
+    target.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n")
+    typer.echo(str(target))
 
 
 @integration_system_app.command("create")
@@ -638,7 +930,7 @@ def integration_sync_enqueue(
     job_type: Annotated[str, typer.Option("--job-type")] = "integration_sync",
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Enqueue an integration sync through the V0.8 platform job queue."""
+    """Enqueue an integration sync through the V1.0 platform job queue."""
     from molecule_ranker.integrations.sync import SyncRequest
     from molecule_ranker.integrations.worker import enqueue_integration_sync_job
 
@@ -1117,7 +1409,7 @@ def serve(
     ] = None,
     hosted_mode: Annotated[
         bool,
-        typer.Option("--hosted", help="Enable V0.9 hosted auth, RBAC, jobs, and dashboard."),
+        typer.Option("--hosted", help="Enable V1.0 hosted auth, RBAC, jobs, and dashboard."),
     ] = False,
     auth_secret: Annotated[
         str | None,
@@ -1693,6 +1985,205 @@ def admin_codex_status(
     typer.echo(f"Queued Codex jobs: {status['queued_codex_jobs']}")
     typer.echo(f"Worker job count: {status['worker_job_count']}")
     typer.echo(f"Status counts: {status['status_counts']}")
+
+
+@platform_cli_app.command("readiness")
+def platform_readiness(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    environment: Annotated[str | None, typer.Option("--environment")] = None,
+    artifact_storage_path: Annotated[
+        Path | None,
+        typer.Option("--artifact-storage-path"),
+    ] = None,
+    backup_path: Annotated[Path | None, typer.Option("--backup-path")] = None,
+    secret_key: Annotated[
+        str | None,
+        typer.Option("--secret-key", envvar="MOLECULE_RANKER_SECRET_KEY"),
+    ] = None,
+    allowed_hosts: Annotated[
+        str | None,
+        typer.Option("--allowed-hosts", envvar="MOLECULE_RANKER_ALLOWED_HOSTS"),
+    ] = None,
+    debug: Annotated[bool | None, typer.Option("--debug/--no-debug")] = None,
+    worker_enabled: Annotated[
+        bool | None,
+        typer.Option("--worker-enabled/--worker-disabled"),
+    ] = None,
+    codex_worker_enabled: Annotated[
+        bool | None,
+        typer.Option("--codex-worker-enabled/--codex-worker-disabled"),
+    ] = None,
+    external_integrations_enabled: Annotated[
+        bool | None,
+        typer.Option("--external-integrations-enabled/--external-integrations-disabled"),
+    ] = None,
+    external_credentials_valid: Annotated[
+        bool | None,
+        typer.Option("--external-credentials-valid/--external-credentials-invalid"),
+    ] = None,
+    output_dir: Annotated[Path | None, typer.Option("--output-dir")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run deployment readiness checks for a hosted platform environment."""
+    from molecule_ranker.platform.readiness import run_readiness_checks
+
+    report = run_readiness_checks(
+        _readiness_config_from_cli(
+            root_dir=root_dir,
+            database_url=database_url,
+            db_path=db_path,
+            environment=environment,
+            artifact_storage_path=artifact_storage_path,
+            backup_path=backup_path,
+            secret_key=secret_key,
+            allowed_hosts=allowed_hosts,
+            debug=debug,
+            worker_enabled=worker_enabled,
+            codex_worker_enabled=codex_worker_enabled,
+            external_integrations_enabled=external_integrations_enabled,
+            external_credentials_valid=external_credentials_valid,
+        )
+    )
+    _emit_readiness_report(report, json_output=json_output, output_dir=output_dir)
+
+
+@platform_cli_app.command("smoke-test")
+def platform_smoke_test(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic platform smoke test subset used before release."""
+    from molecule_ranker.platform.readiness import run_smoke_test
+
+    report = run_smoke_test(
+        _readiness_config_from_cli(
+            root_dir=root_dir,
+            database_url=database_url,
+            db_path=db_path,
+        )
+    )
+    _emit_readiness_report(report, json_output=json_output, output_dir=None)
+
+
+@platform_cli_app.command("doctor")
+def platform_doctor(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Diagnose deployment blockers and warnings with readiness checks."""
+    from molecule_ranker.platform.readiness import run_platform_doctor
+
+    report = run_platform_doctor(
+        _readiness_config_from_cli(
+            root_dir=root_dir,
+            database_url=database_url,
+            db_path=db_path,
+        )
+    )
+    _emit_readiness_report(report, json_output=json_output, output_dir=None)
+
+
+@platform_cli_app.command("backup")
+def platform_backup(
+    output_path: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Backup zip path."),
+    ],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    include_cache: Annotated[
+        bool,
+        typer.Option("--include-cache", help="Include cache files that are excluded by default."),
+    ] = False,
+    include_codex_transcripts: Annotated[
+        bool,
+        typer.Option(
+            "--include-codex-transcripts",
+            help="Include Codex transcript artifacts that are excluded by default.",
+        ),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create a V1.0 internal MVP platform backup zip."""
+    from molecule_ranker.platform.backup import create_platform_backup
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    result = create_platform_backup(
+        database,
+        output_path=output_path,
+        include_cache=include_cache,
+        include_codex_transcripts=include_codex_transcripts,
+    )
+    _emit_backup_result(result, json_output=json_output)
+
+
+@platform_cli_app.command("restore")
+def platform_restore(
+    input_path: Annotated[
+        Path,
+        typer.Option("--input", exists=True, dir_okay=False, help="Backup zip path."),
+    ],
+    target_dir: Annotated[
+        Path,
+        typer.Option("--target-dir", file_okay=False, help="Restore target directory."),
+    ],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Validate the backup and planned restore without writing."),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Restore a platform backup into a target directory."""
+    from molecule_ranker.platform.backup import restore_platform_backup
+
+    result = restore_platform_backup(input_path, target_dir=target_dir, dry_run=dry_run)
+    _emit_restore_result(result, json_output=json_output)
+
+
+@platform_cli_app.command("backup-verify")
+def platform_backup_verify(
+    input_path: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, help="Backup zip path."),
+    ],
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Verify a platform backup manifest and file hashes."""
+    from molecule_ranker.platform.backup import verify_platform_backup
+
+    result = verify_platform_backup(input_path)
+    _emit_backup_verification_result(result, json_output=json_output)
 
 
 @platform_cli_app.command("export-project")
@@ -3176,7 +3667,7 @@ def project_serve(
     ] = None,
     hosted_mode: Annotated[
         bool,
-        typer.Option("--hosted", help="Enable V0.9 hosted auth, RBAC, jobs, and dashboard."),
+        typer.Option("--hosted", help="Enable V1.0 hosted auth, RBAC, jobs, and dashboard."),
     ] = False,
     auth_secret: Annotated[
         str | None,
@@ -3202,7 +3693,7 @@ def project_serve(
         ),
     ] = False,
 ) -> None:
-    """Start the project API server; hosted mode enables the V0.9 platform surface."""
+    """Start the project API server; hosted mode enables the V1.0 platform surface."""
     _serve_api(
         root_dir=root_dir,
         host=host,
@@ -6977,6 +7468,133 @@ def _platform_database(
         db_path=db_path,
         initialize=True,
     )
+
+
+def _readiness_config_from_cli(
+    *,
+    root_dir: Path,
+    database_url: str | None = None,
+    db_path: Path | None = None,
+    environment: str | None = None,
+    artifact_storage_path: Path | None = None,
+    backup_path: Path | None = None,
+    secret_key: str | None = None,
+    allowed_hosts: str | None = None,
+    debug: bool | None = None,
+    worker_enabled: bool | None = None,
+    codex_worker_enabled: bool | None = None,
+    external_integrations_enabled: bool | None = None,
+    external_credentials_valid: bool | None = None,
+) -> Any:
+    from dataclasses import replace
+
+    from molecule_ranker.platform.readiness import ReadinessConfig
+
+    config = ReadinessConfig.from_environment(root_dir=root_dir)
+    overrides: dict[str, Any] = {}
+    if database_url is not None:
+        overrides["database_url"] = database_url
+    if db_path is not None:
+        overrides["database_path"] = db_path
+    if environment is not None:
+        overrides["environment"] = environment
+    if artifact_storage_path is not None:
+        overrides["artifact_storage_root"] = artifact_storage_path
+    if backup_path is not None:
+        overrides["backup_path"] = backup_path
+    if secret_key is not None:
+        overrides["secret_key"] = secret_key
+    if allowed_hosts is not None:
+        overrides["allowed_hosts"] = _parse_cli_list(allowed_hosts)
+    if debug is not None:
+        overrides["debug"] = debug
+    if worker_enabled is not None:
+        overrides["worker_enabled"] = worker_enabled
+    if codex_worker_enabled is not None:
+        overrides["enable_codex_worker"] = codex_worker_enabled
+    if external_integrations_enabled is not None:
+        overrides["external_integrations_enabled"] = external_integrations_enabled
+    if external_credentials_valid is not None:
+        overrides["external_credentials_valid"] = external_credentials_valid
+    return replace(config, **overrides)
+
+
+def _emit_readiness_report(
+    report: Any,
+    *,
+    json_output: bool,
+    output_dir: Path | None,
+) -> None:
+    if output_dir is not None:
+        from molecule_ranker.platform.readiness import write_readiness_reports
+
+        paths = write_readiness_reports(report, output_dir)
+    else:
+        paths = {}
+    if json_output:
+        payload = report.to_dict()
+        if paths:
+            payload["written_reports"] = {key: str(value) for key, value in paths.items()}
+        _echo_json(payload)
+    else:
+        typer.echo(f"Platform readiness: {report.status.upper()}")
+        for check in report.checks:
+            typer.echo(f"{check.status.upper():<4} {check.check_id}: {check.message}")
+        if paths:
+            typer.echo(f"Reports written: {paths['json']}, {paths['markdown']}")
+    if report.status == "fail":
+        raise typer.Exit(code=1)
+
+
+def _emit_backup_result(result: Any, *, json_output: bool) -> None:
+    if json_output:
+        _echo_json(result.to_dict())
+    else:
+        typer.echo(f"Backup: {result.status.upper()}")
+        typer.echo(f"Path: {result.path}")
+        typer.echo(f"Entries: {result.manifest.get('entry_count', 0)}")
+        typer.echo(f"Excluded: {len(result.excluded)}")
+    if result.status == "fail":
+        raise typer.Exit(code=1)
+
+
+def _emit_backup_verification_result(result: Any, *, json_output: bool) -> None:
+    if json_output:
+        _echo_json(result.to_dict())
+    else:
+        typer.echo(f"Backup verification: {result.status.upper()}")
+        typer.echo(f"Entries: {result.entry_count}")
+        typer.echo(f"Checked: {result.checked_entries}")
+        for error in result.errors:
+            typer.echo(f"- {error}")
+    if result.status == "fail":
+        raise typer.Exit(code=1)
+
+
+def _emit_restore_result(result: Any, *, json_output: bool) -> None:
+    if json_output:
+        _echo_json(result.to_dict())
+    else:
+        typer.echo(f"Restore: {result.status.upper()}")
+        typer.echo(f"Input: {result.input_path}")
+        typer.echo(f"Target: {result.target_dir}")
+        typer.echo(f"Dry run: {result.dry_run}")
+        typer.echo(f"Entries: {result.restored_entries}")
+        for error in result.errors:
+            typer.echo(f"- {error}")
+    if result.status == "fail":
+        raise typer.Exit(code=1)
+
+
+def _parse_cli_list(value: str) -> list[str]:
+    stripped = value.strip()
+    if not stripped:
+        return []
+    if stripped.startswith("["):
+        parsed = json.loads(stripped)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    return [item.strip() for item in stripped.split(",") if item.strip()]
 
 
 def _update_mapping_cli(

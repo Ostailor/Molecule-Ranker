@@ -18,7 +18,7 @@ from molecule_ranker.codex_backbone.evals import (
     load_eval_cases,
     run_codex_evals,
 )
-from molecule_ranker.codex_backbone.provider import CodexBackboneProvider
+from molecule_ranker.codex_backbone.provider import CodexBackboneProvider, NullCodexProvider
 from molecule_ranker.codex_backbone.runner import CodexCLIRunner, CodexCommandBuilder
 from molecule_ranker.codex_backbone.schemas import (
     CodexBackboneConfig,
@@ -38,6 +38,7 @@ __all__ = [
     "CodexEvalReport",
     "CodexTask",
     "CodexTaskResult",
+    "NullCodexProvider",
     "build_artifact_context",
     "evaluate_codex_case",
     "extract_allowed_candidate_ids",

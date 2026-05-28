@@ -5,6 +5,37 @@
   <p class="muted">Only projects visible through your user, team, or organization permissions are shown.</p>
 </header>
 <section class="section">
+  <h2>First-run setup</h2>
+  <div class="panel">
+    <p>
+      Create a project workspace before running jobs, registering artifacts, or inviting reviewers.
+      Projects hold runs, artifacts, review decisions, Codex assistant outputs, and audit events.
+    </p>
+    <ul class="compact-list">
+      <li>Generation is disabled by default.</li>
+      <li>Docking is disabled by default.</li>
+      <li>External writes are disabled by default.</li>
+      <li>Codex is disabled until configured.</li>
+      <li>Codex worker jobs are scoped and permissioned.</li>
+      <li>Review workflow is optional.</li>
+      <li>Experimental evidence is disabled unless configured and imported.</li>
+      <li>Integrations default to dry-run/read-only.</li>
+    </ul>
+  </div>
+</section>
+<section class="section">
+  <h2>Create project</h2>
+  <form class="panel form-grid" method="post" action="/dashboard/projects/create">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
+    <label for="workspace_id">Project ID</label>
+    <input id="workspace_id" name="workspace_id" type="text" placeholder="example-project">
+    <label for="name">Project name</label>
+    <input id="name" name="name" type="text" placeholder="Example project">
+    <button class="button" type="submit">Create project</button>
+  </form>
+</section>
+<section class="section">
+  <h2>Visible projects</h2>
   <table>
     <thead>
       <tr><th>Project</th><th>Runs</th><th>Artifacts</th><th>Updated</th></tr>

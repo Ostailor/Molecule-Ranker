@@ -8,6 +8,8 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient
 
+from molecule_ranker.integrations.schemas import ExternalSystem
+from molecule_ranker.integrations.store import IntegrationStore
 from molecule_ranker.server import create_app
 from molecule_ranker.workspace.schemas import ArtifactRecord
 from molecule_ranker.workspace.store import ProjectWorkspaceStore
@@ -99,6 +101,48 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
             assert snippet in response.text, path
 
 
+def test_first_run_dashboard_explains_setup_defaults_and_project_creation(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(_app(tmp_path))
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert "First-run setup" in response.text
+    assert "Create project" in response.text
+    assert "Generation is disabled by default" in response.text
+    assert "Docking is disabled by default" in response.text
+    assert "External writes are disabled by default" in response.text
+    assert "Codex is disabled until configured" in response.text
+    assert "Integrations default to dry-run/read-only" in response.text
+    assert 'name="workspace_id"' in response.text
+
+
+def test_dashboard_project_creation_form_creates_owned_project(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _web_login(client, "admin@example.com", "Admin-password-1")
+    csrf_token = client.cookies.get("mr_csrf_token")
+    assert csrf_token is not None
+
+    created = client.post(
+        "/dashboard/projects/create",
+        data={
+            "csrf_token": csrf_token,
+            "workspace_id": "workspace-created",
+            "name": "Created project",
+        },
+        follow_redirects=False,
+    )
+    detail = client.get("/dashboard/projects/workspace-created")
+
+    assert created.status_code == 303
+    assert created.headers["location"] == "/dashboard/projects/workspace-created"
+    assert detail.status_code == 200
+    assert "Created project" in detail.text
+
+
 def test_admin_dashboard_pages_render_for_admin(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     _web_login(client, "admin@example.com", "Admin-password-1")
@@ -139,6 +183,57 @@ def test_artifact_download_requires_permission_and_serves_safe_artifact(tmp_path
     assert downloaded.status_code == 200
     assert downloaded.text == "registered artifact\n"
     assert downloaded.headers["X-Artifact-ID"] == "safe-artifact"
+
+
+def test_project_detail_makes_artifact_downloads_clear_for_browser_users(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    _create_project_with_run(client, tmp_path, admin_headers, project_id="workspace-a")
+    artifact_path = tmp_path / "safe-artifact.txt"
+    artifact_path.write_text("registered artifact\n")
+    _append_workspace_artifact(tmp_path, artifact_path, artifact_id="safe-artifact")
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    detail = client.get("/dashboard/projects/workspace-a")
+    downloaded = client.get("/dashboard/projects/workspace-a/artifacts/safe-artifact/download")
+
+    assert detail.status_code == 200
+    assert "Artifact downloads" in detail.text
+    assert "Download" in detail.text
+    assert "/dashboard/projects/workspace-a/artifacts/safe-artifact/download" in detail.text
+    assert downloaded.status_code == 200
+    assert downloaded.text == "registered artifact\n"
+    assert downloaded.headers["X-Artifact-ID"] == "safe-artifact"
+
+
+def test_admin_jobs_page_explains_status_and_errors(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    app = cast(Any, client.app)
+    admin = app.state.platform_database.list_users()[0]
+    queued = app.state.platform_database.enqueue_job(
+        job_type="dashboard_build",
+        requested_by_user_id=admin.user_id,
+        project_id="workspace-a",
+    )
+    failed = app.state.platform_database.enqueue_job(
+        job_type="codex_task",
+        requested_by_user_id=admin.user_id,
+        project_id="workspace-a",
+    )
+    failed.status = "failed"
+    failed.error = "Codex provider is not configured."
+    app.state.platform_database.update_job(failed)
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/admin/jobs")
+
+    assert response.status_code == 200
+    assert "Status guide" in response.text
+    assert "Queued means waiting for a worker" in response.text
+    assert queued.job_id in response.text
+    assert failed.job_id in response.text
+    assert "Codex provider is not configured." in response.text
 
 
 def test_dashboard_rbac_hides_unauthorized_projects(tmp_path: Path) -> None:
@@ -258,8 +353,26 @@ def test_generated_molecules_are_labeled_as_hypotheses(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert "Generated molecules are computational hypotheses" in response.text
+    assert "not validated actives" in response.text
+    assert "No synthesis instructions" in response.text
     assert "Computational hypothesis" in response.text
     assert "Hypothesis-1" in response.text
+
+
+def test_review_queue_is_actionable_and_marks_optional_workflow(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    _create_project_with_run(client, tmp_path, admin_headers, project_id="workspace-a")
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/projects/workspace-a/review")
+
+    assert response.status_code == 200
+    assert "Review workflow is optional" in response.text
+    assert "Open dossier" in response.text
+    assert "Pending review items" in response.text
+    assert "Reviewer comments are separate from model scores" in response.text
 
 
 def test_codex_outputs_are_separate_from_evidence(tmp_path: Path) -> None:
@@ -274,8 +387,66 @@ def test_codex_outputs_are_separate_from_evidence(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert "Codex-generated summaries are assistant outputs, not evidence" in response.text
+    assert "Codex is disabled until configured" in response.text
+    assert "requires codex:run permission" in response.text
+    assert "scoped to registered project artifacts" in response.text
     assert "Codex-generated summaries" in response.text
     assert "Assistant summary grounded in artifacts." in response.text
+
+
+def test_integration_dashboard_makes_dry_run_and_write_modes_obvious(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    app = cast(Any, client.app)
+    admin = app.state.platform_database.list_users()[0]
+    store = IntegrationStore(app.state.platform_database, user=admin)
+    store.create_external_system(
+        ExternalSystem(
+            external_system_id="dry-run-system",
+            name="Dry run system",
+            system_type="generic_rest",
+            default_mode="dry_run",
+        )
+    )
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/integrations")
+
+    assert response.status_code == 200
+    assert "Dry-run/read-only by default" in response.text
+    assert "Write-enabled requires explicit permission" in response.text
+    assert "mode-badge dry-run" in response.text
+    assert "Dry run system" in response.text
+
+
+def test_admin_audit_page_is_accessible_and_explains_review_use(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    app = cast(Any, client.app)
+    admin = app.state.platform_database.list_users()[0]
+    app.state.platform_database.write_audit(
+        "release_check",
+        actor_user_id=admin.user_id,
+        summary="Admin reviewed release evidence.",
+    )
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/admin/audit")
+
+    assert response.status_code == 200
+    assert "Audit log" in response.text
+    assert "Admins can review security, access, job, and export events here." in response.text
+    assert "release_check" in response.text
+
+
+def test_dashboard_error_states_are_understandable(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/projects/missing-project")
+
+    assert response.status_code == 404
+    assert "Project not found." in response.text
+    assert "What happened" in response.text
+    assert "Request ID" in response.text
 
 
 def test_codex_output_is_safely_escaped(tmp_path: Path) -> None:
@@ -291,6 +462,30 @@ def test_codex_output_is_safely_escaped(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "<script>alert(1)</script>" not in response.text
     assert "&lt;script&gt;alert(1)&lt;/script&gt; Codex summary" in response.text
+
+
+def test_codex_dry_run_output_is_summarized(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    _create_project_with_run(client, tmp_path, admin_headers, project_id="workspace-a")
+    _write_codex_output(
+        tmp_path,
+        output_text=json.dumps(
+            {
+                "command": ["codex", "exec", "--json"],
+                "dry_run": True,
+                "prompt": "large guarded prompt with forbidden_commands metadata",
+            }
+        ),
+    )
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/projects/workspace-a/codex")
+
+    assert response.status_code == 200
+    assert "Dry-run Codex request prepared; no live Codex execution." in response.text
+    assert "forbidden_commands metadata" not in response.text
 
 
 def test_uploaded_assay_file_names_are_escaped(tmp_path: Path) -> None:

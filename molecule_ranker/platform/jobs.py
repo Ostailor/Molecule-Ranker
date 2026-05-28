@@ -454,12 +454,12 @@ class PlatformJobQueue:
 class RedisJobQueueAdapter:
     """Placeholder for future Redis/RQ/Celery queue integration.
 
-    V0.9 intentionally uses the SQL-backed queue so local and hosted MVP
+    V1.0 intentionally uses the SQL-backed queue so local and hosted MVP
     deployments do not require Redis.
     """
 
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-        raise NotImplementedError("Redis/RQ/Celery adapters are planned after the V0.9 MVP.")
+        raise NotImplementedError("Redis/RQ/Celery adapters are planned after the V1.0 MVP.")
 
 
 def enqueue_platform_job(

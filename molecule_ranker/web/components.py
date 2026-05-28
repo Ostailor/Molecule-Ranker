@@ -147,9 +147,7 @@ def codex_outputs(workspace: ProjectWorkspace) -> list[dict[str, Any]]:
                 except (OSError, json.JSONDecodeError):
                     payload = {}
                 if isinstance(payload, dict):
-                    safe_record["summary"] = str(
-                        payload.get("output_text") or payload.get("summary") or ""
-                    )
+                    safe_record["summary"] = _codex_output_summary(payload)
         safe_record["summary"] = safe_dashboard_text(str(safe_record["summary"]))
         safe_outputs.append(safe_record)
     return safe_outputs
@@ -204,6 +202,21 @@ def safe_dashboard_text(value: Any) -> str:
     for pattern, replacement in DASHBOARD_TEXT_REDACTIONS:
         text = pattern.sub(replacement, text)
     return text
+
+
+def _codex_output_summary(payload: dict[str, Any]) -> str:
+    summary = payload.get("output_text") or payload.get("summary") or ""
+    if isinstance(summary, str):
+        try:
+            parsed = json.loads(summary)
+        except json.JSONDecodeError:
+            return summary
+        if isinstance(parsed, dict) and parsed.get("dry_run") is True:
+            return (
+                "Dry-run Codex request prepared; no live Codex execution. "
+                "The full prompt is stored in the Codex artifact and is not displayed here."
+            )
+    return str(summary)
 
 
 def candidate_comment_key(candidate: dict[str, Any]) -> str:

@@ -90,6 +90,28 @@ pre {
   padding: 12px;
 }
 
+.mode-badge {
+  display: inline-block;
+  border: 1px solid #9db0c8;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #eef3f8;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.mode-badge.dry-run,
+.mode-badge.read-only {
+  border-color: #6fa4cf;
+  background: #e8f4ff;
+}
+
+.mode-badge.write-enabled {
+  border-color: #b55a5a;
+  background: #fff1f1;
+  color: #8a1f1f;
+}
+
 @media (max-width: 760px) {
   .integration-header,
   .integration-content {

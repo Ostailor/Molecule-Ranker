@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from molecule_ranker.codex_backbone.guardrails import redact_secrets
 from molecule_ranker.integrations.credentials import redact_secret_values
+from molecule_ranker.release import DATA_CONTRACT_VERSION
 
 ExportPackageType = Literal[
     "review_dossier_package",
@@ -96,7 +97,7 @@ class ExportPackageOptions:
     payload: dict[str, Any]
     output_dir: Path
     formats: tuple[ExportPackageFormat, ...] = ("json", "markdown", "csv_manifest", "zip")
-    data_contract_version: str = "v0.9"
+    data_contract_version: str = DATA_CONTRACT_VERSION
     external_system_target: dict[str, Any] | None = None
     external_write: bool = False
     explicit_permission: bool = False
@@ -108,7 +109,7 @@ def create_export_package(
     output_dir: str | Path,
     *,
     formats: list[ExportPackageFormat] | tuple[ExportPackageFormat, ...] | None = None,
-    data_contract_version: str = "v0.9",
+    data_contract_version: str = DATA_CONTRACT_VERSION,
     external_system_target: dict[str, Any] | None = None,
     external_write: bool = False,
     explicit_permission: bool = False,

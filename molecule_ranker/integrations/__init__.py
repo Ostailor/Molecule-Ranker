@@ -1,4 +1,4 @@
-"""V0.9 external research-system integration framework."""
+"""V1.0 external research-system integration framework."""
 
 from typing import TYPE_CHECKING
 

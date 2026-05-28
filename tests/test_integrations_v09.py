@@ -28,8 +28,8 @@ from molecule_ranker.platform.database import (
 from molecule_ranker.server import create_app
 
 
-def test_version_is_v09() -> None:
-    assert __version__ == "0.9.0"
+def test_version_is_v10() -> None:
+    assert __version__ == "1.0.0"
 
 
 def test_connector_defaults_are_dry_run_and_block_implicit_writes() -> None:

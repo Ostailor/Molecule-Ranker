@@ -9,6 +9,7 @@ from molecule_ranker.agents.base import AgentExecutionError, BaseAgent, Pipeline
 from molecule_ranker.codex import create_llm_provider
 from molecule_ranker.codex_backbone import CodexBackboneConfig, CodexTask
 from molecule_ranker.codex_backbone.schemas import CodexTaskResult
+from molecule_ranker.contracts import with_artifact_contract_metadata
 from molecule_ranker.utils import slugify
 
 DEFAULT_CODEX_TASKS = [
@@ -289,25 +290,32 @@ def _results_payload(
     context: PipelineContext,
     results: list[CodexTaskResult],
 ) -> dict[str, Any]:
-    return {
-        "success": all(result.status == "succeeded" for result in results),
-        "generated_at": datetime.now(UTC).isoformat(),
-        "disease": context.disease.model_dump(mode="json") if context.disease else None,
-        "summary": {
-            "enabled": True,
-            "task_count": len(results),
-            "succeeded_count": sum(1 for result in results if result.status == "succeeded"),
-            "failed_count": sum(1 for result in results if result.status != "succeeded"),
-            "guardrail_warning_count": sum(len(result.guardrail_warnings) for result in results),
+    return with_artifact_contract_metadata(
+        {
+            "success": all(result.status == "succeeded" for result in results),
+            "generated_at": datetime.now(UTC).isoformat(),
+            "disease": context.disease.model_dump(mode="json") if context.disease else None,
+            "summary": {
+                "enabled": True,
+                "task_count": len(results),
+                "succeeded_count": sum(
+                    1 for result in results if result.status == "succeeded"
+                ),
+                "failed_count": sum(1 for result in results if result.status != "succeeded"),
+                "guardrail_warning_count": sum(
+                    len(result.guardrail_warnings) for result in results
+                ),
+            },
+            "results": [result.model_dump(mode="json") for result in results],
+            "limitations": [
+                "Codex output is orchestration and summarization only.",
+                "Codex output is not biomedical evidence.",
+                "Codex output did not alter candidate scores or create evidence records.",
+                "Codex output did not create assay results or generated molecules.",
+            ],
         },
-        "results": [result.model_dump(mode="json") for result in results],
-        "limitations": [
-            "Codex output is orchestration and summarization only.",
-            "Codex output is not biomedical evidence.",
-            "Codex output did not alter candidate scores or create evidence records.",
-            "Codex output did not create assay results or generated molecules.",
-        ],
-    }
+        "codex_backbone",
+    )
 
 
 def _existing_artifact_paths(context: PipelineContext) -> list[str]:

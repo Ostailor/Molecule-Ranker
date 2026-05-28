@@ -205,7 +205,7 @@ INTEGRATION_STORE_TABLES = [
 
 
 class IntegrationStore:
-    """Persistent V0.9 integration store backed by the platform database."""
+    """Persistent V1.0 integration store backed by the platform database."""
 
     def __init__(
         self,

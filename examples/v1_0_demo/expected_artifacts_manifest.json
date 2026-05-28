@@ -1,0 +1,68 @@
+{
+  "demo_id": "v1_0_synthetic_demo",
+  "synthetic": true,
+  "disclaimer": "Expected artifacts for an internal synthetic demo only; not biomedical evidence.",
+  "entities": {
+    "disease": "ExampleDiseaseA",
+    "target": "ExampleTargetA",
+    "candidate": "ExampleCandidateA",
+    "generated_hypothesis": "ExampleGeneratedHypothesisA"
+  },
+  "expected_artifacts": [
+    {
+      "workflow_step": "project_create",
+      "path": ".molecule-ranker/v1_0_demo/.molecule-ranker/workspace.json",
+      "description": "Synthetic project workspace manifest."
+    },
+    {
+      "workflow_step": "mocked_offline_ranking",
+      "path": ".molecule-ranker/v1_0_demo/validation/golden/existing_molecule_ranking/candidates.json",
+      "description": "Deterministic mocked ranking artifact with synthetic candidates."
+    },
+    {
+      "workflow_step": "generated_hypotheses",
+      "path": ".molecule-ranker/v1_0_demo/validation/golden/generation_workflow/generated_candidates.json",
+      "description": "Generated hypotheses labeled as generated and not evidence."
+    },
+    {
+      "workflow_step": "developability",
+      "path": ".molecule-ranker/v1_0_demo/validation/golden/existing_molecule_ranking/developability.json",
+      "description": "Developability triage artifact for synthetic candidates."
+    },
+    {
+      "workflow_step": "review_workspace",
+      "path": ".molecule-ranker/v1_0_demo/review.sqlite",
+      "description": "Review workspace database containing review items and comments only."
+    },
+    {
+      "workflow_step": "assay_import",
+      "path": ".molecule-ranker/v1_0_demo/experiments.sqlite",
+      "description": "Synthetic assay-import database; rows are inconclusive or failed-QC only."
+    },
+    {
+      "workflow_step": "active_learning",
+      "path": ".molecule-ranker/v1_0_demo/experiments.sqlite",
+      "description": "Active-learning batch metadata derived from synthetic artifacts."
+    },
+    {
+      "workflow_step": "integration_dry_run",
+      "path": ".molecule-ranker/v1_0_demo/platform.sqlite",
+      "description": "Dry-run sync metadata for ExampleExternalSystemA."
+    },
+    {
+      "workflow_step": "codex_mocked_summary",
+      "path": ".molecule-ranker/v1_0_demo/.molecule-ranker/codex_project_outputs/",
+      "description": "Dry-run Codex summary output; assistant output only, not evidence."
+    },
+    {
+      "workflow_step": "export_package",
+      "path": ".molecule-ranker/v1_0_demo/synthetic-demo-export.zip",
+      "description": "Platform backup/export package with manifest hashes and no plaintext secrets."
+    },
+    {
+      "workflow_step": "dashboard_build",
+      "path": ".molecule-ranker/v1_0_demo/dashboard/index.html",
+      "description": "Static project dashboard for synthetic demo artifacts."
+    }
+  ]
+}

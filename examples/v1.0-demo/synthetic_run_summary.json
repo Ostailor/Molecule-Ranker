@@ -1,0 +1,25 @@
+{
+  "artifact_contract_version": "artifacts.v1",
+  "run_id": "demo-run-v1",
+  "disease": {
+    "canonical_name": "Synthetic disease placeholder",
+    "source": "synthetic_demo",
+    "source_record_id": "demo-disease"
+  },
+  "targets": [],
+  "candidates": [],
+  "generated_molecule_hypotheses": [],
+  "literature_claims": [],
+  "assay_results": [],
+  "codex_outputs": [],
+  "summary": {
+    "candidate_count": 0,
+    "generated_candidate_count": 0,
+    "target_count": 0,
+    "purpose": "Demonstrate V1.0 artifact shape without fabricated evidence."
+  },
+  "warnings": [
+    "Synthetic demo only.",
+    "No biomedical evidence, citations, assay results, validated actives, medical advice, synthesis instructions, lab protocols, dosage, or patient treatment guidance."
+  ]
+}
