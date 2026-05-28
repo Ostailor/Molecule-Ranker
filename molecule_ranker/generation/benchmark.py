@@ -43,15 +43,19 @@ class GenerationBenchmarkResult(BaseModel):
     )
     target_coverage: dict[str, int] = Field(default_factory=dict)
     diversity_cluster_count: int = 0
+    average_experiment_readiness_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    average_uncertainty_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    review_ready_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    generator_method_counts: dict[str, int] = Field(default_factory=dict)
     generated_count: int = 0
     retained_count: int = 0
     rejected_count: int = 0
 
 
 class InternalGenerationBenchmark:
-    """Internal distribution-style benchmark for V0.3 generated molecule artifacts."""
+    """Internal distribution-style benchmark for generated molecule artifacts."""
 
-    name = "internal_generation_quality_v0_3"
+    name = "internal_generation_quality_v1_1"
 
     def benchmark(self, artifact: Mapping[str, Any]) -> GenerationBenchmarkResult:
         records = _records_from_artifact(artifact)
@@ -82,6 +86,10 @@ class InternalGenerationBenchmark:
                 descriptor_distribution_summary={},
                 target_coverage={},
                 diversity_cluster_count=0,
+                average_experiment_readiness_score=0.0,
+                average_uncertainty_score=0.0,
+                review_ready_rate=0.0,
+                generator_method_counts={},
                 generated_count=0,
                 retained_count=0,
                 rejected_count=0,
@@ -135,6 +143,16 @@ class InternalGenerationBenchmark:
                     if record.get("diversity_cluster")
                 }
             ),
+            average_experiment_readiness_score=_metadata_score_average(
+                retained_records,
+                "experiment_readiness",
+            ),
+            average_uncertainty_score=_metadata_score_average(
+                retained_records,
+                "uncertainty",
+            ),
+            review_ready_rate=_review_ready_rate(retained_records),
+            generator_method_counts=_generator_method_counts(records),
             generated_count=generated_count,
             retained_count=retained_count,
             rejected_count=rejected_count,
@@ -326,6 +344,46 @@ def _target_coverage(records: Sequence[Mapping[str, Any]]) -> dict[str, int]:
             if target not in (None, ""):
                 coverage[str(target)] = coverage.get(str(target), 0) + 1
     return dict(sorted(coverage.items()))
+
+
+def _metadata_score_average(records: Sequence[Mapping[str, Any]], key: str) -> float:
+    values: list[float] = []
+    for record in records:
+        metadata = record.get("metadata")
+        nested = metadata.get(key) if isinstance(metadata, dict) else None
+        if isinstance(nested, dict) and isinstance(nested.get("score"), (int, float)):
+            values.append(float(nested["score"]))
+            continue
+        score_breakdown = record.get("score_breakdown")
+        if not isinstance(score_breakdown, dict):
+            continue
+        field = (
+            "experiment_readiness_score"
+            if key == "experiment_readiness"
+            else "uncertainty_score"
+        )
+        if isinstance(score_breakdown.get(field), (int, float)):
+            values.append(float(score_breakdown[field]))
+    return round(sum(values) / len(values), 3) if values else 0.0
+
+
+def _review_ready_rate(records: Sequence[Mapping[str, Any]]) -> float:
+    labels: list[str] = []
+    for record in records:
+        metadata = record.get("metadata")
+        readiness = metadata.get("experiment_readiness") if isinstance(metadata, dict) else None
+        if isinstance(readiness, dict) and readiness.get("label"):
+            labels.append(str(readiness["label"]))
+    return _rate(sum(1 for label in labels if label == "review_ready"), len(labels))
+
+
+def _generator_method_counts(records: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        method = record.get("generation_method") or record.get("source") or "unknown"
+        method = str(method)
+        counts[method] = counts.get(method, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _positive_int(value: Any, *, fallback: int) -> int:

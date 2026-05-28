@@ -5,13 +5,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from molecule_ranker.agents.base import BaseAgent, PipelineContext
+from molecule_ranker.agents.scientific_design import scientific_design_graph
+from molecule_ranker.generation.ensemble import GeneratorEnsemble, GeneratorEnsembleResult
 from molecule_ranker.generation.errors import GenerationError
 from molecule_ranker.generation.filters import (
     DiversityFilter,
     NoveltyFilter,
     ValidationFilter,
 )
-from molecule_ranker.generation.generators import SelfiesMutationGenerator
+from molecule_ranker.generation.generators import MolecularGenerator
 from molecule_ranker.generation.objective_builder import GenerationObjectiveBuilder
 from molecule_ranker.generation.schemas import (
     GeneratedMolecule,
@@ -24,7 +26,6 @@ from molecule_ranker.generation.scoring import GeneratedMoleculeScorer
 from molecule_ranker.generation.seed_selector import SeedSelector
 from molecule_ranker.schemas import GeneratedMoleculeHypothesis, MoleculeCandidate
 
-GENERATOR_REPORT_SOURCE = "SELFIES_MUTATION_CROSSOVER"
 HYPOTHESIS_WARNINGS = [
     "in_silico_hypothesis_only",
     (
@@ -44,7 +45,8 @@ class NovelMoleculeAgent(BaseAgent):
         *,
         seed_selector: SeedSelector | None = None,
         objective_builder: GenerationObjectiveBuilder | None = None,
-        generator: SelfiesMutationGenerator | None = None,
+        generator: MolecularGenerator | None = None,
+        generator_ensemble: GeneratorEnsemble | None = None,
         validation_filter: ValidationFilter | None = None,
         novelty_filter: NoveltyFilter | None = None,
         diversity_filter: DiversityFilter | None = None,
@@ -53,12 +55,19 @@ class NovelMoleculeAgent(BaseAgent):
         super().__init__()
         self._seed_selector = seed_selector or SeedSelector()
         self._objective_builder = objective_builder or GenerationObjectiveBuilder()
-        self._generator = generator or SelfiesMutationGenerator()
+        if generator_ensemble is not None:
+            self._generator_ensemble = generator_ensemble
+        elif generator is not None:
+            self._generator_ensemble = GeneratorEnsemble(generators=[generator])
+        else:
+            self._generator_ensemble = GeneratorEnsemble()
         self._validation_filter = validation_filter or ValidationFilter()
         self._novelty_filter = novelty_filter or NoveltyFilter()
         self._diversity_filter = diversity_filter or DiversityFilter()
         self._scorer = scorer or GeneratedMoleculeScorer()
         self._last_metadata: dict[str, Any] = {}
+        self._last_agent_graph_trace: dict[str, Any] = {}
+        self._last_ensemble_result = GeneratorEnsembleResult()
 
     def process(self, context: PipelineContext) -> PipelineContext:
         enabled = bool(
@@ -74,19 +83,6 @@ class NovelMoleculeAgent(BaseAgent):
 
         config = self._generation_config(context.config)
         warnings: list[str] = []
-        if config.generation_method != self._generator.name:
-            return self._handle_generation_stop(
-                context=context,
-                config=config,
-                warning=(
-                    f"Generation method {config.generation_method!r} is not available "
-                    f"in V0.3; available method is {self._generator.name!r}."
-                ),
-                seeds=[],
-                objectives=[],
-                generated=[],
-                rejected=[],
-            )
         if context.disease is None:
             return self._handle_generation_stop(
                 context=context,
@@ -136,7 +132,16 @@ class NovelMoleculeAgent(BaseAgent):
                 rejected=[],
             )
 
-        generated = self._generate_for_objectives(objectives, seeds, config)
+        ensemble_result = self._generator_ensemble.run(
+            objectives=objectives,
+            seeds=seeds,
+            config=config,
+        )
+        self._last_ensemble_result = ensemble_result
+        warnings.extend(ensemble_result.warnings)
+        generated = ensemble_result.generated
+        if not generated and ensemble_result.failures:
+            warnings.append("Generator ensemble produced no molecule hypotheses after failures.")
         validated, validation_rejected = self._validation_filter.filter(
             generated,
             config=config,
@@ -160,6 +165,15 @@ class NovelMoleculeAgent(BaseAgent):
         limit = int(context.config.get("max_retained_generated", config.max_retained_generated))
         retained = scored[:limit]
         rejected = [*validation_rejected, *novelty_rejected, *diversity_rejected, *scored[limit:]]
+        agent_graph_trace = self._run_agent_graph(
+            context=context,
+            config=config,
+            objectives=objectives,
+            seeds=seeds,
+            generated=generated,
+            retained=retained,
+            rejected=rejected,
+        )
 
         if not retained:
             warnings.append("Generator produced no valid retained generated molecule hypotheses.")
@@ -171,6 +185,7 @@ class NovelMoleculeAgent(BaseAgent):
                     retained=[],
                     rejected=rejected,
                     warnings=warnings,
+                    agent_graph_trace=agent_graph_trace,
                 )
                 self._store_run(context, run)
                 self._last_metadata = self._metadata_for_run(
@@ -188,6 +203,7 @@ class NovelMoleculeAgent(BaseAgent):
             retained=retained,
             rejected=rejected,
             warnings=warnings,
+            agent_graph_trace=agent_graph_trace,
         )
         self._store_run(context, run)
         context.generated_candidates = self._report_hypotheses(retained, objectives, seeds)
@@ -227,24 +243,13 @@ class NovelMoleculeAgent(BaseAgent):
         seeds: list[SeedMolecule],
         config: GenerationConfig,
     ) -> list[GeneratedMolecule]:
-        seeds_by_id = {self._seed_id(seed): seed for seed in seeds}
-        generated: list[GeneratedMolecule] = []
-        for objective in objectives:
-            objective_seeds = [
-                seeds_by_id[seed_id]
-                for seed_id in objective.seed_molecule_ids
-                if seed_id in seeds_by_id
-            ]
-            if not objective_seeds:
-                objective_seed_names = set(objective.seed_molecule_names)
-                objective_seeds = [
-                    seed
-                    for seed in seeds
-                    if seed.name in objective_seed_names
-                    or seed.source_candidate_name in objective_seed_names
-                ]
-            generated.extend(self._generator.generate(objective, objective_seeds, config))
-        return generated
+        ensemble_result = self._generator_ensemble.run(
+            objectives=objectives,
+            seeds=seeds,
+            config=config,
+        )
+        self._last_ensemble_result = ensemble_result
+        return ensemble_result.generated
 
     def _handle_generation_stop(
         self,
@@ -325,7 +330,13 @@ class NovelMoleculeAgent(BaseAgent):
         retained: list[GeneratedMolecule],
         rejected: list[GeneratedMolecule],
         warnings: list[str],
+        agent_graph_trace: dict[str, Any] | None = None,
     ) -> GenerationRun:
+        graph_trace = agent_graph_trace or self._last_agent_graph_trace or {
+            "runtime": "AgentGraph",
+            "status": "not_run",
+            "executed_agents": [],
+        }
         return GenerationRun(
             objectives=objectives,
             seeds=seeds,
@@ -334,15 +345,27 @@ class NovelMoleculeAgent(BaseAgent):
             rejected=rejected,
             warnings=warnings,
             metadata={
-                "generator": self._generator.name,
-                "generation_method": self._generator.name,
-                "generator_version": "v0.3",
+                "generator": self._generator_ensemble.name,
+                "generation_method": self._generator_ensemble.name,
+                "generator_ensemble": self._last_ensemble_result.metadata,
+                "generator_runs": list(self._last_ensemble_result.generator_runs),
+                "generator_failures": list(self._last_ensemble_result.failures),
+                "generator_version": "v1.1",
                 "run_timestamp": datetime.now(UTC).isoformat(),
+                "agent_graph_runtime": "AgentGraph",
+                "agent_graph_trace": graph_trace,
                 "validation_filter": self._validation_filter.__class__.__name__,
                 "novelty_filter": self._novelty_filter.__class__.__name__,
                 "diversity_filter": self._diversity_filter.__class__.__name__,
                 "hypothesis_only": True,
                 "no_invented_evidence": True,
+                "generated_hypothesis_boundary": {
+                    "hypothesis_only": True,
+                    "no_direct_activity_claims": True,
+                    "no_safety_claims": True,
+                    "no_synthesis_protocols": True,
+                    "evidence_backed_existing_molecules_separate": True,
+                },
             },
         )
 
@@ -376,7 +399,7 @@ class NovelMoleculeAgent(BaseAgent):
                 GeneratedMoleculeHypothesis(
                     name=candidate.generated_id,
                     canonical_smiles=candidate.canonical_smiles,
-                    source=GENERATOR_REPORT_SOURCE,
+                    source=candidate.generation_method,
                     target_symbol=(
                         candidate.conditioned_targets[0]
                         if candidate.conditioned_targets
@@ -412,6 +435,11 @@ class NovelMoleculeAgent(BaseAgent):
                             [],
                         ),
                         "score_explanation": explanation,
+                        "v1_1_report_card": self._v1_1_report_card(
+                            candidate,
+                            objective,
+                            parent_seeds,
+                        ),
                     },
                     warnings=sorted(set([*candidate.warnings, *HYPOTHESIS_WARNINGS])),
                     evidence=[],
@@ -453,6 +481,7 @@ class NovelMoleculeAgent(BaseAgent):
                         "parent_seed_ids": list(molecule.parent_seed_ids),
                         "generation_score_explanation": explanation,
                         "direct_experimental_evidence": False,
+                        "v1_1_report_card": self._v1_1_report_card(molecule, None, []),
                     },
                     generation_metadata={
                         "generated_id": molecule.generated_id,
@@ -467,6 +496,7 @@ class NovelMoleculeAgent(BaseAgent):
                             if molecule.novelty is not None
                             else None
                         ),
+                        "v1_1_report_card": self._v1_1_report_card(molecule, None, []),
                     },
                     direct_evidence_available=False,
                     evidence=[],
@@ -499,7 +529,7 @@ class NovelMoleculeAgent(BaseAgent):
                     context.config.get("include_generated_in_main_ranking", False)
                 ),
                 "main_ranking_generated_count": main_ranking_generated_count,
-                "generator": self._generator.name,
+                "generator": self._generator_ensemble.name,
                 "generation_run": {
                     "objective_count": len(run.objectives),
                     "seed_count": len(run.seeds),
@@ -511,7 +541,11 @@ class NovelMoleculeAgent(BaseAgent):
                 "seed_selection": self._seed_selector.trace_metadata,
                 "objective_building": self._objective_builder.trace_metadata,
                 "generator_trace": {
-                    "method": self._generator.name,
+                    "method": self._generator_ensemble.name,
+                    "generator_runs": list(run.metadata.get("generator_runs", [])),
+                    "generator_failures": list(run.metadata.get("generator_failures", [])),
+                    "agent_graph_runtime": run.metadata.get("agent_graph_runtime"),
+                    "agent_graph_trace": run.metadata.get("agent_graph_trace", {}),
                     "random_seed": config.generation_random_seed,
                     "raw_generated_count": len(run.generated),
                     "generated_ids": [candidate.generated_id for candidate in run.generated],
@@ -614,6 +648,102 @@ class NovelMoleculeAgent(BaseAgent):
     def _literature_evidence(self, runtime_config: Mapping[str, Any]) -> Mapping[str, Any] | None:
         value = runtime_config.get("literature_evidence")
         return value if isinstance(value, Mapping) else None
+
+    def _run_agent_graph(
+        self,
+        *,
+        context: PipelineContext,
+        config: GenerationConfig,
+        objectives: list[GenerationObjective],
+        seeds: list[SeedMolecule],
+        generated: list[GeneratedMolecule],
+        retained: list[GeneratedMolecule],
+        rejected: list[GeneratedMolecule],
+    ) -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "disease": context.disease,
+            "targets": context.targets,
+            "objectives": objectives,
+            "seeds": seeds,
+            "generated": generated,
+            "retained": retained,
+            "rejected": rejected,
+            "config": config.model_dump(mode="json"),
+        }
+        trace = scientific_design_graph().run(state)
+        self._last_agent_graph_trace = trace
+        return trace
+
+    def _v1_1_report_card(
+        self,
+        candidate: GeneratedMolecule,
+        objective: GenerationObjective | None,
+        parent_seeds: list[SeedMolecule],
+    ) -> dict[str, Any]:
+        breakdown = candidate.score_breakdown
+        design_objectives = [
+            {
+                "objective_id": candidate.objective_id,
+                "target_symbol": (
+                    candidate.conditioned_targets[0]
+                    if candidate.conditioned_targets
+                    else objective.target_symbol
+                    if objective is not None
+                    else "unknown"
+                ),
+                "objective_type": (
+                    objective.objective_type
+                    if objective is not None
+                    else "target_conditioned_analog_generation"
+                ),
+                "seed_count": len(parent_seeds) or len(candidate.parent_seed_ids),
+                "constraint_fields": sorted((objective.constraints if objective else {}).keys()),
+            }
+        ]
+        oracle_scores = (
+            dict(candidate.metadata.get("oracle_scores", {}))
+            if isinstance(candidate.metadata.get("oracle_scores"), dict)
+            else {}
+        )
+        if breakdown is not None and not oracle_scores:
+            oracle_scores = {
+                "target_conditioning_score": breakdown.target_conditioning_score,
+                "objective_alignment_score": breakdown.objective_alignment_score,
+                "experiment_readiness_score": breakdown.experiment_readiness_score,
+            }
+        return {
+            "version": "1.1",
+            "generated_id": candidate.generated_id,
+            "hypothesis_boundary": {
+                "hypothesis_only": True,
+                "no_direct_experimental_evidence": True,
+                "not_activity_or_safety_evidence": True,
+            },
+            "design_objectives": design_objectives,
+            "seed_and_scaffold_selection": {
+                "seed_ids": list(candidate.parent_seed_ids),
+                "seed_names": [seed.name for seed in parent_seeds],
+                "source_policy": "evidence-backed retrieved seeds only",
+            },
+            "generator_ensemble": {
+                "method": candidate.generation_method,
+                "deterministic_validation_required": True,
+            },
+            "oracle_scores": oracle_scores,
+            "medicinal_chemistry_critique": candidate.metadata.get(
+                "medicinal_chemistry_critique",
+                {},
+            ),
+            "uncertainty": candidate.metadata.get("uncertainty", {}),
+            "experiment_readiness": candidate.metadata.get("experiment_readiness", {}),
+            "active_learning": candidate.metadata.get("active_learning", {}),
+            "traceability": {
+                "objective_id": candidate.objective_id,
+                "parent_seed_ids": list(candidate.parent_seed_ids),
+                "validation_rejection_reasons": list(candidate.validation.rejection_reasons),
+                "novelty_class": candidate.novelty.novelty_class if candidate.novelty else None,
+            },
+        }
 
     def _seed_id(self, seed: SeedMolecule) -> str:
         for key in ("chembl", "pubchem_cid", "cid", "inchikey", "name"):

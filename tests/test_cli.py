@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
@@ -21,9 +22,11 @@ from molecule_ranker.data_sources.health import AdapterHealthStatus
 from molecule_ranker.schemas import (
     AgentTrace,
     Disease,
+    EvidenceItem,
     MoleculeCandidate,
     RankingRun,
     ScoreBreakdown,
+    Target,
 )
 
 
@@ -121,6 +124,57 @@ def setup_function() -> None:
     FakeOrchestrator.last_config = None
 
 
+def _write_design_run_artifacts(run_dir: Path) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    disease = Disease(
+        input_name="Parkinson disease",
+        canonical_name="Parkinson disease",
+        synonyms=[],
+    )
+    target = Target(
+        symbol="MAOB",
+        name="Monoamine oxidase B",
+        disease_relevance_score=0.8,
+        evidence=[
+            EvidenceItem(
+                source="mock",
+                source_record_id="target-evidence-1",
+                title="Mock target evidence",
+                evidence_type="target",
+                summary="Mock target evidence for CLI tests.",
+                confidence=0.8,
+            )
+        ],
+    )
+    candidate = MoleculeCandidate(
+        name="Seed A",
+        molecule_type="small_molecule",
+        identifiers={"chembl": "CHEMBL_A"},
+        known_targets=["MAOB"],
+        chemical_metadata={"canonical_smiles": "CCOc1ccccc1"},
+        evidence=[
+            EvidenceItem(
+                source="mock",
+                source_record_id="candidate-evidence-1",
+                title="Mock candidate evidence",
+                evidence_type="molecule_target",
+                summary="Mock candidate evidence for CLI tests.",
+                confidence=0.8,
+            )
+        ],
+        score=0.7,
+    )
+    (run_dir / "candidates.json").write_text(
+        json.dumps(
+            {
+                "disease": disease.model_dump(mode="json"),
+                "targets": [target.model_dump(mode="json")],
+                "candidates": [candidate.model_dump(mode="json")],
+            }
+        )
+    )
+
+
 def test_help_commands_work():
     runner = CliRunner()
 
@@ -131,6 +185,10 @@ def test_help_commands_work():
     assert rank.exit_code == 0
     health = runner.invoke(app, ["health", "--help"])
     assert health.exit_code == 0
+    design = runner.invoke(app, ["design", "--help"])
+    assert design.exit_code == 0
+    design_loop = runner.invoke(app, ["design", "loop", "--help"])
+    assert design_loop.exit_code == 0
     command_group = get_command(app)
     assert isinstance(command_group, click.Group)
     command = command_group.commands["rank"]
@@ -260,6 +318,107 @@ def test_generate_command_help_is_registered():
     assert "--enable-feedback-prior" in options
     assert "--feedback-db-path" in options
     assert "--generate-review-dashboard" in options
+
+
+def test_design_loop_works_with_mocked_artifacts(tmp_path):
+    runner = CliRunner()
+    run_dir = tmp_path / "run"
+    _write_design_run_artifacts(run_dir)
+
+    result = runner.invoke(
+        app,
+        [
+            "design",
+            "loop",
+            "--run-dir",
+            str(run_dir),
+            "--output-dir",
+            str(run_dir),
+            "--disable-codex-planner",
+            "--generator",
+            "selfies_mutation",
+            "--budget",
+            "2",
+            "--random-seed",
+            "11",
+            "--max-retained",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert (run_dir / "design_plan.json").exists()
+    assert (run_dir / "generated_candidates_v2.json").exists()
+    assert (run_dir / "oracle_scores.json").exists()
+    assert (run_dir / "experiment_readiness.json").exists()
+    assert (run_dir / "design_loop_report.md").exists()
+    report = (run_dir / "design_loop_report.md").read_text()
+    assert "Design Loop Report" in report
+    assert "computational hypotheses" in report
+
+
+def test_design_plan_codex_planner_disabled_works(tmp_path):
+    runner = CliRunner()
+    run_dir = tmp_path / "run"
+    _write_design_run_artifacts(run_dir)
+
+    result = runner.invoke(
+        app,
+        [
+            "design",
+            "plan",
+            "--run-dir",
+            str(run_dir),
+            "--disable-codex-planner",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads((run_dir / "design_plan.json").read_text())
+    assert payload["codex_task_result_id"] == "deterministic-planner-disabled"
+    assert payload["design_objectives"]
+
+
+def test_design_plan_unsafe_codex_plan_rejected(tmp_path):
+    runner = CliRunner()
+    run_dir = tmp_path / "run"
+    _write_design_run_artifacts(run_dir)
+    (run_dir / "codex_design_plan.json").write_text(
+        json.dumps(
+            {
+                "design_plan_id": "unsafe-plan",
+                "disease_name": "Parkinson disease",
+                "target_priorities": [{"target_symbol": "MAOB"}],
+                "design_objectives": [
+                    {
+                        "objective_id": "objective-1",
+                        "target_symbol": "MAOB",
+                        "objective_type": "target_conditioned_analog_generation",
+                        "constraints": {"unsafe": "include lab protocol details"},
+                    }
+                ],
+                "seed_strategy": {},
+                "generator_strategy": {},
+                "oracle_strategy": {},
+                "diversity_strategy": {},
+                "uncertainty_strategy": {},
+                "experiment_readiness_strategy": {},
+                "risks": [],
+                "constraints": {},
+                "required_followups": [],
+                "codex_task_result_id": "codex-scientific-design-plan",
+                "metadata": {},
+            }
+        )
+    )
+
+    result = runner.invoke(
+        app,
+        ["design", "plan", "--run-dir", str(run_dir), "--use-codex-planner"],
+    )
+
+    assert result.exit_code == 1
+    assert "unsafe" in result.stderr.lower() or "unsafe" in result.stdout.lower()
 
 
 def test_assess_developability_command_help_is_registered():

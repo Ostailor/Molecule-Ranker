@@ -29,6 +29,11 @@ PlatformJobType = Literal[
     "codex_task",
     "project_dashboard",
     "artifact_export",
+    "design_plan",
+    "design_generate",
+    "design_score",
+    "design_loop",
+    "design_benchmark",
 ]
 PlatformJobStatus = Literal[
     "queued",

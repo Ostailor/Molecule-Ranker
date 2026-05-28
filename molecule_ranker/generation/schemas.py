@@ -24,7 +24,10 @@ NoveltyClass = Literal[
 class GenerationConfig(BaseModel):
     """Runtime controls for molecular generation backends."""
 
-    generation_method: str = "selfies_mutation"
+    generation_method: str = "generator_ensemble"
+    enabled_generators: list[str] | None = None
+    disabled_generators: list[str] = Field(default_factory=list)
+    generator_budget_weights: dict[str, float] = Field(default_factory=dict)
     max_seed_molecules: int = Field(default=20, ge=1)
     min_seed_score: float = Field(default=0.35, ge=0.0, le=1.0)
     min_seed_target_relevance: float = Field(default=0.25, ge=0.0, le=1.0)
@@ -129,6 +132,12 @@ class GeneratedMoleculeScoreBreakdown(BaseModel):
     property_profile_score: float = Field(ge=0.0, le=1.0)
     literature_context_score: float = Field(ge=0.0, le=1.0)
     developability_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    objective_alignment_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    generator_ensemble_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    uncertainty_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    medchem_critique_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    experiment_readiness_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    active_learning_priority_score: float = Field(default=0.0, ge=0.0, le=1.0)
     final_generation_score: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str

@@ -50,7 +50,11 @@ class DashboardRun:
 
     @property
     def generated_molecules(self) -> list[dict[str, Any]]:
-        return _records(self.payload.get("generated_molecule_hypotheses"))
+        generated = _records(self.payload.get("generated_molecule_hypotheses"))
+        generated_artifact = self.design_generation
+        generated.extend(_records(generated_artifact.get("retained_generated_molecules")))
+        generated.extend(_records(generated_artifact.get("generated_molecules")))
+        return _dedupe_records(generated, keys=("generated_id", "name", "canonical_smiles"))
 
     @property
     def experimental_results(self) -> list[dict[str, Any]]:
@@ -66,6 +70,36 @@ class DashboardRun:
     def active_learning(self) -> dict[str, Any]:
         value = self.payload.get("active_learning")
         return value if isinstance(value, dict) else {}
+
+    @property
+    def design_plan(self) -> dict[str, Any]:
+        return _load_run_json(self.run, "design_plan.json")
+
+    @property
+    def design_generation(self) -> dict[str, Any]:
+        return _load_first_run_json(
+            self.run,
+            ("generated_candidates_v2.json", "generated_candidates.json"),
+        )
+
+    @property
+    def oracle_scores(self) -> dict[str, Any]:
+        return _load_run_json(self.run, "oracle_scores.json")
+
+    @property
+    def experiment_readiness(self) -> dict[str, Any]:
+        return _load_run_json(self.run, "experiment_readiness.json")
+
+    @property
+    def design_benchmark(self) -> dict[str, Any]:
+        return _load_run_json(self.run, "benchmark_report.json")
+
+    @property
+    def design_loop_report_path(self) -> str | None:
+        path = Path(self.run.run_dir) / "design_loop_report.md"
+        if not path.exists() or not _path_is_allowed(path):
+            return None
+        return str(path)
 
 
 def visible_workspaces(
@@ -115,6 +149,26 @@ def load_run_payload(run: ProjectRun) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def dashboard_design_runs(workspace: ProjectWorkspace) -> list[DashboardRun]:
+    runs: list[DashboardRun] = []
+    for run in workspace.runs:
+        dashboard_run = load_dashboard_run(workspace, run.run_id)
+        if dashboard_run is None:
+            continue
+        if any(
+            [
+                dashboard_run.design_plan,
+                dashboard_run.design_generation,
+                dashboard_run.oracle_scores,
+                dashboard_run.experiment_readiness,
+                dashboard_run.design_benchmark,
+                dashboard_run.design_loop_report_path,
+            ]
+        ):
+            runs.append(dashboard_run)
+    return runs
 
 
 def candidate_by_name(dashboard_run: DashboardRun, candidate_name: str) -> dict[str, Any] | None:
@@ -233,6 +287,43 @@ def _records(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _dedupe_records(
+    records: list[dict[str, Any]],
+    *,
+    keys: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for record in records:
+        identity = next((str(record.get(key)) for key in keys if record.get(key)), "")
+        if not identity:
+            identity = str(len(deduped))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduped.append(record)
+    return deduped
+
+
+def _load_first_run_json(run: ProjectRun, names: tuple[str, ...]) -> dict[str, Any]:
+    for name in names:
+        payload = _load_run_json(run, name)
+        if payload:
+            return payload
+    return {}
+
+
+def _load_run_json(run: ProjectRun, name: str) -> dict[str, Any]:
+    path = Path(run.run_dir) / name
+    if not path.exists() or not _path_is_allowed(path):
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _path_is_allowed(path: Path) -> bool:

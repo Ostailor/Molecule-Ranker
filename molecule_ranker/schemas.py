@@ -268,7 +268,7 @@ class GeneratedMoleculeHypothesis(BaseModel):
     name: str
     canonical_smiles: str
     molecule_type: str = "small_molecule"
-    source: str = "SELFIES_MUTATION_CROSSOVER"
+    source: str = "generator_ensemble"
     target_symbol: str
     target_name: str | None = None
     seed_molecule_names: list[str] = Field(default_factory=list)

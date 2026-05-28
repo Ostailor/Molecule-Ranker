@@ -255,3 +255,41 @@ def test_explanations_are_clear_and_cautious():
     assert "not predicted binding affinity" in explanation
     assert "not ADMET" in explanation
     assert "no direct experimental evidence" in explanation
+
+
+def test_v1_1_score_breakdown_includes_uncertainty_readiness_and_medchem_critique():
+    generated = _generated(
+        descriptors={
+            "molecular_weight": 205.0,
+            "logp": 2.0,
+            "tpsa": 35.0,
+            "heavy_atom_count": 14.0,
+        }
+    )
+
+    scored = GeneratedMoleculeScorer().score(
+        [generated],
+        objectives=[_objective()],
+        seeds=[_seed()],
+        retained_generated=[],
+    )
+
+    breakdown = scored[0].score_breakdown
+    assert breakdown is not None
+    assert breakdown.objective_alignment_score > 0
+    assert breakdown.medchem_critique_score > 0
+    assert breakdown.uncertainty_score > 0
+    assert breakdown.experiment_readiness_score > 0
+    assert breakdown.active_learning_priority_score > 0
+    assert scored[0].metadata["scoring_policy"] == "v1.1_generated_hypothesis_only"
+    assert scored[0].metadata["experiment_readiness"]["label"] in {
+        "review_ready",
+        "needs_review",
+        "deprioritized",
+    }
+    assert scored[0].metadata["medicinal_chemistry_critique"]["scope"] == (
+        "non-protocol computational critique"
+    )
+    assert scored[0].metadata["uncertainty"]["claim_boundary"] == (
+        "uncertainty describes computational triage only"
+    )

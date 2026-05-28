@@ -33,6 +33,7 @@ from molecule_ranker.web.components import (
     candidate_by_name,
     candidate_comment_key,
     codex_outputs,
+    dashboard_design_runs,
     display_candidate_name,
     evidence_fields,
     list_admin_teams,
@@ -676,6 +677,120 @@ def active_learning_page(
     )
 
 
+@router.get("/dashboard/projects/{project_id}/design/plans", response_class=HTMLResponse)
+def design_plans_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    return _design_page(
+        project_id,
+        request,
+        user,
+        database,
+        store,
+        title="Design plans",
+        section="plans",
+    )
+
+
+@router.get("/dashboard/projects/{project_id}/design/generator-runs", response_class=HTMLResponse)
+def design_generator_runs_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    return _design_page(
+        project_id,
+        request,
+        user,
+        database,
+        store,
+        title="Generator ensemble runs",
+        section="generator_runs",
+    )
+
+
+@router.get("/dashboard/projects/{project_id}/design/oracle-scores", response_class=HTMLResponse)
+def design_oracle_scores_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    return _design_page(
+        project_id,
+        request,
+        user,
+        database,
+        store,
+        title="Oracle scores",
+        section="oracle_scores",
+    )
+
+
+@router.get("/dashboard/projects/{project_id}/design/readiness", response_class=HTMLResponse)
+def design_readiness_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    return _design_page(
+        project_id,
+        request,
+        user,
+        database,
+        store,
+        title="Experiment-readiness queue",
+        section="readiness",
+    )
+
+
+@router.get("/dashboard/projects/{project_id}/design/benchmarks", response_class=HTMLResponse)
+def design_benchmarks_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    return _design_page(
+        project_id,
+        request,
+        user,
+        database,
+        store,
+        title="Design benchmark reports",
+        section="benchmarks",
+    )
+
+
+@router.get("/dashboard/projects/{project_id}/design/active-loop", response_class=HTMLResponse)
+def design_active_loop_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    return _design_page(
+        project_id,
+        request,
+        user,
+        database,
+        store,
+        title="Active design loop history",
+        section="active_loop",
+    )
+
+
 @router.get("/dashboard/projects/{project_id}/review", response_class=HTMLResponse)
 def review_queue_page(
     project_id: str,
@@ -1066,6 +1181,33 @@ def _run_or_404(
     if dashboard_run is None:
         raise HTTPException(status_code=404, detail="Run not found.")
     return workspace, dashboard_run
+
+
+def _design_page(
+    project_id: str,
+    request: Request,
+    user: UserAccount,
+    database: PlatformDatabase,
+    store: ProjectWorkspaceStore,
+    *,
+    title: str,
+    section: str,
+) -> Response:
+    workspace = _project_or_404(store=store, project_id=project_id)
+    if not has_permission(user, "design:read", project_id=project_id, database=database):
+        raise HTTPException(status_code=403, detail="Design permission denied.")
+    return _template(
+        request,
+        "design.html",
+        {
+            "title": title,
+            "user": user,
+            "project": workspace,
+            "section": section,
+            "design_runs": dashboard_design_runs(workspace),
+            "design_jobs": PlatformJobQueue(database).list_jobs(project_id=project_id, limit=100),
+        },
+    )
 
 
 def _project_or_404(*, store: ProjectWorkspaceStore, project_id: str) -> ProjectWorkspace:

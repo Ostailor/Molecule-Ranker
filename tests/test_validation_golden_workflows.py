@@ -21,6 +21,9 @@ def test_golden_workflow_registry_defines_v1_workflows() -> None:
         "codex_backbone_workflow",
         "hosted_platform_workflow",
         "integration_sync_workflow",
+        "v1_1_design_optimization_workflow",
+        "v1_1_agentic_generation_workflow",
+        "v1_1_generator_benchmark_workflow",
     ]
     assert all(isinstance(workflow, GoldenWorkflow) for workflow in workflows)
     assert all(workflow.expected_artifacts for workflow in workflows)
@@ -33,7 +36,7 @@ def test_all_golden_workflows_run_in_deterministic_test_mode(tmp_path: Path) -> 
 
     assert report.status == "pass"
     assert report.live_validation is False
-    assert len(report.results) == 7
+    assert len(report.results) == 10
     assert {result.status for result in report.results} == {"pass"}
     assert {result.mode for result in report.results} == {"test"}
 
@@ -87,5 +90,5 @@ def test_validate_golden_cli_runs_all_workflows(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
     assert payload["status"] == "pass"
-    assert payload["workflow_count"] == 7
+    assert payload["workflow_count"] == 10
     assert payload["live_validation"] is False

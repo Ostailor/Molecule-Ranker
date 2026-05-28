@@ -43,7 +43,7 @@ class FakeCodexProvider:
 
 
 def test_version_is_v10() -> None:
-    assert __version__ == "1.0.0"
+    assert __version__ == "1.1.0"
 
 
 def test_hosted_auth_rbac_project_sharing_and_codex_queue(tmp_path: Path) -> None:
@@ -107,6 +107,78 @@ def test_hosted_auth_rbac_project_sharing_and_codex_queue(tmp_path: Path) -> Non
     assert queued.status_code == 200, queued.text
     assert queued.json()["status"] == "queued"
     assert queued.json()["job"]["job_type"] == "codex_task"
+
+
+def test_hosted_design_jobs_enforce_permission_approval_and_budget(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    assert (
+        client.post(
+            "/projects",
+            json={"workspace_id": "workspace-a", "name": "Research"},
+            headers=admin_headers,
+        ).status_code
+        == 200
+    )
+    created = client.post(
+        "/admin/users",
+        json={"email": "viewer@example.com", "password": "Viewer-password-1"},
+        headers=admin_headers,
+    )
+    viewer_id = created.json()["user"]["user_id"]
+    client.post(
+        "/projects/workspace-a/share",
+        json={"role": "viewer", "user_id": viewer_id},
+        headers=admin_headers,
+    )
+    viewer_headers = _login(client, "viewer@example.com", "Viewer-password-1")
+
+    unauthorized = client.post(
+        "/projects/workspace-a/design/jobs",
+        json={"job_type": "design_generate", "budget": 10},
+        headers=viewer_headers,
+    )
+    assert unauthorized.status_code == 403
+
+    needs_approval = client.post(
+        "/projects/workspace-a/design/jobs",
+        json={
+            "job_type": "design_generate",
+            "budget": 250,
+            "budget_limit": 250,
+            "use_codex_planner": True,
+        },
+        headers=admin_headers,
+    )
+    assert needs_approval.status_code == 403
+
+    missing_limit = client.post(
+        "/projects/workspace-a/design/jobs",
+        json={"job_type": "design_loop", "budget": 250},
+        headers=admin_headers,
+    )
+    assert missing_limit.status_code == 400
+
+    queued = client.post(
+        "/projects/workspace-a/design/jobs",
+        json={
+            "job_type": "design_loop",
+            "budget": 50,
+            "warning_acknowledged": True,
+        },
+        headers=admin_headers,
+    )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["job"]["job_type"] == "design_loop"
+    assert queued.json()["generated_molecule_label"] == "computational_hypothesis"
 
 
 def test_hosted_mode_blocks_arbitrary_codex_tasks(tmp_path: Path) -> None:

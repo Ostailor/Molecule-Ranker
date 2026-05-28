@@ -5,7 +5,7 @@
   "dependency_lock_hash": "b3f221a87872c3b0cfe8c70280814fd1c5eaf6fd1ddc20a0567d320d720de9f2",
   "git_commit": "275786e02e4feec32fd0e73383f8035c453a3144",
   "known_limitations": [
-    "V1.0 is for internal research use only and is not a clinical product.",
+    "V1.1 is for internal research use only and is not a clinical product.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules are computational hypotheses and require independent validation.",
     "Default validation uses mocked services; live API and connector validation are opt-in.",
@@ -13,7 +13,7 @@
   ],
   "name": "molecule-ranker",
   "readiness": {
-    "gate_count": 12,
+    "gate_count": 13,
     "missing_gates": [],
     "status": "pass"
   },
@@ -25,5 +25,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "1.0.0"
+  "version": "1.1.0"
 }

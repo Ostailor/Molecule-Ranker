@@ -91,6 +91,80 @@ def test_cancelled_queued_job_does_not_run(tmp_path: Path) -> None:
     assert calls == 0
 
 
+def test_unauthorized_design_run_blocked(tmp_path: Path) -> None:
+    database = PlatformDatabase(tmp_path, db_path=tmp_path / "platform.sqlite")
+    viewer = database.create_user(email="viewer@example.com", password="Viewer-password-1")
+    database.grant_project_permission(
+        project_id="project-1",
+        role="viewer",
+        actor_user_id=viewer.user_id,
+        user_id=viewer.user_id,
+    )
+
+    try:
+        PlatformJobQueue(database).enqueue(
+            job_type="design_generate",
+            requested_by=viewer,
+            project_id="project-1",
+            config_snapshot={"budget": 10},
+        )
+    except PermissionError as exc:
+        assert "design:run" in str(exc)
+    else:
+        raise AssertionError("Expected design run permission denial.")
+
+
+def test_codex_design_plan_requires_approval_for_large_generation(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+
+    try:
+        queue.enqueue(
+            job_type="design_generate",
+            requested_by=user,
+            project_id="project-1",
+            config_snapshot={
+                "budget": 250,
+                "budget_limit": 250,
+                "use_codex_planner": True,
+            },
+        )
+    except PermissionError as exc:
+        assert "Codex-produced design plans require review approval" in str(exc)
+    else:
+        raise AssertionError("Expected Codex plan approval guardrail.")
+
+    approved = queue.enqueue(
+        job_type="design_generate",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={
+            "budget": 250,
+            "budget_limit": 250,
+            "use_codex_planner": True,
+            "plan_approved": True,
+        },
+    )
+
+    assert approved.status == "queued"
+
+
+def test_design_generation_budget_limit_enforced(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+
+    try:
+        PlatformJobQueue(database).enqueue(
+            job_type="design_loop",
+            requested_by=user,
+            project_id="project-1",
+            config_snapshot={"budget": 250},
+        )
+    except Exception as exc:
+        assert "budget_limit" in str(exc)
+    else:
+        raise AssertionError("Expected budget limit guardrail.")
+
+
 def _database_with_project_user(tmp_path: Path):
     database = PlatformDatabase(tmp_path, db_path=tmp_path / "platform.sqlite")
     user = database.create_user(email="scientist@example.com", password="Scientist-password-1")

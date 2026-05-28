@@ -10,7 +10,11 @@ from molecule_ranker.platform.auth import generate_opaque_token
 from molecule_ranker.platform.dashboard import render_hosted_dashboard
 from molecule_ranker.platform.db import PlatformDatabase, PlatformDatabaseError
 from molecule_ranker.platform.jobs import PlatformJobQueue
-from molecule_ranker.platform.rbac import require_platform_admin, require_project_access
+from molecule_ranker.platform.rbac import (
+    has_permission,
+    require_platform_admin,
+    require_project_access,
+)
 from molecule_ranker.platform.schemas import RetentionPolicy, UserAccount
 from molecule_ranker.server.dependencies import current_user, platform_database, workspace_store
 from molecule_ranker.workspace.store import ProjectWorkspaceStore
@@ -57,6 +61,25 @@ class AssignmentCreateRequest(BaseModel):
     object_id: str
     run_id: str | None = None
     candidate_id: str | None = None
+
+
+class DesignJobRequest(BaseModel):
+    job_type: str
+    run_id: str | None = None
+    budget: int | None = Field(default=None, ge=0)
+    budget_limit: int | None = Field(default=None, ge=0)
+    random_seed: int | None = None
+    generator: list[str] = Field(default_factory=list)
+    use_codex_planner: bool = False
+    plan_approved: bool = False
+    warning_acknowledged: bool = False
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class DesignPlanApprovalRequest(BaseModel):
+    plan_id: str
+    run_id: str | None = None
+    approval_note: str | None = None
 
 
 class PasswordResetRequest(BaseModel):
@@ -494,6 +517,78 @@ def project_activity(
             item.model_dump(mode="json") for item in database.list_activity(project_id=project_id)
         ]
     }
+
+
+@router.post("/projects/{project_id}/design/jobs")
+def enqueue_design_job(
+    project_id: str,
+    request: DesignJobRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    config = dict(request.config)
+    if request.run_id is not None:
+        config["run_id"] = request.run_id
+    if request.budget is not None:
+        config["budget"] = request.budget
+    if request.budget_limit is not None:
+        config["budget_limit"] = request.budget_limit
+    if request.random_seed is not None:
+        config["random_seed"] = request.random_seed
+    if request.generator:
+        config["generators"] = list(request.generator)
+    config["use_codex_planner"] = request.use_codex_planner
+    config["plan_approved"] = request.plan_approved
+    config["generated_molecule_warning_acknowledged"] = request.warning_acknowledged
+    try:
+        job = PlatformJobQueue(database).enqueue(
+            job_type=request.job_type,
+            requested_by=user,
+            project_id=project_id,
+            config_snapshot=config,
+            metadata={
+                "design_v1_1": True,
+                "generated_molecule_label": "computational_hypothesis",
+                "human_review_required": True,
+            },
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": job.status,
+        "job": job.model_dump(mode="json"),
+        "generated_molecule_label": "computational_hypothesis",
+        "warning": "Generated molecules are computational hypotheses and require expert review.",
+    }
+
+
+@router.post("/projects/{project_id}/design/plans/approve")
+def approve_design_plan(
+    project_id: str,
+    request: DesignPlanApprovalRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    if not user.is_admin:
+        if not has_permission(
+            user,
+            "design:approve_plan",
+            project_id=project_id,
+            database=database,
+        ):
+            raise HTTPException(status_code=403, detail="Design plan approval denied.")
+    database.write_audit(
+        "design_plan_approved",
+        actor_user_id=user.user_id,
+        project_id=project_id,
+        summary=f"Approved design plan {request.plan_id}.",
+        object_type="design_plan",
+        object_id=request.plan_id,
+        metadata={"run_id": request.run_id, "approval_note": request.approval_note},
+    )
+    return {"approved": True, "plan_id": request.plan_id, "project_id": project_id}
 
 
 @router.get("/notifications")

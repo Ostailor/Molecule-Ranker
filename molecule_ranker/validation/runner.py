@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 from molecule_ranker.contracts import ARTIFACT_CONTRACTS, with_artifact_contract_metadata
+from molecule_ranker.validation.design import run_design_validation
 from molecule_ranker.validation.golden_workflows import (
     get_golden_workflow,
     list_golden_workflows,
@@ -671,6 +672,167 @@ def _integration_sync_workflow(
     )
 
 
+def _v1_1_agentic_generation_workflow(
+    workflow: GoldenWorkflow,
+    artifact_dir: Path,
+    mode: GoldenWorkflowMode,
+) -> None:
+    base = _base_payload(workflow, mode)
+    executed_agents = [
+        "ScientificDesignPlannerAgent",
+        "DesignObjectiveAgent",
+        "SeedAndScaffoldSelectionAgent",
+        "GeneratorEnsembleAgent",
+        "OracleScoringAgent",
+        "MedicinalChemistryCriticAgent",
+        "UncertaintyAndDiversityAgent",
+        "ExperimentReadinessAgent",
+        "ActiveLearningDesignAgent",
+    ]
+    _write_json(
+        artifact_dir,
+        "agent_graph_trace.json",
+        {
+            **base,
+            "runtime": "AgentGraph",
+            "status": "completed",
+            "executed_agents": executed_agents,
+        },
+    )
+    _write_json(
+        artifact_dir,
+        "design_objectives.json",
+        {
+            **base,
+            "objectives": [
+                {
+                    "objective_id": "synthetic-neuro:SYN1",
+                    "target_symbol": "SYN1",
+                    "claim_boundary": "design objective only",
+                }
+            ],
+        },
+    )
+    _write_json(
+        artifact_dir,
+        "seed_scaffold_selection.json",
+        {
+            **base,
+            "seed_policy": "evidence-backed retrieved seeds only",
+            "selected_seed_ids": ["SYN-SEED-1"],
+            "generated_evidence": [],
+        },
+    )
+    _write_json(
+        artifact_dir,
+        "generator_ensemble.json",
+        {
+            **base,
+            "methods": {"selfies_mutation": 2},
+            "deterministic_validation_required": True,
+        },
+    )
+    _write_json(
+        artifact_dir,
+        "oracle_scores.json",
+        {
+            **base,
+            "oracle_scores": {
+                "objective_alignment_score": 0.73,
+                "uncertainty_score": 0.44,
+                "experiment_readiness_score": 0.62,
+            },
+            "score_boundary": "computational triage only",
+        },
+    )
+    _write_json(
+        artifact_dir,
+        "generated_report_cards.json",
+        {
+            **base,
+            "report_cards": [
+                {
+                    "generated_id": "SYN-GEN-1",
+                    "hypothesis_boundary": {
+                        "hypothesis_only": True,
+                        "no_direct_experimental_evidence": True,
+                    },
+                    "traceability": {"parent_seed_ids": ["SYN-SEED-1"]},
+                    "evidence": [],
+                }
+            ],
+        },
+    )
+    _write_json(
+        artifact_dir,
+        "active_learning_design.json",
+        {
+            **base,
+            "loop": "review-prioritized computational design loop",
+            "assay_results_fabricated": False,
+            "protocol_content": False,
+        },
+    )
+
+
+def _v1_1_design_optimization_workflow(
+    workflow: GoldenWorkflow,
+    artifact_dir: Path,
+    mode: GoldenWorkflowMode,
+) -> None:
+    del workflow, mode
+    run_design_validation(output_dir=artifact_dir)
+
+
+def _v1_1_generator_benchmark_workflow(
+    workflow: GoldenWorkflow,
+    artifact_dir: Path,
+    mode: GoldenWorkflowMode,
+) -> None:
+    base = _base_payload(workflow, mode)
+    generated_payload = {
+        **base,
+        "generated_count": 2,
+        "retained_count": 2,
+        "rejected_count": 0,
+        "retained_generated_molecules": [
+            {
+                "generated_id": "SYN-GEN-1",
+                "canonical_smiles": "CCO",
+                "generation_method": "selfies_mutation",
+                "conditioned_targets": ["SYN1"],
+                "metadata": {
+                    "experiment_readiness": {"score": 0.62, "label": "needs_review"},
+                    "uncertainty": {"score": 0.44},
+                },
+            }
+        ],
+        "rejected_generated_molecules": [],
+    }
+    _write_json(artifact_dir, "synthetic_generated_candidates.json", generated_payload)
+    _write_json(
+        artifact_dir,
+        "benchmark_metrics.json",
+        {
+            **base,
+            "benchmark": "internal_generation_quality_v1_1",
+            "validity_rate": 1.0,
+            "review_ready_rate": 0.0,
+            "average_uncertainty_score": 0.44,
+            "generator_method_counts": {"selfies_mutation": 1},
+            "claim_boundary": "benchmark metrics are not biomedical evidence",
+        },
+    )
+    write_markdown_artifact(
+        artifact_dir / "benchmark_report.md",
+        "V1.1 Generator Benchmark",
+        [
+            "Synthetic validation benchmark for computational triage metrics only.",
+            "Generated structures remain hypotheses with no direct experimental evidence.",
+        ],
+    )
+
+
 WORKFLOW_WRITERS = {
     "existing_molecule_ranking": _existing_molecule_ranking,
     "generation_workflow": _generation_workflow,
@@ -679,4 +841,7 @@ WORKFLOW_WRITERS = {
     "codex_backbone_workflow": _codex_backbone_workflow,
     "hosted_platform_workflow": _hosted_platform_workflow,
     "integration_sync_workflow": _integration_sync_workflow,
+    "v1_1_design_optimization_workflow": _v1_1_design_optimization_workflow,
+    "v1_1_agentic_generation_workflow": _v1_1_agentic_generation_workflow,
+    "v1_1_generator_benchmark_workflow": _v1_1_generator_benchmark_workflow,
 }

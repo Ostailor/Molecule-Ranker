@@ -254,7 +254,7 @@ def test_orchestrator_writes_generation_artifacts_when_generation_enabled(tmp_pa
     assert payload["retained_count"] == 0
     trace_payload = json.loads((output_dir / "generation_trace.json").read_text())
     assert "seed_selection_trace" in trace_payload
-    assert trace_payload["generator_method"] == "selfies_mutation"
+    assert trace_payload["generator_method"] == "generator_ensemble"
 
 
 def test_strict_generation_failure_does_not_write_success_generation_files(tmp_path):

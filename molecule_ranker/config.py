@@ -48,7 +48,10 @@ class RankerConfig(BaseModel):
     enable_novel_generation: bool = False
     strict_generation: bool = False
     include_generated_in_main_ranking: bool = False
-    generation_method: str = "selfies_mutation"
+    generation_method: str = "generator_ensemble"
+    enabled_generators: list[str] | None = None
+    disabled_generators: list[str] = Field(default_factory=list)
+    generator_budget_weights: dict[str, float] = Field(default_factory=dict)
     generation_random_seed: int | None = None
     max_seed_molecules: int = Field(default=20, ge=1)
     max_generation_objectives: int = Field(default=10, ge=1)
@@ -192,6 +195,9 @@ class RankerConfig(BaseModel):
             "strict_generation": self.strict_generation,
             "include_generated_in_main_ranking": self.include_generated_in_main_ranking,
             "generation_method": self.generation_method,
+            "enabled_generators": self.enabled_generators,
+            "disabled_generators": list(self.disabled_generators),
+            "generator_budget_weights": dict(self.generator_budget_weights),
             "generation_random_seed": self.generation_random_seed,
             "max_seed_molecules": self.max_seed_molecules,
             "max_generation_objectives": self.max_generation_objectives,

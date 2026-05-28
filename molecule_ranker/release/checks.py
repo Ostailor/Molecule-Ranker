@@ -214,6 +214,54 @@ V1_RELEASE_GATES: tuple[ReleaseGate, ...] = (
             "molecule_ranker/release/notes.py",
         ),
     ),
+    ReleaseGate(
+        "v1-1-agentic-generation-validation",
+        "golden_workflow",
+        "V1.1 AgentGraph generation, report cards, and benchmarks are validated.",
+        (
+            "molecule_ranker/agent_graph/schemas.py",
+            "molecule_ranker/agent_graph/graph.py",
+            "molecule_ranker/agent_graph/executor.py",
+            "molecule_ranker/agent_graph/planner.py",
+            "molecule_ranker/agent_graph/audit.py",
+            "molecule_ranker/design/schemas.py",
+            "molecule_ranker/design/objective_builder.py",
+            "molecule_ranker/design/constraints.py",
+            "molecule_ranker/design/seed_scaffold_selector.py",
+            "molecule_ranker/design/oracles.py",
+            "molecule_ranker/design/uncertainty.py",
+            "molecule_ranker/design/active_design.py",
+            "molecule_ranker/design/benchmarks.py",
+            "molecule_ranker/generation/ensemble.py",
+            "molecule_ranker/generation/generators/selfies_mutation.py",
+            "molecule_ranker/generation/generators/fragment_grower.py",
+            "molecule_ranker/generation/generators/scaffold_hopper.py",
+            "molecule_ranker/generation/generators/matched_pair_transformer.py",
+            "molecule_ranker/generation/generators/reactionless_library_enum.py",
+            "molecule_ranker/agents/experiment_readiness.py",
+            "molecule_ranker/agents/medicinal_chemistry_critic.py",
+            "molecule_ranker/agents/oracle_scoring.py",
+            "molecule_ranker/agents/scientific_design.py",
+            "molecule_ranker/agents/scientific_design_planner.py",
+            "molecule_ranker/validation/golden_workflows.py",
+            "molecule_ranker/validation/runner.py",
+            "tests/test_agent_graph_runtime.py",
+            "tests/test_design_objective_builder.py",
+            "tests/test_design_seed_scaffold_selector.py",
+            "tests/test_design_oracles.py",
+            "tests/test_design_uncertainty.py",
+            "tests/test_active_design.py",
+            "tests/test_design_benchmarks.py",
+            "tests/test_generation_ensemble.py",
+            "tests/test_experiment_readiness_agent.py",
+            "tests/test_medicinal_chemistry_critic_agent.py",
+            "tests/test_oracle_scoring_agent.py",
+            "tests/test_scientific_design_planner_agent.py",
+            "tests/test_novel_molecule_agent.py",
+            "tests/test_generation_benchmark.py",
+            "tests/test_validation_golden_workflows.py",
+        ),
+    ),
 )
 
 _CRITICAL_TODO_RE = re.compile(
@@ -303,13 +351,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "1.0.0":
-        return ReleaseCheck("version", "Version is 1.0.0", "pass", "Package version is 1.0.0.")
+    if __version__ == "1.1.0":
+        return ReleaseCheck("version", "Version is 1.1.0", "pass", "Package version is 1.1.0.")
     return ReleaseCheck(
         "version",
-        "Version is 1.0.0",
+        "Version is 1.1.0",
         "fail",
-        f"Package version is {__version__}, expected 1.0.0.",
+        f"Package version is {__version__}, expected 1.1.0.",
     )
 
 

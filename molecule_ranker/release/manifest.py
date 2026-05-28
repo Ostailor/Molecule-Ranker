@@ -32,13 +32,13 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
         {
             "name": "molecule-ranker",
             "stage": RELEASE_STAGE,
-            "scope": "stabilization_validation_release_readiness_operational_quality",
+            "scope": "agentic_scientific_workflow_generated_molecule_triage_upgrade",
             "non_goals": [
-                "major new science capabilities",
                 "new model families",
-                "expanded molecule generation",
-                "expanded ADMET beyond hardening",
                 "new external integration families",
+                "biomedical truth claims from Codex",
+                "generated activity, safety, or synthesizability claims without direct evidence",
+                "synthesis instructions, lab protocols, dosing, or patient guidance",
             ],
             "scientific_integrity_constraints": list(SCIENTIFIC_INTEGRITY_CONSTRAINTS),
             "contracts": {

@@ -130,8 +130,19 @@ def test_enabled_generation_produces_generation_run_from_real_seed_candidates():
         key=lambda candidate: candidate.generation_score,
         reverse=True,
     )
+    assert generation_run.metadata["generation_method"] == "generator_ensemble"
+    assert generation_run.metadata["generator_runs"]
+    assert {
+        run["generator_name"] for run in generation_run.metadata["generator_runs"]
+    } >= {"selfies_mutation", "fragment_grower"}
     for generated in result.generated_candidates:
-        assert generated.source == "SELFIES_MUTATION_CROSSOVER"
+        assert generated.source in {
+            "selfies_mutation",
+            "fragment_grower",
+            "scaffold_hopper",
+            "matched_pair_transformer",
+            "reactionless_library_enum",
+        }
         assert generated.target_symbol == "MAOB"
         assert generated.seed_molecule_names
         assert generated.generation_score is not None
@@ -140,6 +151,7 @@ def test_enabled_generation_produces_generation_run_from_real_seed_candidates():
         assert generated.descriptors["molecular_weight"] > 0
         assert generated.descriptors["heavy_atom_count"] > 0
         assert generated.trace["origin"] == "generated"
+        assert generated.trace["generator"] == generated.source
         assert generated.trace["score_explanation"]
         assert "in_silico_hypothesis_only" in generated.warnings
         assert generated.evidence == []
@@ -150,6 +162,56 @@ def test_enabled_generation_produces_generation_run_from_real_seed_candidates():
     assert trace.metadata["seed_count"] == 2
     assert trace.metadata["generation_run"]["retained_count"] == len(generated_molecules)
     assert trace.metadata["filters"]["near_duplicate_similarity_threshold"] == 0.98
+
+
+def test_v1_1_generation_runs_through_agent_graph_and_report_cards():
+    seed_a = _seed_candidate("seed-a", "CCN(CC)CCOc1ccccc1")
+    seed_b = _seed_candidate("seed-b", "CC(C)NCC(O)c1ccc(O)c(O)c1")
+    context = PipelineContext(
+        disease_input="Parkinson disease",
+        disease=_disease(),
+        targets=[_target()],
+        candidates=[seed_a, seed_b],
+        config={
+            "enable_novel_generation": True,
+            "generated_candidate_limit": 6,
+            "generation_attempt_budget": 80,
+            "generation_random_seed": 7,
+            "descriptor_bounds_warning_only": True,
+            "near_duplicate_similarity_threshold": 0.98,
+            "duplicate_similarity_threshold": 0.995,
+        },
+    )
+
+    result = NovelMoleculeAgent().run(context)
+
+    run = result.config["generation_run"]
+    assert run.metadata["generator_version"] == "v1.1"
+    assert run.metadata["agent_graph_runtime"] == "AgentGraph"
+    assert run.metadata["generated_hypothesis_boundary"]["no_direct_activity_claims"] is True
+    assert run.metadata["agent_graph_trace"]["status"] == "completed"
+    assert run.metadata["agent_graph_trace"]["executed_agents"] == [
+        "ScientificDesignPlannerAgent",
+        "DesignObjectiveAgent",
+        "SeedAndScaffoldSelectionAgent",
+        "GeneratorEnsembleAgent",
+        "OracleScoringAgent",
+        "MedicinalChemistryCriticAgent",
+        "UncertaintyAndDiversityAgent",
+        "ExperimentReadinessAgent",
+        "ActiveLearningDesignAgent",
+    ]
+    assert result.generated_candidates
+    for hypothesis in result.generated_candidates:
+        report_card = hypothesis.trace["v1_1_report_card"]
+        assert report_card["hypothesis_boundary"]["no_direct_experimental_evidence"] is True
+        assert report_card["design_objectives"]
+        assert report_card["oracle_scores"]["experiment_readiness_score"] >= 0.0
+        assert report_card["uncertainty"]["claim_boundary"] == (
+            "uncertainty describes computational triage only"
+        )
+        critique_notes = " ".join(report_card["medicinal_chemistry_critique"]["notes"])
+        assert "synthesis" not in critique_notes.lower()
 
 
 def test_generation_without_seeds_warns_and_continues_by_default():

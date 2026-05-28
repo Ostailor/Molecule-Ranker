@@ -15,14 +15,19 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V1.0 ships molecule-ranker as a validated internal research platform MVP. "
-            "This is a stabilization, validation, release-readiness, and operational-quality "
-            "release, not a feature-expansion release.",
+            "V1.1 upgrades the V1.0 validated internal research platform with an "
+            "agentic scientific design workflow and stronger generated-molecule triage. "
+            "The validated internal research platform MVP boundary remains intact: "
+            "generated molecules are computational hypotheses, not biomedical claims.",
             "",
             "## Included",
             "",
             "- End-to-end golden workflows in deterministic mocked validation mode.",
             "- Versioned artifact and API contracts for V1.0 platform outputs.",
+            "- AgentGraph runtime for V1.1 scientific design planning and traceability.",
+            "- Generated report cards with objective alignment, uncertainty, diversity, "
+            "critique, readiness, and active-learning triage fields.",
+            "- Generator benchmark metrics for readiness, uncertainty, and generator coverage.",
             "- Security, guardrail, provenance, integration, deployment, and release checks.",
             "- Operator, admin, and user documentation with backup/restore runbooks.",
             "- Synthetic demo project artifacts clearly labeled as non-evidence examples.",

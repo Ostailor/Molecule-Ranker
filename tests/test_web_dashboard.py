@@ -29,6 +29,12 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/projects/workspace-a/runs/run-a/developability",
         "/dashboard/projects/workspace-a/runs/run-a/experiments",
         "/dashboard/projects/workspace-a/runs/run-a/active-learning",
+        "/dashboard/projects/workspace-a/design/plans",
+        "/dashboard/projects/workspace-a/design/generator-runs",
+        "/dashboard/projects/workspace-a/design/oracle-scores",
+        "/dashboard/projects/workspace-a/design/readiness",
+        "/dashboard/projects/workspace-a/design/benchmarks",
+        "/dashboard/projects/workspace-a/design/active-loop",
         "/dashboard/projects/workspace-a/activity",
         "/dashboard/projects/workspace-a/review",
         "/dashboard/projects/workspace-a/candidates/Rasagiline",
@@ -92,6 +98,27 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
             "Active learning view",
             "measure selectivity",
         ],
+        "/dashboard/projects/workspace-a/design/plans": ["Design plans", "design-plan-1"],
+        "/dashboard/projects/workspace-a/design/generator-runs": [
+            "Generator ensemble runs",
+            "Computational hypothesis",
+        ],
+        "/dashboard/projects/workspace-a/design/oracle-scores": [
+            "Oracle scores",
+            "experiment_worthiness_score",
+        ],
+        "/dashboard/projects/workspace-a/design/readiness": [
+            "Experiment-readiness queue",
+            "Computational hypothesis",
+        ],
+        "/dashboard/projects/workspace-a/design/benchmarks": [
+            "Design benchmark reports",
+            "Validity",
+        ],
+        "/dashboard/projects/workspace-a/design/active-loop": [
+            "Active design loop history",
+            "design_loop_report.md",
+        ],
         "/dashboard/projects/workspace-a/review": ["Review queue", "Rasagiline"],
     }
     for path, snippets in expectations.items():
@@ -99,6 +126,21 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
         assert response.status_code == 200, path
         for snippet in snippets:
             assert snippet in response.text, path
+
+
+def test_design_dashboard_labels_generated_molecules_as_hypotheses(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    _create_project_with_run(client, tmp_path, admin_headers, project_id="workspace-a")
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/projects/workspace-a/design/readiness")
+
+    assert response.status_code == 200
+    assert "Computational hypothesis" in response.text
+    assert "not proven activity" in response.text
+    assert "No synthesis instructions" in response.text
 
 
 def test_first_run_dashboard_explains_setup_defaults_and_project_creation(
@@ -638,6 +680,68 @@ def _write_run(run_dir: Path, *, candidate_name: str, assay_file_name: str) -> N
     }
     (run_dir / "candidates.json").write_text(json.dumps(payload))
     (run_dir / "report.md").write_text("# Report\n")
+    (run_dir / "design_plan.json").write_text(
+        json.dumps(
+            {
+                "design_plan_id": "design-plan-1",
+                "disease_name": "Parkinson disease",
+                "design_objectives": [{"objective_id": "objective-1", "target_symbol": "MAOB"}],
+                "codex_task_result_id": "deterministic-planner-disabled",
+            }
+        )
+    )
+    (run_dir / "generated_candidates_v2.json").write_text(
+        json.dumps(
+            {
+                "generated_count": 1,
+                "retained_count": 1,
+                "retained_generated_molecules": [
+                    {
+                        "generated_id": "GEN-1",
+                        "name": "Design hypothesis 1",
+                        "canonical_smiles": "CCO",
+                        "origin": "generated",
+                        "metadata": {"generator_name": "selfies_mutation"},
+                    }
+                ],
+                "warnings": [],
+            }
+        )
+    )
+    (run_dir / "oracle_scores.json").write_text(
+        json.dumps(
+            {
+                "score_name": "experiment_worthiness_score",
+                "candidate_count": 1,
+                "claim_boundary": "computational triage only",
+            }
+        )
+    )
+    (run_dir / "experiment_readiness.json").write_text(
+        json.dumps(
+            {
+                "candidates": [
+                    {
+                        "molecule_id": "GEN-1",
+                        "readiness_bucket": "ready_for_expert_review",
+                        "blocking_risks": [],
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "benchmark_report.json").write_text(
+        json.dumps(
+            {
+                "metrics": {
+                    "validity_rate": 1.0,
+                    "uniqueness_rate": 1.0,
+                    "critical_alert_rate": 0.0,
+                }
+            }
+        )
+    )
+    (run_dir / "design_loop_report.md").write_text("# design_loop_report.md\n")
 
 
 def _write_codex_output(

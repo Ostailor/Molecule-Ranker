@@ -7,6 +7,7 @@ from molecule_ranker.generation.benchmark import (
     InternalGenerationBenchmark,
     benchmark_generated_file,
 )
+from molecule_ranker.generation.ensemble import GeneratorEnsemble, GeneratorEnsembleResult
 from molecule_ranker.generation.errors import GenerationError
 from molecule_ranker.generation.schemas import (
     ChemicalValidationResult,
@@ -30,6 +31,8 @@ __all__ = [
     "GenerationConfig",
     "GenerationObjective",
     "GenerationRun",
+    "GeneratorEnsemble",
+    "GeneratorEnsembleResult",
     "InternalGenerationBenchmark",
     "NoveltyAssessment",
     "SeedMolecule",

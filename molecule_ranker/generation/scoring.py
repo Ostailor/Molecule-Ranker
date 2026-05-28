@@ -48,7 +48,17 @@ class GeneratedMoleculeScorer:
                     "metadata": {
                         **candidate.metadata,
                         "direct_generated_molecule_literature_evidence": False,
-                        "scoring_policy": "v0.3_generated_hypothesis_only",
+                        "scoring_policy": "v1.1_generated_hypothesis_only",
+                        "oracle_scores": self._oracle_scores_payload(breakdown),
+                        "medicinal_chemistry_critique": self._medchem_critique_payload(
+                            candidate,
+                            breakdown,
+                        ),
+                        "uncertainty": self._uncertainty_payload(breakdown),
+                        "experiment_readiness": self._experiment_readiness_payload(
+                            breakdown,
+                        ),
+                        "active_learning": self._active_learning_payload(breakdown),
                     },
                 }
             )
@@ -144,14 +154,53 @@ class GeneratedMoleculeScorer:
         chemical_validity_score = self._chemical_validity_score(candidate)
         property_profile_score = self._property_profile_score(candidate, objective)
         literature_context_score = self._literature_context_score(objective, parent_seeds)
-        final_score = self._clamp(
-            0.25 * target_conditioning_score
-            + 0.20 * seed_evidence_score
+        objective_alignment_score = self._objective_alignment_score(
+            target_conditioning_score,
+            property_profile_score,
+            literature_context_score,
+        )
+        generator_ensemble_score = self._generator_ensemble_score(candidate)
+        medchem_critique_score = self._medchem_critique_score(
+            candidate,
+            chemical_validity_score,
+            property_profile_score,
+        )
+        base_signal = self._clamp(
+            0.30 * chemical_validity_score
+            + 0.25 * seed_evidence_score
+            + 0.20 * target_conditioning_score
             + 0.15 * novelty_score
-            + 0.15 * diversity_score
-            + 0.10 * chemical_validity_score
             + 0.10 * property_profile_score
-            + 0.05 * literature_context_score
+        )
+        uncertainty_score = self._uncertainty_score(
+            base_signal=base_signal,
+            candidate=candidate,
+            parent_seeds=parent_seeds,
+        )
+        experiment_readiness_score = self._experiment_readiness_score(
+            chemical_validity_score=chemical_validity_score,
+            property_profile_score=property_profile_score,
+            medchem_critique_score=medchem_critique_score,
+            diversity_score=diversity_score,
+            uncertainty_score=uncertainty_score,
+        )
+        active_learning_priority_score = self._active_learning_priority_score(
+            novelty_score=novelty_score,
+            uncertainty_score=uncertainty_score,
+            target_conditioning_score=target_conditioning_score,
+            diversity_score=diversity_score,
+        )
+        final_score = self._clamp(
+            0.18 * target_conditioning_score
+            + 0.16 * seed_evidence_score
+            + 0.15 * novelty_score
+            + 0.12 * diversity_score
+            + 0.10 * chemical_validity_score
+            + 0.09 * property_profile_score
+            + 0.08 * objective_alignment_score
+            + 0.07 * medchem_critique_score
+            + 0.03 * experiment_readiness_score
+            + 0.02 * active_learning_priority_score
         )
         if candidate.novelty is not None and candidate.novelty.novelty_class in {
             "duplicate",
@@ -160,13 +209,7 @@ class GeneratedMoleculeScorer:
             final_score *= 0.45
         confidence = min(
             CONFIDENCE_CAP_V0_3,
-            self._clamp(
-                0.30 * chemical_validity_score
-                + 0.25 * seed_evidence_score
-                + 0.20 * target_conditioning_score
-                + 0.15 * novelty_score
-                + 0.10 * property_profile_score
-            ),
+            base_signal,
         )
         return GeneratedMoleculeScoreBreakdown(
             target_conditioning_score=round(target_conditioning_score, 3),
@@ -177,6 +220,12 @@ class GeneratedMoleculeScorer:
             property_profile_score=round(property_profile_score, 3),
             literature_context_score=round(literature_context_score, 3),
             developability_score=0.0,
+            objective_alignment_score=round(objective_alignment_score, 3),
+            generator_ensemble_score=round(generator_ensemble_score, 3),
+            uncertainty_score=round(uncertainty_score, 3),
+            medchem_critique_score=round(medchem_critique_score, 3),
+            experiment_readiness_score=round(experiment_readiness_score, 3),
+            active_learning_priority_score=round(active_learning_priority_score, 3),
             final_generation_score=round(final_score, 3),
             confidence=round(confidence, 3),
             explanation=self._explanation(candidate),
@@ -321,6 +370,168 @@ class GeneratedMoleculeScorer:
                 values.append(float(raw))
         return self._clamp(max(values, default=0.0))
 
+    def _objective_alignment_score(
+        self,
+        target_conditioning_score: float,
+        property_profile_score: float,
+        literature_context_score: float,
+    ) -> float:
+        return self._clamp(
+            0.55 * target_conditioning_score
+            + 0.30 * property_profile_score
+            + 0.15 * literature_context_score
+        )
+
+    def _generator_ensemble_score(self, candidate: GeneratedMolecule) -> float:
+        raw = candidate.metadata.get("generator_ensemble_weight")
+        if isinstance(raw, (int, float)):
+            return self._clamp(float(raw))
+        return 0.75 if candidate.generation_method else 0.4
+
+    def _medchem_critique_score(
+        self,
+        candidate: GeneratedMolecule,
+        chemical_validity_score: float,
+        property_profile_score: float,
+    ) -> float:
+        alert_penalty = min(0.35, 0.12 * len(candidate.validation.pains_or_alerts))
+        rejection_penalty = 0.30 if candidate.validation.rejection_reasons else 0.0
+        score = 0.55 * chemical_validity_score + 0.45 * property_profile_score
+        return self._clamp(score - alert_penalty - rejection_penalty)
+
+    def _uncertainty_score(
+        self,
+        *,
+        base_signal: float,
+        candidate: GeneratedMolecule,
+        parent_seeds: list[SeedMolecule],
+    ) -> float:
+        missing_seed_penalty = 0.20 if not parent_seeds else 0.0
+        novelty_penalty = 0.10 if (
+            candidate.novelty is not None and candidate.novelty.novelty_class == "distant"
+        ) else 0.0
+        validation_penalty = 0.20 if candidate.validation.rejection_reasons else 0.0
+        return self._clamp(
+            1.0
+            - base_signal
+            + missing_seed_penalty
+            + novelty_penalty
+            + validation_penalty
+        )
+
+    def _experiment_readiness_score(
+        self,
+        *,
+        chemical_validity_score: float,
+        property_profile_score: float,
+        medchem_critique_score: float,
+        diversity_score: float,
+        uncertainty_score: float,
+    ) -> float:
+        return self._clamp(
+            0.35 * chemical_validity_score
+            + 0.25 * property_profile_score
+            + 0.20 * medchem_critique_score
+            + 0.10 * diversity_score
+            + 0.10 * (1.0 - uncertainty_score)
+        )
+
+    def _active_learning_priority_score(
+        self,
+        *,
+        novelty_score: float,
+        uncertainty_score: float,
+        target_conditioning_score: float,
+        diversity_score: float,
+    ) -> float:
+        return self._clamp(
+            0.40 * novelty_score
+            + 0.25 * uncertainty_score
+            + 0.20 * target_conditioning_score
+            + 0.15 * diversity_score
+        )
+
+    def _oracle_scores_payload(
+        self,
+        breakdown: GeneratedMoleculeScoreBreakdown,
+    ) -> dict[str, float]:
+        return {
+            "target_conditioning_score": breakdown.target_conditioning_score,
+            "objective_alignment_score": breakdown.objective_alignment_score,
+            "novelty_score": breakdown.novelty_score,
+            "diversity_score": breakdown.diversity_score,
+            "chemical_validity_score": breakdown.chemical_validity_score,
+            "property_profile_score": breakdown.property_profile_score,
+            "medchem_critique_score": breakdown.medchem_critique_score,
+            "experiment_readiness_score": breakdown.experiment_readiness_score,
+            "active_learning_priority_score": breakdown.active_learning_priority_score,
+        }
+
+    def _medchem_critique_payload(
+        self,
+        candidate: GeneratedMolecule,
+        breakdown: GeneratedMoleculeScoreBreakdown,
+    ) -> dict[str, object]:
+        notes = [
+            "Check deterministic structure validation, alert flags, "
+            "and descriptor fit before review."
+        ]
+        if candidate.validation.pains_or_alerts:
+            notes.append("Structural alert flags lowered the critique score.")
+        if candidate.validation.rejection_reasons:
+            notes.append("Validation rejection reasons lowered the critique score.")
+        return {
+            "score": breakdown.medchem_critique_score,
+            "scope": "non-protocol computational critique",
+            "notes": notes,
+        }
+
+    def _uncertainty_payload(self, breakdown: GeneratedMoleculeScoreBreakdown) -> dict[str, object]:
+        return {
+            "score": breakdown.uncertainty_score,
+            "confidence": breakdown.confidence,
+            "drivers": [
+                "limited to deterministic generation, seed evidence, novelty, "
+                "and validation signals"
+            ],
+            "claim_boundary": "uncertainty describes computational triage only",
+        }
+
+    def _experiment_readiness_payload(
+        self,
+        breakdown: GeneratedMoleculeScoreBreakdown,
+    ) -> dict[str, object]:
+        score = breakdown.experiment_readiness_score
+        if score >= 0.70:
+            label = "review_ready"
+        elif score >= 0.45:
+            label = "needs_review"
+        else:
+            label = "deprioritized"
+        return {
+            "score": score,
+            "label": label,
+            "basis": [
+                "chemical validation",
+                "descriptor fit",
+                "non-protocol critique",
+                "diversity",
+                "uncertainty estimate",
+            ],
+            "claim_boundary": "readiness is for review queue triage only",
+        }
+
+    def _active_learning_payload(
+        self,
+        breakdown: GeneratedMoleculeScoreBreakdown,
+    ) -> dict[str, object]:
+        return {
+            "priority_score": breakdown.active_learning_priority_score,
+            "basis": ["novelty", "uncertainty", "target conditioning", "diversity"],
+            "loop": "review-prioritized computational design loop",
+            "fabricated_assay_results": False,
+        }
+
     def _explanation(self, candidate: GeneratedMolecule) -> str:
         novelty = candidate.novelty.novelty_class if candidate.novelty else "unknown novelty"
         return (
@@ -330,7 +541,9 @@ class GeneratedMoleculeScorer:
             f"Novelty class is {novelty}. Property profile uses coarse descriptor sanity "
             "relative to seed constraints and is not ADMET. Literature context, if present, "
             "comes from parent seed or target context only; the generated molecule has no "
-            "direct experimental evidence."
+            "direct experimental evidence. V1.1 adds deterministic objective alignment, "
+            "uncertainty, diversity, medicinal chemistry critique, experiment-readiness, "
+            "and learning-loop triage scores without creating activity or safety claims."
         )
 
     def _developability_score(self, assessment: DevelopabilityAssessment) -> float:

@@ -312,8 +312,13 @@ input {
   }
 
   table {
-    display: block;
-    overflow-x: auto;
+    table-layout: fixed;
+  }
+
+  th,
+  td {
+    overflow-wrap: anywhere;
+    padding: 8px 6px;
   }
 
   .form-grid {

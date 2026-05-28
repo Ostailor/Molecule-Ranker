@@ -39,7 +39,10 @@ def test_ranker_config_defaults_are_sensible_for_first_real_run():
     assert config.enable_generation is False
     assert config.strict_generation is False
     assert config.include_generated_in_main_ranking is False
-    assert config.generation_method == "selfies_mutation"
+    assert config.generation_method == "generator_ensemble"
+    assert config.enabled_generators is None
+    assert config.disabled_generators == []
+    assert config.generator_budget_weights == {}
     assert config.generation_random_seed is None
     assert config.max_seed_molecules == 20
     assert config.max_generation_objectives == 10

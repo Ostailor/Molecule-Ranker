@@ -38,6 +38,7 @@ class EncodedSeed:
 
 class SelfiesMutationGenerator:
     name = "selfies_mutation"
+    version = "1.1"
 
     def generate(
         self,
@@ -290,12 +291,36 @@ class SelfiesMutationGenerator:
             warnings=warnings,
             metadata={
                 "generator": self.name,
+                "generator_name": self.name,
+                "generator_version": self.version,
                 "operation": child["operation"],
                 "mutation_operations": child["mutation_operations"],
+                "transformation_metadata": {
+                    "transformation": "selfies_mutation_or_crossover",
+                    "documentation": (
+                        "SELFIES token mutation/crossover used to propose an in-silico "
+                        "hypothesis; this is not evidence of activity or synthesis."
+                    ),
+                    "mutation_operations": child["mutation_operations"],
+                },
                 "parent_seed_names": [parent.seed.name for parent in parents],
                 "source_seed_smiles": [parent.canonical_smiles for parent in parents],
                 "attempt": attempt,
                 "hypothesis_only": True,
+                "no_imported_evidence": True,
+                "no_synthesis_planning": True,
+                "generator_provenance": [
+                    {
+                        "generator_name": self.name,
+                        "generator_version": self.version,
+                        "parent_seed_ids": parent_seed_ids,
+                        "transformation_metadata": {
+                            "transformation": "selfies_mutation_or_crossover",
+                            "mutation_operations": child["mutation_operations"],
+                        },
+                        "warnings": warnings,
+                    }
+                ],
             },
         )
 

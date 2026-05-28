@@ -86,6 +86,45 @@ def test_benchmark_computes_generation_metrics(tmp_path):
     assert result.diversity_cluster_count == 2
 
 
+def test_v1_1_benchmark_reports_readiness_uncertainty_and_generator_coverage(tmp_path):
+    retained = [
+        {
+            **_generated("gen-1", "CCOc1ccccc1", diversity_cluster="cluster-1"),
+            "generation_method": "selfies_mutation",
+            "metadata": {
+                "experiment_readiness": {"score": 0.72, "label": "review_ready"},
+                "uncertainty": {"score": 0.41},
+            },
+        },
+        {
+            **_generated("gen-2", "CCN(CC)CC", diversity_cluster="cluster-2"),
+            "generation_method": "selfies_mutation",
+            "metadata": {
+                "experiment_readiness": {"score": 0.52, "label": "needs_review"},
+                "uncertainty": {"score": 0.65},
+            },
+        },
+    ]
+    payload = {
+        "success": True,
+        "generation_enabled": True,
+        "generated_count": 2,
+        "retained_count": 2,
+        "rejected_count": 0,
+        "retained_generated_molecules": retained,
+        "rejected_generated_molecules": [],
+    }
+    path = tmp_path / "generated_candidates.json"
+    path.write_text(json.dumps(payload))
+
+    result = benchmark_generated_file(path)
+
+    assert result.average_experiment_readiness_score == pytest.approx(0.62)
+    assert result.average_uncertainty_score == pytest.approx(0.53)
+    assert result.review_ready_rate == 0.5
+    assert result.generator_method_counts == {"selfies_mutation": 2}
+
+
 def test_benchmark_handles_empty_generated_list(tmp_path):
     path = tmp_path / "generated_candidates.json"
     path.write_text(

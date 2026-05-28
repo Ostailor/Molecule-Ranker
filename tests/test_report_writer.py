@@ -441,7 +441,7 @@ def _generation_run(
         warnings=["Generated molecules are in-silico research hypotheses only."],
         metadata={
             "generation_method": "selfies_mutation",
-            "generator_version": "v0.3",
+            "generator_version": "v1.1",
             "run_timestamp": "2026-01-02T03:04:05+00:00",
         },
     )
@@ -789,7 +789,7 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     assert generation_trace_payload["scoring_trace"]["scored_count"] == 1
     assert generation_trace_payload["random_seed"] == 17
     assert generation_trace_payload["generator_method"] == "selfies_mutation"
-    assert generation_trace_payload["generator_version"] == "v0.3"
+    assert generation_trace_payload["generator_version"] == "v1.1"
     assert generation_trace_payload["run_timestamp"] == "2026-01-02T03:04:05+00:00"
     assert generation_trace_payload["developability_filtering_trace"][
         "assessed_generated_count"
@@ -1009,6 +1009,120 @@ def test_report_writer_failed_run_does_not_create_success_report(tmp_path):
     assert not (tmp_path / "parkinson-disease" / "developability_report.md").exists()
     assert not (tmp_path / "parkinson-disease" / "developability_assessments.json").exists()
     assert not (tmp_path / "parkinson-disease" / "developability.json").exists()
+
+
+def test_generated_molecule_report_includes_v1_1_design_sections(tmp_path):
+    context = _scored_context(tmp_path)
+    generation_run = context.config["generation_run"]
+    retained = generation_run.retained[0].model_copy(
+        update={
+            "metadata": {
+                **generation_run.retained[0].metadata,
+                "scaffold_id": "scaffold-a",
+                "transformation_metadata": {
+                    "generator": "selfies_mutation",
+                    "operation": "bounded mutation",
+                },
+                "oracle_scoring": {
+                    "experiment_worthiness_score": 0.74,
+                    "component_scores": {
+                        "target_context_score": 0.8,
+                        "novelty_score": 0.7,
+                        "developability_score": 0.6,
+                    },
+                    "risk_flags": [],
+                },
+                "uncertainty": {
+                    "overall_uncertainty": 0.33,
+                    "applicability_domain": "near_domain",
+                },
+                "medicinal_chemistry_critique": {
+                    "recommended_action": "retain_for_review",
+                    "concerns": ["Review alert context."],
+                },
+                "experiment_readiness": {
+                    "score": 0.72,
+                    "bucket": "ready_for_expert_review",
+                    "blocking_risks": [],
+                    "top_reasons": ["Passed deterministic validation checks."],
+                },
+                "experiment_readiness_v1_1": {
+                    "readiness_bucket": "ready_for_expert_review",
+                    "blocking_risks": [],
+                    "top_reasons": ["Passed deterministic validation checks."],
+                    "required_checks": ["Confirm generated-hypothesis evidence separation."],
+                },
+            }
+        }
+    )
+    rejected = generation_run.rejected[0].model_copy(
+        update={
+            "metadata": {
+                **generation_run.rejected[0].metadata,
+                "scaffold_id": "scaffold-a",
+            }
+        }
+    )
+    context.config["generation_run"] = generation_run.model_copy(
+        update={
+            "generated": [retained, rejected],
+            "retained": [retained],
+            "rejected": [rejected],
+        }
+    )
+    context.config["active_learning_design"] = {
+        "selected_strategy": "balanced",
+        "suggested_focus": "close_experimental_gap",
+        "selected_candidates": [{"molecule_id": retained.generated_id}],
+        "next_design_plan": {"design_plan_id": "active-design-test"},
+    }
+
+    ReportWriterAgent().run(context)
+
+    report = (tmp_path / "parkinson-disease" / "report.md").read_text()
+    assert "## Design Plan" in report
+    assert "## Generator Ensemble Summary" in report
+    assert "## Oracle Scoring Summary" in report
+    assert "Oracle breakdown" in report
+    assert "target_context_score=0.800" in report
+    assert "## Experiment-Ready Generated Hypotheses" in report
+    assert "Design objective" in report
+    assert "Generator source" in report
+    assert "Parent seeds" in report
+    assert "Scaffold lineage" in report
+    assert "Transformations" in report
+    assert "Applicability domain" in report
+    assert "Experiment readiness bucket" in report
+    assert "Blocking risks" in report
+    assert "Why retained" in report
+    assert "Similar rejected molecules" in report
+    assert "Required expert review questions" in report
+    assert "## Rejected Generated Molecules and Reasons" in report
+    assert "GEN-MAOB-REJECTED" in report
+    assert "rdkit_parse_failed" in report
+    assert "## Active Design Recommendations" in report
+    assert "## Benchmark Summary" in report
+    assert "Generated molecules are computational hypotheses." in report
+    assert "Experiment-readiness means worth expert triage, not proven activity." in report
+    assert "No synthesis instructions are provided." in report
+    assert "No lab protocols are provided." in report
+    v1_1_section = report.split("## Design Plan", 1)[1].split("## Targets Considered", 1)[0]
+    lower_report = v1_1_section.lower()
+    forbidden = (
+        "synthesis route",
+        "reaction condition",
+        "add reagent",
+        "step-by-step",
+        "lab protocol:",
+        "proven active",
+        "proven safe",
+        "cures ",
+        "treats ",
+        "binds ",
+        "inhibits ",
+        "activates ",
+    )
+    assert not any(phrase in lower_report for phrase in forbidden)
 
 
 def test_report_writer_does_not_create_generation_artifacts_when_generation_disabled(

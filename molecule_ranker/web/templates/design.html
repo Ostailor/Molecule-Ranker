@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>{{ title }}</h1>
+  <p class="notice">
+    Generated molecules are computational hypotheses. Experiment-readiness means worth expert
+    triage, not proven activity. No synthesis instructions, dosing, protocols, or patient
+    treatment guidance are provided here.
+  </p>
+</header>
+<section class="section">
+  <h2>Design views</h2>
+  <div class="panel nav">
+    <a href="/dashboard/projects/{{ project.workspace_id }}/design/plans">Design plans</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/design/generator-runs">Generator ensemble runs</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/design/oracle-scores">Oracle scores</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/design/readiness">Experiment-readiness queue</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/design/benchmarks">Design benchmark reports</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/design/active-loop">Active design loop history</a>
+  </div>
+</section>
+{% if section == "plans" %}
+<section class="section">
+  <h2>Design plans</h2>
+  <table>
+    <thead><tr><th>Run</th><th>Plan</th><th>Disease</th><th>Objectives</th><th>Approval</th></tr></thead>
+    <tbody>
+      {% for item in design_runs %}
+        {% set plan = item.design_plan %}
+        {% if plan %}
+          <tr>
+            <td>{{ item.run.run_id }}</td>
+            <td>{{ plan.get("design_plan_id", "") }}</td>
+            <td>{{ plan.get("disease_name", "") }}</td>
+            <td>{{ plan.get("design_objectives", []) | length }}</td>
+            <td>Codex plans require review approval before large generation jobs.</td>
+          </tr>
+        {% endif %}
+      {% else %}
+        <tr><td colspan="5">No design plans recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% elif section == "generator_runs" %}
+<section class="section">
+  <h2>Generator ensemble runs</h2>
+  <table>
+    <thead><tr><th>Run</th><th>Generated</th><th>Retained</th><th>Label</th><th>Warnings</th></tr></thead>
+    <tbody>
+      {% for item in design_runs %}
+        {% set generation = item.design_generation %}
+        {% if generation %}
+          <tr>
+            <td>{{ item.run.run_id }}</td>
+            <td>{{ generation.get("generated_count", generation.get("generated_molecules", []) | length) }}</td>
+            <td>{{ generation.get("retained_count", generation.get("retained_generated_molecules", []) | length) }}</td>
+            <td><span class="tag hypothesis">Computational hypothesis</span></td>
+            <td>{{ generation.get("warnings", []) | safe_dashboard_text }}</td>
+          </tr>
+        {% endif %}
+      {% else %}
+        <tr><td colspan="5">No generator ensemble runs recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% elif section == "oracle_scores" %}
+<section class="section">
+  <h2>Oracle scores</h2>
+  <table>
+    <thead><tr><th>Run</th><th>Score name</th><th>Candidates</th><th>Claim boundary</th></tr></thead>
+    <tbody>
+      {% for item in design_runs %}
+        {% set scores = item.oracle_scores %}
+        {% if scores %}
+          <tr>
+            <td>{{ item.run.run_id }}</td>
+            <td>{{ scores.get("score_name", "experiment_worthiness_score") }}</td>
+            <td>{{ scores.get("candidate_count", scores.get("oracle_scores", []) | length) }}</td>
+            <td>{{ scores.get("claim_boundary", "computational triage only") }}</td>
+          </tr>
+        {% endif %}
+      {% else %}
+        <tr><td colspan="4">No oracle scores recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% elif section == "readiness" %}
+<section class="section">
+  <h2>Experiment-readiness queue</h2>
+  <table>
+    <thead><tr><th>Run</th><th>Molecule</th><th>Bucket</th><th>Label</th><th>Blocking risks</th></tr></thead>
+    <tbody>
+      {% for item in design_runs %}
+        {% for candidate in item.experiment_readiness.get("candidates", []) %}
+          <tr>
+            <td>{{ item.run.run_id }}</td>
+            <td>{{ candidate.get("molecule_id", "") }}</td>
+            <td>{{ candidate.get("readiness_bucket", "") }}</td>
+            <td><span class="tag hypothesis">Computational hypothesis</span></td>
+            <td>{{ candidate.get("blocking_risks", []) | safe_dashboard_text }}</td>
+          </tr>
+        {% else %}
+          {% if item.experiment_readiness %}
+            <tr><td>{{ item.run.run_id }}</td><td colspan="4">No readiness candidates retained.</td></tr>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <tr><td colspan="5">No experiment-readiness records found.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% elif section == "benchmarks" %}
+<section class="section">
+  <h2>Design benchmark reports</h2>
+  <table>
+    <thead><tr><th>Run</th><th>Validity</th><th>Uniqueness</th><th>Critical alerts</th></tr></thead>
+    <tbody>
+      {% for item in design_runs %}
+        {% set benchmark = item.design_benchmark %}
+        {% if benchmark %}
+          {% set metrics = benchmark.get("metrics", {}) %}
+          <tr>
+            <td>{{ item.run.run_id }}</td>
+            <td>{{ metrics.get("validity_rate", "") }}</td>
+            <td>{{ metrics.get("uniqueness_rate", "") }}</td>
+            <td>{{ metrics.get("critical_alert_rate", "") }}</td>
+          </tr>
+        {% endif %}
+      {% else %}
+        <tr><td colspan="4">No design benchmark reports recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="section">
+  <h2>Active design loop history</h2>
+  <table>
+    <thead><tr><th>Run</th><th>Loop report</th><th>Recent design jobs</th></tr></thead>
+    <tbody>
+      {% for item in design_runs %}
+        <tr>
+          <td>{{ item.run.run_id }}</td>
+          <td>{{ item.design_loop_report_path or "No loop report recorded" }}</td>
+          <td>
+            {% for job in design_jobs if job.job_type.startswith("design_") %}
+              {{ job.job_type }} {{ job.status }}<br>
+            {% else %}
+              No design jobs queued.
+            {% endfor %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3">No active design loop history recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

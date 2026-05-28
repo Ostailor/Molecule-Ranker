@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from molecule_ranker.validation.design import (
+    DesignGuardrailAuditReport,
+    DesignGuardrailFinding,
+    DesignValidationReport,
+    run_design_guardrail_audit,
+    run_design_validation,
+)
 from molecule_ranker.validation.golden_workflows import (
     get_golden_workflow,
     list_golden_workflows,
@@ -24,9 +31,14 @@ __all__ = [
     "GoldenWorkflowResult",
     "GuardrailAuditReport",
     "GuardrailFinding",
+    "DesignGuardrailAuditReport",
+    "DesignGuardrailFinding",
+    "DesignValidationReport",
     "check_forbidden_outputs",
     "get_golden_workflow",
     "list_golden_workflows",
+    "run_design_guardrail_audit",
+    "run_design_validation",
     "run_guardrail_audit",
     "run_golden_workflows",
 ]

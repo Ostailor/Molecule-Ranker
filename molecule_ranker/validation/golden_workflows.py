@@ -238,6 +238,118 @@ GOLDEN_WORKFLOWS: tuple[GoldenWorkflow, ...] = (
         ],
         metadata={"release": "1.0.0", "live_validation": "opt_in_only"},
     ),
+    GoldenWorkflow(
+        workflow_id="v1_1_design_optimization_workflow",
+        name="V1.1 Design Optimization Workflow",
+        description=(
+            "Existing run artifacts to design plan, seed/scaffold selection, generator ensemble, "
+            "oracle scoring, uncertainty, experiment readiness, report, and guardrail audit."
+        ),
+        inputs={
+            "run_artifacts": "synthetic_existing_run",
+            "agentic_design": True,
+            "external_services": "mocked",
+        },
+        expected_artifacts=[
+            "candidates.json",
+            "design_plan.json",
+            "seed_scaffold_selection.json",
+            "generated_candidates_v2.json",
+            "oracle_scores.json",
+            "uncertainty.json",
+            "experiment_readiness.json",
+            "generated_report.md",
+            "design_guardrail_audit.json",
+            "design_guardrail_audit.md",
+        ],
+        required_checks=[
+            "existing run artifacts are the only source for targets and evidence",
+            "Codex design plans reference only supported artifacts",
+            "generated molecules are computational hypotheses without direct evidence",
+            "uncertainty and experiment readiness are triage fields only",
+            "design guardrail audit passes",
+        ],
+        forbidden_outputs=[
+            *COMMON_FORBIDDEN_OUTPUTS,
+            "validated compound",
+            "proven activity",
+            "proven safe",
+            "fake assay result",
+        ],
+        success_criteria=[
+            "V1.1 design workflow completes deterministically from existing artifacts",
+            "seed/scaffold and generator provenance remain reviewable",
+            "no generated molecule is exported or described as validated",
+        ],
+        metadata={"release": "1.1.0", "live_validation": "opt_in_only"},
+    ),
+    GoldenWorkflow(
+        workflow_id="v1_1_agentic_generation_workflow",
+        name="V1.1 Agentic Generation Workflow",
+        description=(
+            "Disease to AgentGraph scientific design agents to generated report cards "
+            "with uncertainty, diversity, critique, and experiment-readiness triage."
+        ),
+        inputs={
+            "disease_name": "Synthetic Neuro Example",
+            "generation_enabled": True,
+            "agent_graph_runtime": "AgentGraph",
+            "external_services": "mocked",
+        },
+        expected_artifacts=[
+            "agent_graph_trace.json",
+            "design_objectives.json",
+            "seed_scaffold_selection.json",
+            "generator_ensemble.json",
+            "oracle_scores.json",
+            "generated_report_cards.json",
+            "active_learning_design.json",
+        ],
+        required_checks=[
+            "AgentGraph records every V1.1 scientific design agent",
+            "generated report cards keep hypothesis labels and source traceability",
+            "uncertainty and readiness scores are deterministic triage fields",
+            "forbidden output scan passes",
+        ],
+        forbidden_outputs=COMMON_FORBIDDEN_OUTPUTS,
+        success_criteria=[
+            "V1.1 design agents execute in a deterministic trace",
+            "generated molecules remain separate from evidence-backed molecules",
+            "no generated molecule is presented as active, safe, or validated",
+        ],
+        metadata={"release": "1.1.0", "live_validation": "opt_in_only"},
+    ),
+    GoldenWorkflow(
+        workflow_id="v1_1_generator_benchmark_workflow",
+        name="V1.1 Generator Benchmark Workflow",
+        description=(
+            "Generated artifact to benchmark metrics covering validity, novelty, "
+            "diversity, uncertainty, readiness, and generator method coverage."
+        ),
+        inputs={
+            "generated_artifact": "synthetic_generated_candidates.json",
+            "benchmark": "internal_generation_quality_v1_1",
+            "external_services": "mocked",
+        },
+        expected_artifacts=[
+            "synthetic_generated_candidates.json",
+            "benchmark_metrics.json",
+            "benchmark_report.md",
+        ],
+        required_checks=[
+            "benchmark input is synthetic and contains no assay results",
+            "readiness and uncertainty metrics are computed from artifact fields",
+            "generator method coverage is reported",
+            "forbidden output scan passes",
+        ],
+        forbidden_outputs=COMMON_FORBIDDEN_OUTPUTS,
+        success_criteria=[
+            "benchmark metrics are deterministic",
+            "benchmark report is review guidance, not evidence",
+            "no benchmark field creates biomedical claims",
+        ],
+        metadata={"release": "1.1.0", "live_validation": "opt_in_only"},
+    ),
 )
 
 

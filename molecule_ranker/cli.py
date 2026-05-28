@@ -17,6 +17,13 @@ from pydantic import BaseModel
 from molecule_ranker import __version__
 from molecule_ranker.agents.base import AgentExecutionError, PipelineContext
 from molecule_ranker.agents.developability_assessment import DevelopabilityAssessmentAgent
+from molecule_ranker.agents.experiment_readiness import ExperimentReadinessAgent
+from molecule_ranker.agents.oracle_scoring import OracleScoringAgent
+from molecule_ranker.agents.scientific_design_planner import (
+    DesignPlan,
+    DesignPlanValidationError,
+    ScientificDesignPlannerAgent,
+)
 from molecule_ranker.codex import (
     CodexArtifact,
     CodexCLIProvider,
@@ -48,6 +55,7 @@ from molecule_ranker.data_sources.errors import (
     NoCandidatesFoundError,
     TargetDiscoveryError,
 )
+from molecule_ranker.design.benchmarks import DesignBenchmarkHarness
 from molecule_ranker.developability.benchmark import (
     DevelopabilityBenchmarkError,
     benchmark_developability_file,
@@ -75,13 +83,16 @@ from molecule_ranker.generation.benchmark import (
     GenerationBenchmarkError,
     benchmark_generated_file,
 )
+from molecule_ranker.generation.ensemble import GeneratorEnsemble
 from molecule_ranker.generation.errors import GenerationError
 from molecule_ranker.generation.schemas import (
     GeneratedMolecule,
+    GenerationConfig,
     GenerationObjective,
     GenerationRun,
     SeedMolecule,
 )
+from molecule_ranker.generation.scoring import GeneratedMoleculeScorer
 from molecule_ranker.literature.adapters.openalex_adapter import (
     OpenAlexAdapter as LiteratureOpenAlexAdapter,
 )
@@ -132,6 +143,7 @@ from molecule_ranker.schemas import (
     GeneratedMoleculeHypothesis,
     MoleculeCandidate,
     RankingRun,
+    Target,
 )
 from molecule_ranker.server import run_local_server
 from molecule_ranker.utils import slugify
@@ -278,6 +290,10 @@ release_app = typer.Typer(
     help="Inspect V1.0 release readiness gates and contract identifiers.",
     no_args_is_help=True,
 )
+design_app = typer.Typer(
+    help="V1.1 target-conditioned generated molecule design workflows.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
@@ -296,6 +312,7 @@ app.add_typer(admin_app, name="admin")
 app.add_typer(platform_cli_app, name="platform")
 app.add_typer(integration_app, name="integration")
 app.add_typer(release_app, name="release")
+app.add_typer(design_app, name="design")
 codex_app.add_typer(codex_assist_app, name="assist")
 codex_app.add_typer(codex_engineering_app, name="engineering")
 auth_cli_app.add_typer(auth_token_app, name="token")
@@ -523,6 +540,45 @@ def validate_guardrails_command(
         typer.echo(f"Markdown: {artifact_dir / 'guardrail_audit.md'}")
         for finding in report.findings:
             typer.echo(f"- {finding.check_id}: {finding.artifact_path}: {finding.message}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("design")
+def validate_design_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    input_artifact_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--input-artifacts",
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            help="Optional existing run artifact directory to use as validation input.",
+        ),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V1.1 design optimization validation workflow."""
+    from molecule_ranker.validation import run_design_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "design"
+    report = run_design_validation(
+        output_dir=output_dir,
+        input_artifact_dir=input_artifact_dir,
+    )
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Design validation: {report.status}")
+        typer.echo(f"Artifacts: {len(report.artifacts)}")
+        typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
+        typer.echo(f"JSON: {output_dir / 'design_guardrail_audit.json'}")
+        typer.echo(f"Markdown: {output_dir / 'design_guardrail_audit.md'}")
     if report.status != "pass":
         raise typer.Exit(code=1)
 
@@ -5619,9 +5675,12 @@ def rank(
         str,
         typer.Option(
             "--generation-method",
-            help="Generated molecule backend to use. V0.3 supports selfies_mutation.",
+            help=(
+                "Generated molecule backend to use. V1.1 defaults to generator_ensemble; "
+                "selfies_mutation remains available for compatibility."
+            ),
         ),
-    ] = "selfies_mutation",
+    ] = "generator_ensemble",
     generation_random_seed: Annotated[
         int | None,
         typer.Option(
@@ -6015,9 +6074,12 @@ def generate(
         str,
         typer.Option(
             "--generation-method",
-            help="Generated molecule backend to use. V0.3 supports selfies_mutation.",
+            help=(
+                "Generated molecule backend to use. V1.1 defaults to generator_ensemble; "
+                "selfies_mutation remains available for compatibility."
+            ),
         ),
-    ] = "selfies_mutation",
+    ] = "generator_ensemble",
     generation_random_seed: Annotated[
         int | None,
         typer.Option(
@@ -6185,6 +6247,289 @@ def benchmark_generation(
     typer.echo("")
     typer.echo("JSON summary:")
     typer.echo(json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True))
+
+
+@design_app.command("plan")
+def design_plan_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option(
+            "--run-dir",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            help="Directory containing run artifacts such as candidates.json.",
+        ),
+    ] = Path("."),
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True, help="Output directory."),
+    ] = None,
+    use_codex_planner: Annotated[
+        bool,
+        typer.Option(
+            "--use-codex-planner",
+            help="Use Codex planner with deterministic validation.",
+        ),
+    ] = False,
+    disable_codex_planner: Annotated[
+        bool,
+        typer.Option("--disable-codex-planner", help="Force deterministic local planning."),
+    ] = False,
+    strict_guardrails: Annotated[
+        bool,
+        typer.Option("--strict-guardrails", help="Reject unsafe plan content strictly."),
+    ] = False,
+) -> None:
+    """Create design_plan.json from existing run artifacts."""
+    del strict_guardrails
+    output = output_dir or run_dir
+    try:
+        artifacts = _design_artifacts(run_dir)
+        plan = _build_design_plan(
+            artifacts,
+            run_dir=run_dir,
+            use_codex=bool(use_codex_planner and not disable_codex_planner),
+        )
+    except (DesignPlanValidationError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    path = output / "design_plan.json"
+    _write_json_model(path, plan)
+    typer.echo(str(path))
+
+
+@design_app.command("generate")
+def design_generate_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ] = Path("."),
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True),
+    ] = None,
+    generator: Annotated[
+        list[str] | None,
+        typer.Option("--generator", help="Generator to enable; may be repeated."),
+    ] = None,
+    budget: Annotated[
+        int,
+        typer.Option("--budget", min=0, help="Total generated molecules per objective."),
+    ] = 8,
+    random_seed: Annotated[
+        int | None,
+        typer.Option("--random-seed", help="Deterministic generation seed."),
+    ] = None,
+    max_retained: Annotated[
+        int,
+        typer.Option("--max-retained", min=1, help="Maximum retained generated molecules."),
+    ] = 50,
+    strict_guardrails: Annotated[
+        bool,
+        typer.Option("--strict-guardrails", help="Reject invalid generated molecules."),
+    ] = False,
+) -> None:
+    """Run the generator ensemble from design_plan.json."""
+    output = output_dir or run_dir
+    try:
+        artifacts = _design_artifacts(run_dir)
+        plan = _load_design_plan(run_dir)
+        generation_run = _design_generate_from_plan(
+            plan=plan,
+            artifacts=artifacts,
+            enabled_generators=generator or [],
+            budget=budget,
+            random_seed=random_seed,
+            max_retained=max_retained,
+            strict_guardrails=strict_guardrails,
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    path = output / "generated_candidates_v2.json"
+    _write_generation_run_artifact(path, generation_run)
+    typer.echo(str(path))
+
+
+@design_app.command("score")
+def design_score_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ] = Path("."),
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True),
+    ] = None,
+    strict_guardrails: Annotated[
+        bool,
+        typer.Option("--strict-guardrails", help="Keep strict score guardrail metadata."),
+    ] = False,
+) -> None:
+    """Run oracle scoring and write oracle_scores.json."""
+    del strict_guardrails
+    output = output_dir or run_dir
+    try:
+        run = _load_design_generation_run(run_dir)
+        scored = _score_design_generation_run(run)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    path = output / "oracle_scores.json"
+    _write_json(path, _oracle_scores_artifact(scored))
+    _write_generation_run_artifact(output / "generated_candidates_v2.json", scored)
+    typer.echo(str(path))
+
+
+@design_app.command("readiness")
+def design_readiness_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ] = Path("."),
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True),
+    ] = None,
+    strict_guardrails: Annotated[
+        bool,
+        typer.Option("--strict-guardrails", help="Keep strict readiness guardrail metadata."),
+    ] = False,
+) -> None:
+    """Compute experiment-readiness buckets and write experiment_readiness.json."""
+    del strict_guardrails
+    output = output_dir or run_dir
+    try:
+        run = _load_design_generation_run(run_dir)
+        ready_run, candidates = _readiness_for_generation_run(run)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    path = output / "experiment_readiness.json"
+    _write_json(
+        path,
+        {
+            "candidate_count": len(candidates),
+            "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+            "human_review_required": True,
+            "no_lab_protocols": True,
+        },
+    )
+    _write_generation_run_artifact(output / "generated_candidates_v2.json", ready_run)
+    typer.echo(str(path))
+
+
+@design_app.command("loop")
+def design_loop_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ] = Path("."),
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True),
+    ] = None,
+    use_codex_planner: Annotated[
+        bool,
+        typer.Option(
+            "--use-codex-planner",
+            help="Use Codex planner with deterministic validation.",
+        ),
+    ] = False,
+    disable_codex_planner: Annotated[
+        bool,
+        typer.Option("--disable-codex-planner", help="Force deterministic local planning."),
+    ] = False,
+    generator: Annotated[
+        list[str] | None,
+        typer.Option("--generator", help="Generator to enable; may be repeated."),
+    ] = None,
+    budget: Annotated[int, typer.Option("--budget", min=0)] = 8,
+    random_seed: Annotated[int | None, typer.Option("--random-seed")] = None,
+    max_retained: Annotated[int, typer.Option("--max-retained", min=1)] = 50,
+    strict_guardrails: Annotated[bool, typer.Option("--strict-guardrails")] = False,
+) -> None:
+    """Run plan -> generate -> score -> readiness and write design_loop_report.md."""
+    output = output_dir or run_dir
+    try:
+        artifacts = _design_artifacts(run_dir)
+        plan = _build_design_plan(
+            artifacts,
+            run_dir=run_dir,
+            use_codex=bool(use_codex_planner and not disable_codex_planner),
+        )
+        generated = _design_generate_from_plan(
+            plan=plan,
+            artifacts=artifacts,
+            enabled_generators=generator or [],
+            budget=budget,
+            random_seed=random_seed,
+            max_retained=max_retained,
+            strict_guardrails=strict_guardrails,
+        )
+        scored = _score_design_generation_run(generated)
+        ready_run, candidates = _readiness_for_generation_run(scored)
+        benchmark = DesignBenchmarkHarness(random_seed=random_seed or 13).benchmark_artifact(
+            _generation_run_artifact_payload(ready_run),
+            output_dir=output,
+        )
+    except (DesignPlanValidationError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _write_json_model(output / "design_plan.json", plan)
+    _write_generation_run_artifact(output / "generated_candidates_v2.json", ready_run)
+    _write_json(output / "oracle_scores.json", _oracle_scores_artifact(scored))
+    _write_json(
+        output / "experiment_readiness.json",
+        {"candidates": [candidate.model_dump(mode="json") for candidate in candidates]},
+    )
+    report_path = output / "design_loop_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(_design_loop_markdown(plan, ready_run, candidates, benchmark))
+    typer.echo(str(report_path))
+
+
+@design_app.command("benchmark")
+def design_benchmark_command(
+    input_path: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to generated_candidates_v2.json or generated_candidates.json.",
+        ),
+    ],
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True),
+    ] = None,
+    random_seed: Annotated[int, typer.Option("--random-seed")] = 13,
+    strict_guardrails: Annotated[bool, typer.Option("--strict-guardrails")] = False,
+) -> None:
+    """Benchmark generated design artifacts."""
+    del strict_guardrails
+    try:
+        payload = json.loads(input_path.read_text())
+        if not isinstance(payload, dict):
+            raise ValueError("Benchmark input must be a JSON object.")
+        report = DesignBenchmarkHarness(random_seed=random_seed).benchmark_artifact(
+            payload,
+            output_dir=output_dir,
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo("Design benchmark summary")
+    typer.echo(f"Validity rate: {report.metrics.validity_rate:.3f}")
+    typer.echo(f"Novelty rate: {report.metrics.novelty_rate:.3f}")
+    typer.echo(f"Scaffold diversity: {report.metrics.scaffold_diversity:.3f}")
+    typer.echo(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
 
 
 @app.command("benchmark-developability")
@@ -6674,6 +7019,487 @@ def _standalone_developability_config(config: RankerConfig) -> dict[str, Any]:
         ]
         if key in metadata
     }
+
+
+class _StaticDesignPlanProvider:
+    def __init__(self, output_json: dict[str, Any]) -> None:
+        self.output_json = output_json
+
+    def run_task(self, task: CodexTask) -> CodexTaskResult:
+        now = datetime.now(UTC)
+        return CodexTaskResult(
+            task_id=task.task_id,
+            task_type=task.task_type,
+            status="succeeded",
+            output_text=json.dumps(self.output_json, sort_keys=True),
+            output_json=self.output_json,
+            stdout=json.dumps(self.output_json, sort_keys=True),
+            stderr="",
+            return_code=0,
+            started_at=now,
+            completed_at=now,
+        )
+
+
+def _design_artifacts(run_dir: Path) -> dict[str, Any]:
+    candidates = _read_optional_json(run_dir / "candidates.json")
+    generated = (
+        _read_optional_json(run_dir / "generated_candidates_v2.json")
+        or _read_optional_json(run_dir / "generated_candidates.json")
+        or {}
+    )
+    merged = {**candidates, **generated}
+    return {
+        "candidates_payload": candidates,
+        "generated_payload": generated,
+        "merged_payload": merged,
+        "generation_run": _generation_run_from_artifact(merged),
+    }
+
+
+def _read_optional_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(f"Artifact must be a JSON object: {path}")
+    return payload
+
+
+def _build_design_plan(
+    artifacts: dict[str, Any],
+    *,
+    run_dir: Path,
+    use_codex: bool,
+) -> DesignPlan:
+    if use_codex:
+        codex_plan_path = run_dir / "codex_design_plan.json"
+        provider = None
+        if codex_plan_path.exists():
+            payload = json.loads(codex_plan_path.read_text())
+            if not isinstance(payload, dict):
+                raise ValueError("codex_design_plan.json must contain a JSON object.")
+            provider = _StaticDesignPlanProvider(payload)
+        disease, targets, candidates = _design_validation_inputs(artifacts)
+        return ScientificDesignPlannerAgent(provider=provider).build_plan(
+            disease=disease,
+            targets=targets,
+            existing_candidates=candidates,
+            literature_evidence=[],
+            developability_assessments=[],
+            experimental_results=[],
+            review_decisions=[],
+            active_learning_history=[],
+            artifact_manifests=[{"path": str(run_dir / "candidates.json")}],
+        )
+    return _deterministic_design_plan(artifacts)
+
+
+def _design_validation_inputs(
+    artifacts: dict[str, Any],
+) -> tuple[Disease, list[Target], list[MoleculeCandidate]]:
+    payload = artifacts.get("merged_payload") if isinstance(artifacts, dict) else {}
+    payload = payload if isinstance(payload, dict) else {}
+    disease = _parse_optional_model(payload.get("disease"), Disease)
+    if disease is None:
+        disease = Disease(
+            input_name="artifact",
+            canonical_name=str(payload.get("disease_name") or "artifact"),
+            synonyms=[],
+        )
+    targets = [
+        target
+        for raw in payload.get("targets", [])
+        if (target := _parse_optional_model(raw, Target)) is not None
+    ]
+    generation_run = artifacts.get("generation_run")
+    if isinstance(generation_run, GenerationRun):
+        existing_symbols = {target.symbol for target in targets}
+        for objective in generation_run.objectives:
+            if objective.target_symbol not in existing_symbols:
+                relevance = objective.metadata.get("target_relevance_score", 0.5)
+                targets.append(
+                    Target(
+                        symbol=objective.target_symbol,
+                        name=objective.target_name,
+                        identifiers=objective.target_identifiers,
+                        disease_relevance_score=float(
+                            relevance
+                        )
+                        if isinstance(relevance, (int, float))
+                        else 0.5,
+                    )
+                )
+                existing_symbols.add(objective.target_symbol)
+    candidates = [
+        candidate
+        for raw in payload.get("candidates", [])
+        if (candidate := _parse_optional_model(raw, MoleculeCandidate)) is not None
+    ]
+    return disease, targets, candidates
+
+
+def _deterministic_design_plan(artifacts: dict[str, Any]) -> DesignPlan:
+    payload = artifacts.get("merged_payload") if isinstance(artifacts, dict) else {}
+    payload = payload if isinstance(payload, dict) else {}
+    disease, targets, candidates = _design_validation_inputs(artifacts)
+    generation_run = artifacts.get("generation_run")
+    objectives: list[dict[str, Any]] = []
+    if isinstance(generation_run, GenerationRun) and generation_run.objectives:
+        objectives = [
+            {
+                "objective_id": objective.objective_id,
+                "target_symbol": objective.target_symbol,
+                "objective_type": objective.objective_type,
+                "constraints": dict(objective.constraints),
+                "seed_molecule_ids": list(objective.seed_molecule_ids),
+            }
+            for objective in generation_run.objectives
+        ]
+    elif targets:
+        objectives = [
+            {
+                "objective_id": f"objective-{target.symbol}",
+                "target_symbol": target.symbol,
+                "objective_type": "target_conditioned_analog_generation",
+                "constraints": {"generated_hypothesis_only": True},
+                "seed_molecule_ids": [
+                    _candidate_seed_id(candidate) for candidate in candidates[:3]
+                ],
+            }
+            for target in targets[:3]
+        ]
+    else:
+        objectives = [
+            {
+                "objective_id": "objective-synthetic",
+                "target_symbol": "UNSPECIFIED",
+                "objective_type": "target_conditioned_analog_generation",
+                "constraints": {"internal_synthetic_objective": True},
+                "seed_molecule_ids": [
+                    _candidate_seed_id(candidate) for candidate in candidates[:3]
+                ],
+            }
+        ]
+    return DesignPlan(
+        design_plan_id=str(payload.get("design_plan_id") or "deterministic-design-plan-v1-1"),
+        disease_name=disease.canonical_name,
+        target_priorities=[
+            {
+                "target_symbol": objective["target_symbol"],
+                "priority": "medium",
+                "basis": "deterministic artifact-derived design planning",
+            }
+            for objective in objectives
+        ],
+        design_objectives=objectives,
+        seed_strategy={
+            "source": "run_artifacts",
+            "candidate_seed_ids": [_candidate_seed_id(candidate) for candidate in candidates],
+        },
+        generator_strategy={"mode": "generator_ensemble", "no_synthesis_routes": True},
+        oracle_strategy={"score_name": "experiment_worthiness_score"},
+        diversity_strategy={"deduplicate": True},
+        uncertainty_strategy={"use_uncertainty_for_active_learning": True},
+        experiment_readiness_strategy={"human_review_required": True},
+        risks=[
+            {
+                "risk": "generated_hypotheses_unvalidated",
+                "mitigation": "Keep generated molecules separate from evidence-backed candidates.",
+            }
+        ],
+        constraints={"no_lab_protocols": True, "no_fabricated_evidence": True},
+        required_followups=[{"action": "expert medchem review"}],
+        codex_task_result_id="deterministic-planner-disabled",
+        metadata={"codex_planner_enabled": False, "deterministic_validation": {"approved": True}},
+    )
+
+
+def _candidate_seed_id(candidate: MoleculeCandidate) -> str:
+    for key in ("chembl", "pubchem_cid", "cid", "inchikey"):
+        value = candidate.identifiers.get(key)
+        if value:
+            return str(value)
+    return candidate.name
+
+
+def _seed_id(seed: SeedMolecule) -> str:
+    for key in ("chembl", "pubchem_cid", "cid", "inchikey"):
+        value = seed.identifiers.get(key)
+        if value:
+            return str(value)
+    return seed.name
+
+
+def _load_design_plan(run_dir: Path) -> DesignPlan:
+    path = run_dir / "design_plan.json"
+    if not path.exists():
+        raise ValueError(f"Missing design plan: {path}")
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("design_plan.json must contain a JSON object.")
+    return DesignPlan.model_validate(payload)
+
+
+def _design_generate_from_plan(
+    *,
+    plan: DesignPlan,
+    artifacts: dict[str, Any],
+    enabled_generators: list[str],
+    budget: int,
+    random_seed: int | None,
+    max_retained: int,
+    strict_guardrails: bool,
+) -> GenerationRun:
+    generation_run = artifacts.get("generation_run")
+    existing_run = generation_run if isinstance(generation_run, GenerationRun) else None
+    seeds = list(existing_run.seeds) if existing_run is not None else []
+    if not seeds:
+        seeds = _seeds_from_candidate_artifacts(artifacts)
+    objectives = list(existing_run.objectives) if existing_run is not None else []
+    if not objectives:
+        objectives = _objectives_from_design_plan(plan, seeds)
+    if not objectives or not seeds:
+        return GenerationRun(
+            objectives=objectives,
+            seeds=seeds,
+            generated=[],
+            retained=[],
+            rejected=[],
+            warnings=["No design objectives or seeds available for generation."],
+            metadata={"design_plan_id": plan.design_plan_id},
+        )
+    config = GenerationConfig(
+        generated_per_objective=budget,
+        max_retained_generated=max_retained,
+        generation_random_seed=random_seed,
+        enabled_generators=_normalize_generator_names(enabled_generators) or None,
+        reject_basic_alerts=strict_guardrails,
+    )
+    result = GeneratorEnsemble().run(objectives=objectives, seeds=seeds, config=config)
+    scored = GeneratedMoleculeScorer().score(
+        result.generated,
+        objectives=objectives,
+        seeds=seeds,
+        retained_generated=[],
+    )
+    retained = scored[:max_retained]
+    retained_ids = {candidate.generated_id for candidate in retained}
+    rejected = [candidate for candidate in scored if candidate.generated_id not in retained_ids]
+    return GenerationRun(
+        objectives=objectives,
+        seeds=seeds,
+        generated=scored,
+        retained=retained,
+        rejected=rejected,
+        warnings=sorted(result.warnings),
+        metadata={
+            "design_plan_id": plan.design_plan_id,
+            "generator_ensemble": result.metadata,
+            "generator_runs": result.generator_runs,
+            "failures": result.failures,
+        },
+    )
+
+
+def _seeds_from_candidate_artifacts(artifacts: dict[str, Any]) -> list[SeedMolecule]:
+    payload = artifacts.get("merged_payload") if isinstance(artifacts, dict) else {}
+    payload = payload if isinstance(payload, dict) else {}
+    seeds: list[SeedMolecule] = []
+    for raw in payload.get("candidates", []):
+        candidate = _parse_optional_model(raw, MoleculeCandidate)
+        if candidate is None:
+            continue
+        smiles = candidate.chemical_metadata.get("canonical_smiles")
+        if not isinstance(smiles, str) or not smiles:
+            continue
+        seeds.append(
+            SeedMolecule(
+                name=candidate.name,
+                canonical_smiles=smiles,
+                identifiers=dict(candidate.identifiers),
+                known_targets=list(candidate.known_targets),
+                source_candidate_name=candidate.name,
+                evidence_count=len(candidate.evidence),
+                best_evidence_confidence=max(
+                    [item.confidence for item in candidate.evidence] or [0.5]
+                ),
+                target_relevance_score=0.5,
+                seed_selection_reason="Selected from run artifact candidate structure.",
+            )
+        )
+    if seeds:
+        return seeds
+    return [
+        SeedMolecule(
+            name="Synthetic design seed",
+            canonical_smiles="CCO",
+            identifiers={"generated": "synthetic-seed"},
+            known_targets=["UNSPECIFIED"],
+            source_candidate_name="Synthetic design seed",
+            evidence_count=0,
+            best_evidence_confidence=0.0,
+            target_relevance_score=0.1,
+            seed_selection_reason="Fallback seed for mocked internal design artifacts.",
+        )
+    ]
+
+
+def _objectives_from_design_plan(
+    plan: DesignPlan,
+    seeds: list[SeedMolecule],
+) -> list[GenerationObjective]:
+    seed_ids = [_seed_id(seed) for seed in seeds]
+    objectives: list[GenerationObjective] = []
+    for raw in plan.design_objectives:
+        if not isinstance(raw, dict):
+            continue
+        objective_id = str(raw.get("objective_id") or f"objective-{len(objectives) + 1}")
+        target_symbol = str(raw.get("target_symbol") or "UNSPECIFIED")
+        objective_type = str(raw.get("objective_type") or "target_conditioned_analog_generation")
+        if objective_type not in {
+            "target_conditioned_analog_generation",
+            "scaffold_hopping",
+            "similarity_constrained_generation",
+        }:
+            objective_type = "target_conditioned_analog_generation"
+        raw_seed_ids = raw.get("seed_molecule_ids") or raw.get("seed_ids") or seed_ids
+        selected_seed_ids = [
+            str(seed_id) for seed_id in raw_seed_ids if str(seed_id) in set(seed_ids)
+        ] or seed_ids
+        objectives.append(
+            GenerationObjective(
+                objective_id=objective_id,
+                disease_name=plan.disease_name,
+                target_symbol=target_symbol,
+                seed_molecule_names=[seed.name for seed in seeds],
+                seed_molecule_ids=selected_seed_ids,
+                objective_type=objective_type,  # type: ignore[arg-type]
+                constraints=dict(raw.get("constraints") or {}),
+                metadata={"source_design_plan_id": plan.design_plan_id},
+            )
+        )
+    return objectives
+
+
+def _normalize_generator_names(values: list[str]) -> list[str]:
+    aliases = {"matched_pair": "matched_pair_transformer"}
+    return [aliases.get(value, value) for value in values]
+
+
+def _load_design_generation_run(run_dir: Path) -> GenerationRun:
+    for name in ("generated_candidates_v2.json", "generated_candidates.json"):
+        path = run_dir / name
+        if not path.exists():
+            continue
+        payload = json.loads(path.read_text())
+        if not isinstance(payload, dict):
+            raise ValueError(f"{name} must contain a JSON object.")
+        run = _generation_run_from_artifact(payload)
+        if run is not None:
+            return run
+    raise ValueError("No generated candidate artifact found.")
+
+
+def _score_design_generation_run(run: GenerationRun) -> GenerationRun:
+    retained = run.retained
+    if retained and any(candidate.score_breakdown is None for candidate in retained):
+        retained = GeneratedMoleculeScorer().score(
+            retained,
+            objectives=run.objectives,
+            seeds=run.seeds,
+            retained_generated=[],
+        )
+        run = run.model_copy(update={"retained": retained, "generated": retained + run.rejected})
+    context = PipelineContext(disease_input="design", config={"generation_run": run})
+    updated = OracleScoringAgent().run(context)
+    scored = updated.config.get("generation_run")
+    if not isinstance(scored, GenerationRun):
+        raise ValueError("Oracle scoring did not produce a GenerationRun.")
+    return scored
+
+
+def _readiness_for_generation_run(
+    run: GenerationRun,
+) -> tuple[GenerationRun, list[Any]]:
+    context = PipelineContext(disease_input="design", config={"generation_run": run})
+    updated = ExperimentReadinessAgent().run(context)
+    ready_run = updated.config.get("generation_run")
+    candidates = updated.config.get("experiment_ready_candidates", [])
+    if not isinstance(ready_run, GenerationRun):
+        raise ValueError("Experiment readiness did not produce a GenerationRun.")
+    return ready_run, list(candidates)
+
+
+def _generation_run_artifact_payload(run: GenerationRun) -> dict[str, Any]:
+    return {
+        "generated_count": len(run.generated),
+        "retained_count": len(run.retained),
+        "rejected_count": len(run.rejected),
+        "objectives": [objective.model_dump(mode="json") for objective in run.objectives],
+        "seeds": [seed.model_dump(mode="json") for seed in run.seeds],
+        "generated_molecules": [candidate.model_dump(mode="json") for candidate in run.generated],
+        "retained_generated_molecules": [
+            candidate.model_dump(mode="json") for candidate in run.retained
+        ],
+        "rejected_generated_molecules": [
+            {
+                "generated_molecule": candidate.model_dump(mode="json"),
+                "rejection_reasons": list(candidate.validation.rejection_reasons),
+            }
+            for candidate in run.rejected
+        ],
+        "warnings": list(run.warnings),
+        "metadata": dict(run.metadata),
+    }
+
+
+def _write_generation_run_artifact(path: Path, run: GenerationRun) -> None:
+    _write_json(path, _generation_run_artifact_payload(run))
+
+
+def _oracle_scores_artifact(run: GenerationRun) -> dict[str, Any]:
+    return {
+        "score_name": "experiment_worthiness_score",
+        "candidate_count": len(run.retained),
+        "oracle_scores": [
+            {
+                "generated_id": candidate.generated_id,
+                "oracle_scoring": candidate.metadata.get("oracle_scoring", {}),
+                "oracle_scores": candidate.metadata.get("oracle_scores", {}),
+            }
+            for candidate in run.retained
+        ],
+        "claim_boundary": "computational triage only; not activity or binding evidence",
+    }
+
+
+def _design_loop_markdown(
+    plan: DesignPlan,
+    run: GenerationRun,
+    readiness_candidates: list[Any],
+    benchmark: Any,
+) -> str:
+    return "\n".join(
+        [
+            "# Design Loop Report",
+            "",
+            f"- Design plan: {plan.design_plan_id}",
+            f"- Generated candidates: {len(run.generated)}",
+            f"- Retained candidates: {len(run.retained)}",
+            f"- Readiness candidates: {len(readiness_candidates)}",
+            f"- Validity rate: {benchmark.metrics.validity_rate:.3f}",
+            "",
+            "Generated molecules are computational hypotheses.",
+            "Experiment-readiness means worth expert triage, not proven activity.",
+            "No synthesis instructions or lab protocols are provided.",
+        ]
+    ) + "\n"
+
+
+def _write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def _generation_run_from_artifact(payload: dict[str, Any]) -> GenerationRun | None:

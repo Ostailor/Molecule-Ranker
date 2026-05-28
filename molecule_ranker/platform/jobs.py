@@ -33,6 +33,11 @@ QUEUE_JOB_TYPES = {
     "review_export",
     "dashboard_build",
     "codex_task",
+    "design_plan",
+    "design_generate",
+    "design_score",
+    "design_loop",
+    "design_benchmark",
 }
 
 JOB_PERMISSION: dict[str, str] = {
@@ -50,10 +55,17 @@ JOB_PERMISSION: dict[str, str] = {
     "review_export": "artifact:export",
     "dashboard_build": "project:read",
     "codex_task": "codex:run",
+    "design_plan": "design:run",
+    "design_generate": "design:run",
+    "design_score": "design:run",
+    "design_loop": "design:run",
+    "design_benchmark": "design:run",
 }
 
 PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
 LOGGER = logging.getLogger("molecule_ranker.jobs")
+DESIGN_LARGE_GENERATION_THRESHOLD = 100
+DESIGN_MAX_GENERATION_BUDGET = 1000
 
 
 @dataclass(frozen=True)
@@ -81,6 +93,7 @@ class PlatformJobQueue:
     ) -> PlatformJob:
         if job_type not in QUEUE_JOB_TYPES:
             raise PlatformDatabaseError(f"Unsupported job type: {job_type}")
+        config = config_snapshot or {}
         permission = JOB_PERMISSION[job_type]
         if not requested_by.is_admin and not has_permission(
             requested_by,
@@ -100,6 +113,13 @@ class PlatformJobQueue:
                 metadata={"job_type": job_type, "permission": permission},
             )
             raise PermissionError(f"Missing permission {permission}.")
+        _enforce_hosted_design_policy(
+            database=self.database,
+            requested_by=requested_by,
+            job_type=job_type,
+            project_id=project_id,
+            config_snapshot=config,
+        )
         now = _now()
         job = PlatformJob(
             job_id=f"job-{uuid.uuid4().hex[:16]}",
@@ -109,7 +129,7 @@ class PlatformJobQueue:
             job_type=job_type,  # type: ignore[arg-type]
             status="queued",
             priority=priority,  # type: ignore[arg-type]
-            config_snapshot=config_snapshot or {},
+            config_snapshot=config,
             created_at=now,
             metadata=metadata or {},
         )
@@ -449,6 +469,98 @@ class PlatformJobQueue:
             size_bytes=len(data),
         )
         return artifact_id
+
+
+def _enforce_hosted_design_policy(
+    *,
+    database: PlatformDatabase,
+    requested_by: UserAccount,
+    job_type: str,
+    project_id: str | None,
+    config_snapshot: dict[str, Any],
+) -> None:
+    if job_type in {"design_generate", "design_loop"}:
+        budget = _design_generation_budget(config_snapshot)
+        budget_limit = _design_budget_limit(config_snapshot)
+        if budget > DESIGN_MAX_GENERATION_BUDGET:
+            raise PlatformDatabaseError(
+                f"Design generation budget exceeds hosted limit {DESIGN_MAX_GENERATION_BUDGET}."
+            )
+        if budget > DESIGN_LARGE_GENERATION_THRESHOLD and budget_limit is None:
+            raise PlatformDatabaseError(
+                "Large design generation jobs require an explicit budget_limit."
+            )
+        if budget_limit is not None and budget > budget_limit:
+            raise PlatformDatabaseError("Design generation budget exceeds budget_limit.")
+        if budget > DESIGN_LARGE_GENERATION_THRESHOLD and _codex_plan_requires_approval(
+            config_snapshot
+        ):
+            raise PermissionError(
+                "Codex-produced design plans require review approval before large generation jobs."
+            )
+    if job_type == "external_export" and _exports_generated_molecules(config_snapshot):
+        if not bool(config_snapshot.get("generated_molecule_warning_acknowledged")):
+            raise PermissionError(
+                "Generated molecule export requires acknowledgement that records are "
+                "computational hypotheses."
+            )
+        if not requested_by.is_admin and not has_permission(
+            requested_by,
+            "design:export",
+            project_id=project_id,
+            database=database,
+        ):
+            raise PermissionError("Missing permission design:export.")
+
+
+def _design_generation_budget(config_snapshot: dict[str, Any]) -> int:
+    value = (
+        config_snapshot.get("budget")
+        if "budget" in config_snapshot
+        else config_snapshot.get("generation_budget")
+    )
+    if value is None:
+        value = config_snapshot.get("max_retained", 0)
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        raise PlatformDatabaseError("Design generation budget must be an integer.") from None
+
+
+def _design_budget_limit(config_snapshot: dict[str, Any]) -> int | None:
+    value = config_snapshot.get("budget_limit", config_snapshot.get("max_budget"))
+    if value is None:
+        return None
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        raise PlatformDatabaseError("Design budget_limit must be an integer.") from None
+
+
+def _codex_plan_requires_approval(config_snapshot: dict[str, Any]) -> bool:
+    codex_planned = bool(
+        config_snapshot.get("use_codex_planner")
+        or config_snapshot.get("codex_task_result_id")
+        or str(config_snapshot.get("design_plan_source", "")).lower() == "codex"
+    )
+    return codex_planned and not bool(
+        config_snapshot.get("plan_approved")
+        or config_snapshot.get("codex_plan_approved")
+        or config_snapshot.get("approval_id")
+    )
+
+
+def _exports_generated_molecules(config_snapshot: dict[str, Any]) -> bool:
+    export_type = str(config_snapshot.get("export_type") or config_snapshot.get("artifact_type"))
+    return bool(
+        config_snapshot.get("contains_generated_molecules")
+        or config_snapshot.get("generated_molecules")
+        or export_type in {
+            "generated_candidates",
+            "generated_candidates_v2",
+            "design_generated_candidates",
+        }
+    )
 
 
 class RedisJobQueueAdapter:

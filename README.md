@@ -1,19 +1,22 @@
 # molecule-ranker
 
 `molecule-ranker` is a validated internal research platform MVP for
-source-backed molecule ranking and research operations. V1.0 supports
+source-backed molecule ranking and research operations. V1.1 builds on the
+validated V1.0 platform with an AgentGraph scientific design workflow,
+generated-molecule report cards, uncertainty/diversity/readiness triage, and
+generator benchmarking. V1.0 supports
 source-backed ranking, generated molecule hypotheses, developability triage,
 literature evidence, experimental feedback, review workflows, Codex-backed
 orchestration, hosted platform mode, and guarded external integrations.
 
-V1.0 is for internal research use only. It is not a regulated clinical product.
+V1.1 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
 treat, are safe, or are active. Codex is an orchestration and summarization
 layer, not scientific truth. Data provenance, audit logs, and guardrails are
 core design principles.
 
-Given a disease name, V1.0 resolves the disease through public biomedical data
+Given a disease name, V1.1 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -23,16 +26,18 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V1.0
+## Current Scope Through V1.1
 
-V1.0 implements existing-molecule ranking, opt-in generated hypotheses,
+V1.1 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V1.0 is a stabilization, validation,
-release-readiness, and operational-quality release; it does not add major new
-science capabilities, model families, generation expansion, ADMET expansion, or
-new integration families.
+external integration primitives. V1.1 adds deterministic AgentGraph orchestration
+for generated-molecule design planning, target-conditioned objective metadata,
+seed/scaffold traceability, ensemble-aware generation metadata, oracle scoring,
+medicinal chemistry critique, uncertainty/diversity estimates,
+experiment-readiness triage, active-learning design metadata, improved generated
+report cards, generator benchmarking, and V1.1 validation workflows.
 
 - Resolve disease names to public biomedical disease entities with ambiguity handling.
 - Retrieve real disease-associated targets with richer target identifiers and metadata.
@@ -49,8 +54,9 @@ new integration families.
 - Generate target-conditioned novel candidate structures only when
   `--enable-generation` is passed or the `molecule-ranker generate` command is
   used. Generation is disabled by default.
-- Use SELFIES mutation/crossover as the first generation backend over real
-  retrieved seed molecules.
+- Use a V1.1 generator ensemble over real retrieved seed molecules, including
+  SELFIES mutation/crossover, fragment growth, scaffold hopping, matched-pair
+  transforms, and reactionless analog enumeration.
 - Use RDKit for generated-structure validation, canonicalization, descriptors,
   fingerprints, similarity, and coarse chemistry filters.
 - Assess physicochemical descriptors, drug-likeness heuristics, chemistry
@@ -113,7 +119,7 @@ new integration families.
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V1.0 does not:
+V1.1 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -196,6 +202,116 @@ The demo uses clearly fake names such as `ExampleCandidateA`,
 `ExampleTargetA`, and `ExampleDiseaseA`. It does not contain fake real-world
 biomedical claims, fake citations, fake assay outcomes, lab protocols, dosing,
 or synthesis instructions.
+
+## V1.1 Agentic Design Optimization
+
+V1.1 upgrades molecule-ranker from opt-in molecule generation to an auditable
+agentic design optimization workflow. The goal is better computational
+prioritization for expert triage, not proof that generated structures work.
+V1.1 improves generated molecule quality by combining source-grounded design
+plans, seed/scaffold selection, generator ensembles, oracle scoring,
+uncertainty estimation, medicinal chemistry critique, active-design feedback,
+and experiment-readiness ranking.
+
+Experiment-readiness means a generated molecule may be worth expert review and
+possible assay triage. It does not mean proven activity, target engagement,
+safety, efficacy, or practical synthesizability. Generated molecules remain
+computational hypotheses and are kept separate from evidence-backed existing
+molecules by default.
+
+Codex can plan, critique, summarize, and orchestrate bounded workflows, but it
+cannot create scientific truth. Codex-generated design plans must pass
+deterministic validation before execution, may only reference imported
+artifacts, and require review/approval before large hosted generation jobs.
+Experimental feedback can guide active design only through imported results
+linked to exact tested structures. Surrogate models and oracle scores are
+prioritization signals, not evidence.
+
+V1.1 design workflows do not provide synthesis instructions, synthesis routes,
+reagents, reaction conditions, lab protocols, dosing, animal-study instructions,
+patient guidance, or medical advice.
+
+Create a deterministic design plan from existing run artifacts:
+
+```bash
+uv run molecule-ranker design plan \
+  --run-dir results/parkinson-disease \
+  --disable-codex-planner \
+  --strict-guardrails
+```
+
+Run a complete local design loop. The loop writes `design_plan.json`,
+`generated_candidates_v2.json`, `oracle_scores.json`,
+`experiment_readiness.json`, `benchmark_report.json`, `benchmark_report.md`,
+and `design_loop_report.md`.
+
+```bash
+uv run molecule-ranker design loop \
+  --run-dir results/parkinson-disease \
+  --generator selfies_mutation \
+  --generator fragment_grower \
+  --generator scaffold_hopper \
+  --generator matched_pair \
+  --budget 64 \
+  --max-retained 20 \
+  --random-seed 13 \
+  --strict-guardrails
+```
+
+Benchmark generated hypotheses with internal V1.1 metrics:
+
+```bash
+uv run molecule-ranker design benchmark \
+  --input results/parkinson-disease/generated_candidates_v2.json \
+  --output-dir results/parkinson-disease \
+  --random-seed 13
+```
+
+Inspect experiment-readiness candidates for expert triage:
+
+```bash
+jq '.candidates[] | {
+  molecule_id,
+  readiness_bucket,
+  readiness_score,
+  top_reasons,
+  blocking_risks
+}' results/parkinson-disease/experiment_readiness.json
+```
+
+Run a hosted V1.1 design job. Hosted design jobs require `design:run`;
+Codex-planned or large generation jobs require plan approval and budget limits.
+Generated molecules are labeled computational hypotheses, and export requires
+`design:export` plus warning acknowledgement.
+
+```bash
+curl -X POST "$MOLECULE_RANKER_HOST/projects/project-1/design/jobs" \
+  -H "Authorization: Bearer $MOLECULE_RANKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_type": "design_loop",
+    "run_id": "run-001",
+    "budget": 64,
+    "budget_limit": 100,
+    "generator": ["selfies_mutation", "fragment_grower"],
+    "use_codex_planner": false,
+    "plan_approved": true,
+    "warning_acknowledged": true
+  }'
+```
+
+Approve a Codex-generated design plan after source-backed review:
+
+```bash
+curl -X POST "$MOLECULE_RANKER_HOST/projects/project-1/design/plans/approve" \
+  -H "Authorization: Bearer $MOLECULE_RANKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "plan_id": "design-plan-001",
+    "run_id": "run-001",
+    "approval_note": "Reviewed against source-backed run artifacts."
+  }'
+```
 
 ## V1.0 Release Readiness
 
@@ -1276,7 +1392,7 @@ jq '.retained_generated_molecules[] | {generated_id, canonical_smiles, inchi_key
   results/alzheimer-disease/generated_candidates.json
 ```
 
-Benchmark a generated-molecule artifact with internal V0.3 quality metrics:
+Benchmark a generated-molecule artifact with internal V1.1 quality metrics:
 
 ```bash
 uv run molecule-ranker benchmark-generation \
@@ -1333,7 +1449,7 @@ uv run molecule-ranker rank "Alzheimer disease" \
   --max-targets-for-literature 10 \
   --max-candidates-for-literature 20 \
   --enable-generation \
-  --generation-method selfies_mutation \
+  --generation-method generator_ensemble \
   --max-seed-molecules 20 \
   --max-generation-objectives 10 \
   --generated-per-objective 50 \
@@ -1404,8 +1520,9 @@ Important V0.6 configuration options map to typed `RankerConfig` fields:
 - `include_generated_in_main_ranking`: optionally includes generated hypotheses
   in the main ranking while preserving `origin="generated"` and no direct
   evidence.
-- `generation_method`: generated molecule backend; V0.3 supports
-  `selfies_mutation`.
+- `generation_method`: generated molecule backend; V1.1 defaults to
+  `generator_ensemble`. Individual backends such as `selfies_mutation` remain
+  available for compatibility.
 - `generation_random_seed`: optional deterministic random seed.
 - `max_seed_molecules`, `max_generation_objectives`, `generated_per_objective`,
   `max_generated_before_filtering`, `max_retained_generated`: generation size
@@ -1582,25 +1699,35 @@ V0.3 added target-conditioned novel molecule generation as an opt-in workflow.
 Generation is off for ordinary ranking runs unless the user passes
 `--enable-generation` or uses `molecule-ranker generate`.
 
-The generation pipeline:
+The V1.1 design generation pipeline:
 
-1. Selects real retrieved existing molecules as seeds.
-2. Builds generation objectives for evidence-backed targets with selected seeds.
-3. Uses SELFIES mutation, insertion, deletion, and seed-seed crossover as the
-   first backend.
-4. Decodes generated SELFIES into structures and validates them with RDKit.
-5. Canonicalizes SMILES, computes InChIKey when possible, descriptors,
+1. Builds a source-grounded design plan from existing run artifacts.
+2. Selects real retrieved existing molecules as seeds and derives scaffold
+   context with deterministic validation.
+3. Builds machine-readable design objectives for evidence-backed targets with
+   selected seeds.
+4. Allocates budget across the V1.1 generator ensemble and records independent
+   generator provenance, warnings, and failures.
+5. Treats scaffold hops, fragment growth, matched-pair transforms, and
+   reactionless analog enumeration as computational transformations only, not
+   synthesis plans or activity claims.
+6. Canonicalizes SMILES, computes InChIKey when possible, descriptors,
    fingerprints, and Tanimoto similarity.
-6. Filters invalid, duplicate, near-duplicate, distant, and chemically
+7. Filters invalid, duplicate, near-duplicate, distant, and chemically
    unreasonable structures using coarse generation rules.
-7. Scores retained generated molecules separately from existing
+8. Applies inspectable oracle scoring, uncertainty estimation, medicinal
+   chemistry critique, and experiment-readiness ranking.
+9. Reports retained and rejected generated molecules separately from existing
    evidence-backed molecules.
 
 Generated molecules are computational structures and research hypotheses. They
-are not known actives, do not have direct experimental evidence, and are not
-claimed to bind targets, modulate targets, treat disease, or be safe. Their
-scores are generation-prioritization scores based on seed and target context,
-not efficacy predictions. No fake evidence is generated for them.
+are not known actives, do not have direct experimental evidence unless exact
+imported results are linked to the exact tested structure, and are not claimed
+to bind targets, modulate targets, treat disease, or be safe.
+Experiment-readiness means worth expert triage, not proven activity. Oracle
+scores, surrogate estimates, uncertainty values, and medchem critique are
+prioritization signals, not evidence. No fake evidence is generated for
+generated molecules.
 
 V0.4 adds developability triage after generation and before evidence scoring.
 The triage uses physicochemical descriptors, drug-likeness heuristics,
@@ -1764,8 +1891,8 @@ does not write a normal `report.md` that looks successful.
 - Source records may use inconsistent identifiers and terminology.
 - Scores are heuristic and not experimentally validated.
 - No wet-lab validation is performed by this software.
-- V1.0 is for internal research use only.
-- V1.0 is not a regulated clinical product.
+- V1.1 is for internal research use only.
+- V1.1 is not a regulated clinical product.
 - Codex is an orchestration and summarization layer, not scientific truth.
 - No clinical recommendation, diagnosis, prescription, dosage, or treatment
   guidance is provided.
@@ -1785,6 +1912,8 @@ does not write a normal `report.md` that looks successful.
   invented evidence.
 - Generated molecule hypotheses are not known actives and are ranked separately
   from existing molecules by default.
+- Experiment-readiness means worth expert triage, not proven activity.
+- Surrogate models and oracle scores are prioritization signals, not evidence.
 - Developability triage and rule-based ADMET risk flags are computational
   heuristics, not validated safety evidence.
 - Docking is disabled by default and docking scores do not prove binding.
@@ -1813,10 +1942,12 @@ does not write a normal `report.md` that looks successful.
 - V0.9: external integrations for ELN/LIMS, compound registry, assay providers,
   and data warehouse.
 - V1.0: validated internal research platform MVP.
-- V1.1: usability improvements and team workflows.
-- V1.2: deeper connector coverage.
-- V1.3: advanced model evaluation and benchmark suite.
-- V2.0: validated enterprise research platform.
+- V1.1: agentic design optimization and experiment-ready molecule
+  prioritization.
+- V1.2: stronger predictive model plugin system and calibrated assay-specific
+  surrogates.
+- V1.3: advanced structure-based design and protein-ligand workflow hardening.
+- V2.0: validated enterprise discovery operating system.
 
 ## Development
 

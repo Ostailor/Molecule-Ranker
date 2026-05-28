@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +17,7 @@ from molecule_ranker.agents.base import (
 )
 from molecule_ranker.contracts import with_artifact_contract_metadata
 from molecule_ranker.data_sources.errors import NoCandidatesFoundError
+from molecule_ranker.design.benchmarks import DesignBenchmarkHarness, DesignBenchmarkReport
 from molecule_ranker.developability.schemas import (
     DevelopabilityAssessment as StructuredDevelopabilityAssessment,
 )
@@ -251,6 +252,21 @@ class ReportWriterAgent(BaseAgent):
 
         for index, candidate in enumerate(context.candidates, start=1):
             lines.extend(self._candidate_section(index, candidate, review_context))
+
+        lines.extend(["", "## Design Plan"])
+        lines.extend(self._design_plan_lines(context))
+        lines.extend(["", "## Generator Ensemble Summary"])
+        lines.extend(self._generator_ensemble_summary_lines(context))
+        lines.extend(["", "## Oracle Scoring Summary"])
+        lines.extend(self._oracle_scoring_summary_lines(context))
+        lines.extend(["", "## Experiment-Ready Generated Hypotheses"])
+        lines.extend(self._experiment_ready_generated_lines(context))
+        lines.extend(["", "## Rejected Generated Molecules and Reasons"])
+        lines.extend(self._rejected_generated_molecule_lines(context))
+        lines.extend(["", "## Active Design Recommendations"])
+        lines.extend(self._active_design_recommendation_lines(context))
+        lines.extend(["", "## Benchmark Summary"])
+        lines.extend(self._benchmark_summary_lines(context))
 
         lines.extend(["", "## Targets Considered"])
         for target in context.targets:
@@ -1080,6 +1096,10 @@ class ReportWriterAgent(BaseAgent):
                     "",
                     *self._generated_validation_lines(validation),
                     "",
+                    "V1.1 report card:",
+                    "",
+                    *self._generated_report_card_lines(candidate),
+                    "",
                     "Developability triage:",
                     "",
                     *self._candidate_developability_lines(candidate.developability_assessment),
@@ -1141,6 +1161,224 @@ class ReportWriterAgent(BaseAgent):
             )
         return lines
 
+    def _design_plan_lines(self, context: PipelineContext) -> list[str]:
+        generation_run = self._generation_run(context)
+        raw_plan = self._jsonable_mapping(
+            context.config.get("scientific_design_plan")
+            or context.config.get("design_plan")
+            or context.config.get("active_design_plan")
+        )
+        lines = [
+            "- Generated molecules are computational hypotheses.",
+            "- Experiment-readiness means worth expert triage, not proven activity.",
+            "- No synthesis instructions are provided.",
+            "- No lab protocols are provided.",
+            "- No safety or efficacy claims are made for generated hypotheses.",
+        ]
+        if raw_plan:
+            lines.extend(
+                [
+                    f"- Design plan ID: {raw_plan.get('design_plan_id', 'unavailable')}",
+                    f"- Disease: {raw_plan.get('disease_name', 'unavailable')}",
+                    f"- Objectives: {len(raw_plan.get('design_objectives', []) or [])}",
+                    (
+                        "- Required follow-ups: "
+                        f"{self._display_list(raw_plan.get('required_followups'))}"
+                    ),
+                ]
+            )
+        if generation_run is None or not generation_run.objectives:
+            lines.append("- No structured generation objectives were recorded.")
+            return lines
+        lines.extend(
+            [
+                "",
+                "| Objective ID | Target | Type | Seeds | Constraints |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for objective in generation_run.objectives:
+            lines.append(
+                "| "
+                f"{objective.objective_id} | "
+                f"{objective.target_symbol} | "
+                f"{objective.objective_type} | "
+                f"{self._display_list(objective.seed_molecule_ids)} | "
+                f"{self._display_mapping(objective.constraints)} |"
+            )
+        return lines
+
+    def _generator_ensemble_summary_lines(self, context: PipelineContext) -> list[str]:
+        generation_run = self._generation_run(context)
+        if generation_run is None:
+            return ["- No generator ensemble artifact is available."]
+        all_generated = [*generation_run.retained, *generation_run.rejected]
+        method_counts = Counter(candidate.generation_method for candidate in all_generated)
+        lines = [
+            f"- Total generator outputs considered: {len(all_generated)}",
+            f"- Retained generated hypotheses: {len(generation_run.retained)}",
+            f"- Rejected generated hypotheses: {len(generation_run.rejected)}",
+            "",
+            "| Generator | Outputs |",
+            "| --- | ---: |",
+        ]
+        if method_counts:
+            lines.extend(
+                f"| {method} | {count} |"
+                for method, count in sorted(method_counts.items())
+            )
+        else:
+            lines.append("| unavailable | 0 |")
+        return lines
+
+    def _oracle_scoring_summary_lines(self, context: PipelineContext) -> list[str]:
+        generation_run = self._generation_run(context)
+        if generation_run is None or not generation_run.retained:
+            return ["- No oracle-scored generated hypotheses are available."]
+        lines = [
+            "- Oracle breakdown is inspectable per generated hypothesis.",
+            "- Oracle scores are experiment-worthiness triage signals, not predicted efficacy.",
+            "",
+            "| Generated ID | Experiment-worthiness | Oracle breakdown | Risk flags |",
+            "| --- | ---: | --- | --- |",
+        ]
+        for candidate in generation_run.retained:
+            oracle = self._jsonable_mapping(candidate.metadata.get("oracle_scoring"))
+            score = self._numeric_or_none(oracle.get("experiment_worthiness_score"))
+            components = self._jsonable_mapping(oracle.get("component_scores"))
+            risk_flags = oracle.get("risk_flags", [])
+            lines.append(
+                "| "
+                f"{candidate.generated_id} | "
+                f"{self._format_optional_score(score)} | "
+                f"{self._display_mapping(components)} | "
+                f"{self._display_list(risk_flags)} |"
+            )
+        return lines
+
+    def _experiment_ready_generated_lines(self, context: PipelineContext) -> list[str]:
+        generation_run = self._generation_run(context)
+        if generation_run is None or not generation_run.retained:
+            return ["- No experiment-ready generated hypotheses were retained for expert triage."]
+        seed_names_by_id = self._seed_names_by_id(generation_run)
+        lines = [
+            "- Experiment-ready means worth expert triage, not ready for experiments by default.",
+            "- Human review remains required before any assay-triage decision.",
+        ]
+        for candidate in generation_run.retained:
+            objective = self._objective_for_candidate(generation_run, candidate)
+            parent_seed_names = [
+                seed_names_by_id.get(seed_id, seed_id) for seed_id in candidate.parent_seed_ids
+            ]
+            readiness = self._readiness_payload(candidate)
+            uncertainty = self._jsonable_mapping(candidate.metadata.get("uncertainty"))
+            critique = self._jsonable_mapping(
+                candidate.metadata.get("medicinal_chemistry_critique")
+            )
+            scaffold_lineage = self._display_mapping(self._scaffold_lineage(candidate))
+            transformations = self._display_mapping(self._transformation_metadata(candidate))
+            oracle_scores = self._display_mapping(self._oracle_display_payload(candidate))
+            applicability_domain = self._mapping_value(
+                uncertainty,
+                "applicability_domain",
+                "unavailable",
+            )
+            expert_questions = self._display_list(
+                self._expert_review_questions(candidate, readiness)
+            )
+            lines.extend(
+                [
+                    "",
+                    f"### {candidate.generated_id}",
+                    "",
+                    "| Field | Value |",
+                    "| --- | --- |",
+                    f"| Design objective | {self._objective_display(objective, candidate)} |",
+                    f"| Generator source | {self._generator_source(candidate)} |",
+                    f"| Parent seeds | {self._display_list(parent_seed_names)} |",
+                    f"| Scaffold lineage | {scaffold_lineage} |",
+                    f"| Transformations | {transformations} |",
+                    f"| Oracle scores | {oracle_scores} |",
+                    f"| Uncertainty | {self._display_mapping(uncertainty)} |",
+                    f"| Applicability domain | {applicability_domain} |",
+                    f"| Medchem critique | {self._display_mapping(critique)} |",
+                    f"| Experiment readiness bucket | {self._readiness_bucket(readiness)} |",
+                    f"| Blocking risks | {self._display_list(readiness.get('blocking_risks'))} |",
+                    f"| Why retained | {self._why_retained(candidate, readiness)} |",
+                    (
+                        "| Similar rejected molecules | "
+                        f"{self._similar_rejected_summary(candidate, generation_run.rejected)} |"
+                    ),
+                    (
+                        "| Required expert review questions | "
+                        f"{expert_questions} |"
+                    ),
+                ]
+            )
+        return lines
+
+    def _rejected_generated_molecule_lines(self, context: PipelineContext) -> list[str]:
+        generation_run = self._generation_run(context)
+        if generation_run is None or not generation_run.rejected:
+            return ["- No rejected generated molecules were recorded."]
+        lines = [
+            (
+                "| Generated ID | Canonical SMILES | Generator | "
+                "Rejection reasons | Similarity context |"
+            ),
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for candidate in generation_run.rejected:
+            lines.append(
+                "| "
+                f"{candidate.generated_id} | "
+                f"`{candidate.canonical_smiles}` | "
+                f"{candidate.generation_method} | "
+                f"{self._display_list(self._generated_rejection_reasons(candidate))} | "
+                f"{self._rejected_similarity_context(candidate)} |"
+            )
+        return lines
+
+    def _active_design_recommendation_lines(self, context: PipelineContext) -> list[str]:
+        active_design = self._jsonable_mapping(context.config.get("active_learning_design"))
+        if not active_design:
+            active_design = self._jsonable_mapping(context.config.get("active_design"))
+        if not active_design:
+            return [
+                "- No active-design recommendation artifact is available.",
+                "- Next-round focus should remain expert-reviewed and non-protocol.",
+            ]
+        next_plan = self._jsonable_mapping(active_design.get("next_design_plan"))
+        selected_count = len(active_design.get("selected_candidates", []) or [])
+        return [
+            f"- Selected strategy: {active_design.get('selected_strategy', 'unavailable')}",
+            f"- Suggested focus: {active_design.get('suggested_focus', 'unavailable')}",
+            f"- Selected generated hypotheses: {selected_count}",
+            f"- Next design plan ID: {next_plan.get('design_plan_id', 'unavailable')}",
+            "- Recommendations are high-level computational planning signals only.",
+        ]
+
+    def _benchmark_summary_lines(self, context: PipelineContext) -> list[str]:
+        report = self._design_benchmark_report(context)
+        if report is None:
+            return ["- Benchmark summary unavailable for generated hypotheses."]
+        metrics = report.metrics
+        return [
+            f"- Benchmark: {report.benchmark_name}",
+            f"- Validity rate: {metrics.validity_rate:.3f}",
+            f"- Uniqueness rate: {metrics.uniqueness_rate:.3f}",
+            f"- Novelty rate: {metrics.novelty_rate:.3f}",
+            f"- Diversity: {metrics.diversity:.3f}",
+            f"- Scaffold diversity: {metrics.scaffold_diversity:.3f}",
+            f"- Developability pass rate: {metrics.developability_pass_rate:.3f}",
+            f"- Critical alert rate: {metrics.critical_alert_rate:.3f}",
+            (
+                "- Experiment-readiness distribution: "
+                f"{self._display_mapping(metrics.experiment_readiness_distribution)}"
+            ),
+            f"- Generator contribution: {self._display_mapping(metrics.generator_contribution)}",
+        ]
+
     def _generated_score_breakdown_lines(
         self,
         candidate: GeneratedMolecule,
@@ -1156,8 +1394,67 @@ class ReportWriterAgent(BaseAgent):
             f"| Chemical validity | {breakdown.chemical_validity_score:.3f} |",
             f"| Property profile | {breakdown.property_profile_score:.3f} |",
             f"| Literature context | {breakdown.literature_context_score:.3f} |",
+            f"| Objective alignment | {breakdown.objective_alignment_score:.3f} |",
+            f"| Generator ensemble | {breakdown.generator_ensemble_score:.3f} |",
+            f"| Uncertainty | {breakdown.uncertainty_score:.3f} |",
+            f"| Medicinal chemistry critique | {breakdown.medchem_critique_score:.3f} |",
+            f"| Experiment readiness | {breakdown.experiment_readiness_score:.3f} |",
+            f"| Learning-loop priority | {breakdown.active_learning_priority_score:.3f} |",
             f"| Final generation score | {breakdown.final_generation_score:.3f} |",
             f"| Confidence | {breakdown.confidence:.3f} |",
+        ]
+
+    def _generated_report_card_lines(self, candidate: GeneratedMolecule) -> list[str]:
+        metadata = candidate.metadata
+        readiness = metadata.get("experiment_readiness")
+        readiness_v1_1 = metadata.get("experiment_readiness_v1_1")
+        uncertainty = metadata.get("uncertainty")
+        critique = metadata.get("medicinal_chemistry_critique")
+        active_learning = metadata.get("active_learning")
+        oracle = metadata.get("oracle_scoring")
+        oracle_scores = metadata.get("oracle_scores")
+        transformation = self._transformation_metadata(candidate)
+        blocking_risks = (
+            readiness_v1_1.get("blocking_risks", [])
+            if isinstance(readiness_v1_1, dict)
+            else readiness.get("blocking_risks", [])
+            if isinstance(readiness, dict)
+            else []
+        )
+        readiness_label = (
+            readiness.get("bucket") or readiness.get("label", "unavailable")
+            if isinstance(readiness, dict)
+            else "unavailable"
+        )
+        readiness_score = (
+            readiness.get("score", 0.0) if isinstance(readiness, dict) else 0.0
+        )
+        uncertainty_score = (
+            uncertainty.get("score", 0.0) if isinstance(uncertainty, dict) else 0.0
+        )
+        critique_score = critique.get("score", 0.0) if isinstance(critique, dict) else 0.0
+        active_score = (
+            active_learning.get("priority_score", 0.0)
+            if isinstance(active_learning, dict)
+            else 0.0
+        )
+        oracle_display = oracle_scores if isinstance(oracle_scores, dict) else oracle
+        return [
+            "| Card field | Value |",
+            "| --- | --- |",
+            f"| Experiment-readiness label | {readiness_label} |",
+            f"| Experiment-readiness score | {float(readiness_score):.3f} |",
+            f"| Uncertainty score | {float(uncertainty_score):.3f} |",
+            f"| Critique score | {float(critique_score):.3f} |",
+            f"| Learning-loop priority | {float(active_score):.3f} |",
+            (
+                "| Applicability domain | "
+                f"{self._mapping_value(uncertainty, 'applicability_domain', 'unavailable')} |"
+            ),
+            f"| Blocking risks | {self._display_list(blocking_risks)} |",
+            f"| Oracle scores | {self._display_mapping(oracle_display)} |",
+            f"| Transformations | {self._display_mapping(transformation)} |",
+            "| Boundary | Hypothesis-only computational triage; no direct evidence. |",
         ]
 
     def _generated_descriptor_lines(self, descriptors: dict[str, Any]) -> list[str]:
@@ -1239,6 +1536,233 @@ class ReportWriterAgent(BaseAgent):
                     names[str(value)] = seed.name
             names[seed.name] = seed.name
         return names
+
+    def _objective_for_candidate(
+        self,
+        generation_run: GenerationRun,
+        candidate: GeneratedMolecule,
+    ) -> Any | None:
+        return next(
+            (
+                objective
+                for objective in generation_run.objectives
+                if objective.objective_id == candidate.objective_id
+            ),
+            None,
+        )
+
+    def _objective_display(self, objective: Any | None, candidate: GeneratedMolecule) -> str:
+        if objective is None:
+            return candidate.objective_id
+        return (
+            f"{objective.objective_id} / {objective.target_symbol} / "
+            f"{objective.objective_type}"
+        )
+
+    def _generator_source(self, candidate: GeneratedMolecule) -> str:
+        metadata = candidate.metadata
+        generator_name = metadata.get("generator_name") or candidate.generation_method
+        generator_version = metadata.get("generator_version") or metadata.get(
+            "generator_method_version",
+        )
+        if generator_version:
+            return f"{generator_name} ({generator_version})"
+        return str(generator_name)
+
+    def _scaffold_lineage(self, candidate: GeneratedMolecule) -> dict[str, Any]:
+        metadata = candidate.metadata
+        provenance = self._jsonable_mapping(metadata.get("seed_scaffold_provenance"))
+        return {
+            "scaffold_id": metadata.get("scaffold_id")
+            or provenance.get("candidate_scaffold_id")
+            or candidate.diversity_cluster,
+            "parent_seed_ids": list(candidate.parent_seed_ids),
+            "source_scaffold_ids": provenance.get("seed_scaffold_ids", []),
+            "diversity_cluster": candidate.diversity_cluster,
+        }
+
+    def _transformation_metadata(self, candidate: GeneratedMolecule) -> dict[str, Any]:
+        metadata = candidate.metadata
+        for key in (
+            "transformation_metadata",
+            "transformation",
+            "transformations",
+            "generator_transformation",
+        ):
+            value = metadata.get(key)
+            if isinstance(value, dict):
+                return dict(value)
+            if isinstance(value, list):
+                return {"items": value}
+        if metadata.get("operation"):
+            return {"operation": metadata["operation"]}
+        return {}
+
+    def _oracle_display_payload(self, candidate: GeneratedMolecule) -> dict[str, Any]:
+        oracle = self._jsonable_mapping(candidate.metadata.get("oracle_scoring"))
+        oracle_scores = self._jsonable_mapping(candidate.metadata.get("oracle_scores"))
+        component_scores = self._jsonable_mapping(oracle.get("component_scores"))
+        if component_scores:
+            return component_scores
+        if oracle_scores:
+            return oracle_scores
+        score = oracle.get("experiment_worthiness_score")
+        return {"experiment_worthiness_score": score} if score is not None else {}
+
+    def _readiness_payload(self, candidate: GeneratedMolecule) -> dict[str, Any]:
+        readiness_v1_1 = self._jsonable_mapping(candidate.metadata.get("experiment_readiness_v1_1"))
+        if readiness_v1_1:
+            return readiness_v1_1
+        return self._jsonable_mapping(candidate.metadata.get("experiment_readiness"))
+
+    def _readiness_bucket(self, readiness: Mapping[str, Any]) -> str:
+        value = (
+            readiness.get("readiness_bucket")
+            or readiness.get("bucket")
+            or readiness.get("label")
+        )
+        return str(value) if value not in (None, "") else "unavailable"
+
+    def _why_retained(
+        self,
+        candidate: GeneratedMolecule,
+        readiness: Mapping[str, Any],
+    ) -> str:
+        reasons = readiness.get("top_reasons") or readiness.get("basis")
+        if isinstance(reasons, list) and reasons:
+            return self._display_list(reasons)
+        if candidate.validation.rejection_reasons:
+            return "Retained status requires review because validation reasons are present."
+        return "Retained by deterministic generation scoring and validation filters."
+
+    def _similar_rejected_summary(
+        self,
+        candidate: GeneratedMolecule,
+        rejected: Sequence[GeneratedMolecule],
+    ) -> str:
+        similar: list[str] = []
+        parent_seed_ids = set(candidate.parent_seed_ids)
+        for rejected_candidate in rejected:
+            same_cluster = (
+                candidate.diversity_cluster is not None
+                and candidate.diversity_cluster == rejected_candidate.diversity_cluster
+            )
+            shared_seed = bool(parent_seed_ids.intersection(rejected_candidate.parent_seed_ids))
+            same_objective = candidate.objective_id == rejected_candidate.objective_id
+            if same_cluster or shared_seed or same_objective:
+                reasons = self._generated_rejection_reasons(rejected_candidate)
+                similar.append(f"{rejected_candidate.generated_id}: {', '.join(reasons)}")
+        return "; ".join(similar[:4]) if similar else "None recorded."
+
+    def _expert_review_questions(
+        self,
+        candidate: GeneratedMolecule,
+        readiness: Mapping[str, Any],
+    ) -> list[str]:
+        checks = readiness.get("required_checks")
+        if isinstance(checks, list) and checks:
+            return [str(item) for item in checks]
+        questions = [
+            "Is the generated-hypothesis label and evidence separation clear?",
+            (
+                "Do deterministic validation, alert, and developability flags require "
+                "deprioritization?"
+            ),
+            "Are oracle, uncertainty, and readiness signals sufficient for expert review?",
+        ]
+        if candidate.novelty is not None:
+            questions.append("Is the novelty context useful without uncontrolled risk?")
+        return questions
+
+    def _rejected_similarity_context(self, candidate: GeneratedMolecule) -> str:
+        novelty = candidate.novelty
+        if novelty is None:
+            return "No novelty context recorded."
+        return (
+            f"nearest existing={novelty.nearest_existing_name or 'unavailable'}, "
+            f"seed similarity={novelty.max_similarity_to_seed:.3f}, "
+            f"existing similarity={novelty.max_similarity_to_existing:.3f}"
+        )
+
+    def _design_benchmark_report(self, context: PipelineContext) -> DesignBenchmarkReport | None:
+        configured = context.config.get("design_benchmark_report") or context.config.get(
+            "benchmark_report"
+        )
+        if isinstance(configured, DesignBenchmarkReport):
+            return configured
+        configured_mapping = self._jsonable_mapping(configured)
+        if configured_mapping:
+            try:
+                return DesignBenchmarkReport.model_validate(configured_mapping)
+            except ValueError:
+                return None
+        generation_run = self._generation_run(context)
+        if generation_run is None:
+            return None
+        artifact = {
+            "generated_count": len(generation_run.generated),
+            "retained_count": len(generation_run.retained),
+            "rejected_count": len(generation_run.rejected),
+            "retained_generated_molecules": [
+                candidate.model_dump(mode="json") for candidate in generation_run.retained
+            ],
+            "rejected_generated_molecules": [
+                {
+                    "generated_molecule": candidate.model_dump(mode="json"),
+                    "rejection_reasons": self._generated_rejection_reasons(candidate),
+                }
+                for candidate in generation_run.rejected
+            ],
+            "metadata": dict(generation_run.metadata),
+        }
+        return DesignBenchmarkHarness(random_seed=13).benchmark_artifact(artifact)
+
+    def _jsonable_mapping(self, value: Any) -> dict[str, Any]:
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
+        if isinstance(value, Mapping):
+            return dict(value)
+        return {}
+
+    def _mapping_value(self, value: Any, key: str, default: str) -> str:
+        if isinstance(value, Mapping):
+            raw = value.get(key, default)
+            return str(raw) if raw not in (None, "") else default
+        return default
+
+    def _numeric_or_none(self, value: Any) -> float | None:
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def _format_optional_score(self, value: float | None) -> str:
+        return f"{value:.3f}" if value is not None else "unavailable"
+
+    def _display_list(self, value: Any) -> str:
+        if isinstance(value, list):
+            items = [str(item) for item in value if str(item).strip()]
+        elif isinstance(value, tuple | set):
+            items = [str(item) for item in value if str(item).strip()]
+        elif value not in (None, ""):
+            items = [str(value)]
+        else:
+            items = []
+        return ", ".join(items) if items else "None recorded."
+
+    def _display_mapping(self, value: Any) -> str:
+        mapping = self._jsonable_mapping(value)
+        if not mapping:
+            return "None recorded."
+        parts = []
+        for key, raw in sorted(mapping.items()):
+            if isinstance(raw, float):
+                rendered = f"{raw:.3f}"
+            elif isinstance(raw, int | str | bool):
+                rendered = str(raw)
+            elif raw in (None, "", [], {}):
+                rendered = "none"
+            else:
+                rendered = json.dumps(raw, sort_keys=True)
+            parts.append(f"{key}={rendered}")
+        return "; ".join(parts)
 
     def _format_descriptor(
         self,
@@ -2812,6 +3336,7 @@ class ReportWriterAgent(BaseAgent):
                     else candidate.trace.get("developability_assessment")
                 ),
                 "developability_summary": self._generated_hypothesis_summary(candidate),
+                "v1_1_report_card": candidate.trace.get("v1_1_report_card"),
             }
             for candidate in context.generated_candidates
         ]
@@ -2825,6 +3350,33 @@ class ReportWriterAgent(BaseAgent):
                 developability
             ),
             "rejection_reasons": self._generated_rejection_reasons(candidate),
+            "v1_1_report_card": candidate.metadata.get("v1_1_report_card")
+            or self._generated_molecule_report_card_payload(candidate),
+        }
+
+    def _generated_molecule_report_card_payload(
+        self,
+        candidate: GeneratedMolecule,
+    ) -> dict[str, Any]:
+        return {
+            "version": "1.1",
+            "generated_id": candidate.generated_id,
+            "hypothesis_boundary": {
+                "hypothesis_only": True,
+                "no_direct_experimental_evidence": True,
+            },
+            "oracle_scores": candidate.metadata.get("oracle_scores", {}),
+            "medicinal_chemistry_critique": candidate.metadata.get(
+                "medicinal_chemistry_critique",
+                {},
+            ),
+            "uncertainty": candidate.metadata.get("uncertainty", {}),
+            "experiment_readiness": candidate.metadata.get("experiment_readiness", {}),
+            "active_learning": candidate.metadata.get("active_learning", {}),
+            "traceability": {
+                "objective_id": candidate.objective_id,
+                "parent_seed_ids": list(candidate.parent_seed_ids),
+            },
         }
 
     def _candidate_developability_summary(
