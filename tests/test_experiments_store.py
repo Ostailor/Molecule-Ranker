@@ -110,6 +110,50 @@ def test_store_creates_schema_and_imports_results_with_audit(tmp_path):
     } <= table_names
 
 
+def test_store_persists_model_cards_manifests_metrics_and_predictions(tmp_path):
+    store = ExperimentalResultStore(tmp_path / "experiments.sqlite")
+    model_id = "model-binding-affinity-1"
+    model_card = {
+        "artifact_kind": "model_card",
+        "model_id": model_id,
+        "endpoint_name": "binding_affinity",
+        "evidence_boundary": "not_experimental_evidence",
+    }
+    training_manifest = {
+        "artifact_kind": "training_manifest",
+        "model_id": model_id,
+        "labels_excluded_from_manifest": True,
+    }
+    metrics = {"artifact_kind": "model_metrics", "model_id": model_id, "metrics": {}}
+    prediction = {
+        "artifact_kind": "prediction_artifact",
+        "prediction_id": "prediction-1",
+        "model_id": model_id,
+        "candidate_id": "candidate-1",
+        "endpoint_name": "binding_affinity",
+        "evidence_boundary": "not_experimental_evidence",
+        "metadata": {"not_assay_result": True, "not_experimental_evidence": True},
+    }
+
+    store.save_model_artifact(
+        model_id=model_id,
+        model_card=model_card,
+        training_manifest=training_manifest,
+        metrics=metrics,
+    )
+    store.save_prediction_artifacts(model_id=model_id, predictions=[prediction])
+
+    loaded = store.get_model_artifact(model_id)
+    predictions = store.list_prediction_artifacts(model_id=model_id)
+
+    assert loaded["model_card"] == model_card
+    assert loaded["training_manifest"]["labels_excluded_from_manifest"] is True
+    assert loaded["metrics"] == metrics
+    assert predictions == [prediction]
+    assert store.list_results() == []
+    assert all(event.object_type != "EvidenceItem" for event in store.list_audit_events())
+
+
 def test_store_rejects_duplicate_result_ids_unless_update_enabled(tmp_path):
     store = ExperimentalResultStore(tmp_path / "experiments.sqlite")
     store.import_results([_result()], actor="analyst-1")

@@ -208,6 +208,59 @@ EXTERNAL_ID_PATTERN = re.compile(
     r"bfi|bfe|bmr|bms|entity|entry)[-_][A-Za-z0-9][A-Za-z0-9_.-]{2,}\b",
     re.I,
 )
+MODEL_CODEX_TASK_TYPES = {
+    "summarize_model_card",
+    "explain_model_metrics",
+    "explain_prediction_batch",
+    "suggest_feature_debugging",
+    "draft_model_limitations",
+    "explain_active_design_model_influence",
+}
+MODEL_REQUIRED_REF_PREFIXES = {
+    "model_id": "model_id",
+    "dataset_id": "dataset_id",
+    "training_run_id": "training_run_id",
+    "evaluation_id": "evaluation_id",
+    "prediction_batch_artifact_id": "prediction_batch_artifact_id",
+}
+MODEL_METRIC_KEYS = {
+    "accuracy",
+    "auc",
+    "roc_auc",
+    "brier",
+    "expected_calibration_error",
+    "ece",
+    "rmse",
+    "mae",
+    "r2",
+    "precision",
+    "recall",
+    "f1",
+}
+MODEL_PREDICTION_KEYS = {
+    "prediction_id",
+    "candidate_id",
+    "candidate_name",
+    "endpoint_id",
+    "predicted_probability",
+    "predicted_value",
+    "prediction_label",
+    "confidence",
+    "uncertainty",
+    "applicability_domain",
+    "calibration_status",
+}
+METRIC_VALUE_PATTERN = re.compile(
+    r"\b(accuracy|roc_auc|auc|rmse|mae|r2|brier|ece|expected calibration error|"
+    r"precision|recall|f1)\b\s*(?:=|:|of|is)?\s*([0-9]+(?:\.[0-9]+)?)",
+    re.I,
+)
+PREDICTION_VALUE_PATTERN = re.compile(
+    r"\b(prediction_id|candidate_id|candidate_name|endpoint_id|predicted_probability|"
+    r"prediction_label|confidence|uncertainty|applicability_domain|calibration_status)\b"
+    r"\s*(?:=|:|is)?\s*([A-Za-z0-9_.:-]+)",
+    re.I,
+)
 
 
 def redact_secrets(text: str) -> str:
@@ -253,6 +306,7 @@ def check_output(
         *_detect_unbacked_assay_results(text, allowed_artifact_refs),
         *_detect_unbacked_molecules(text, allowed_artifact_refs),
         *detect_fake_external_ids(text, allowed_artifact_refs),
+        *detect_model_artifact_violations(result, allowed_artifact_refs),
     ]
     if not warnings:
         return result
@@ -300,6 +354,25 @@ def detect_fake_external_ids(text: str, allowed_artifact_refs: set[str]) -> list
     return warnings
 
 
+def detect_model_artifact_violations(
+    result: CodexTaskResult,
+    allowed_artifact_refs: set[str],
+) -> list[str]:
+    if str(result.task_type) not in MODEL_CODEX_TASK_TYPES:
+        return []
+    text = result.output_text or result.stdout
+    if result.output_json is not None:
+        text = text + "\n" + json.dumps(result.output_json, sort_keys=True)
+    allowed_lower = {ref.lower() for ref in allowed_artifact_refs}
+    warnings = [
+        *_detect_missing_model_citations(text, allowed_lower),
+        *_detect_fake_model_metrics(text, allowed_lower),
+        *_detect_ungrounded_predictions(text, allowed_lower),
+        *_detect_forbidden_model_summary_actions(text),
+    ]
+    return _dedupe(warnings)
+
+
 def is_secret_path(path: Path) -> bool:
     parts = [part.lower() for part in path.parts]
     for part in parts:
@@ -329,12 +402,24 @@ def task_guardrail_warnings(task: CodexTask, config: CodexBackboneConfig) -> lis
     return _dedupe(warnings)
 
 
-def output_guardrail_warnings(text: str) -> list[str]:
+def output_guardrail_warnings(
+    text: str,
+    *,
+    task_type: str = "",
+    allowed_artifact_refs: set[str] | None = None,
+) -> list[str]:
+    result = CodexTaskResult(
+        task_id="output-guardrail-check",
+        task_type=task_type or "summarize_run",  # type: ignore[arg-type]
+        status="succeeded",
+        output_text=text,
+    )
     return _dedupe(
         [
             *detect_forbidden_biomedical_claims(text),
             *detect_protocol_or_synthesis_text(text),
             *_detect_unbacked_assay_results(text, set()),
+            *detect_model_artifact_violations(result, allowed_artifact_refs or set()),
         ]
     )
 
@@ -378,6 +463,84 @@ def _detect_unbacked_molecules(text: str, allowed_artifact_refs: set[str]) -> li
         if name.lower() not in allowed:
             warnings.append(f"Unbacked generated molecule reference: {name}.")
     return warnings
+
+
+def _detect_missing_model_citations(text: str, allowed_lower: set[str]) -> list[str]:
+    lowered_text = text.lower()
+    warnings: list[str] = []
+    for prefix, label in MODEL_REQUIRED_REF_PREFIXES.items():
+        values = _prefixed_allowed_values(allowed_lower, prefix)
+        if not values:
+            warnings.append(f"Model Codex summary missing source artifact field: {label}.")
+            continue
+        if not any(value in lowered_text for value in values):
+            warnings.append(f"Model Codex summary did not cite required {label}.")
+    return warnings
+
+
+def _detect_fake_model_metrics(text: str, allowed_lower: set[str]) -> list[str]:
+    warnings: list[str] = []
+    for match in METRIC_VALUE_PATTERN.finditer(text):
+        key = _normalize_model_key(match.group(1))
+        raw_value = _normalize_numeric_string(match.group(2))
+        candidates = {
+            f"metric:{key}:{raw_value}",
+            f"{key}:{raw_value}",
+            f"{key}={raw_value}",
+        }
+        if candidates.isdisjoint(allowed_lower):
+            warnings.append(f"Unbacked model metric: {key}={raw_value}.")
+    return warnings
+
+
+def _detect_ungrounded_predictions(text: str, allowed_lower: set[str]) -> list[str]:
+    warnings: list[str] = []
+    for match in PREDICTION_VALUE_PATTERN.finditer(text):
+        key = _normalize_model_key(match.group(1))
+        raw_value = match.group(2).strip(" .,:;\"'").lower()
+        if not raw_value:
+            continue
+        if key in {"confidence", "uncertainty", "predicted_probability"}:
+            raw_value = _normalize_numeric_string(raw_value)
+        candidates = {
+            f"prediction:{key}:{raw_value}",
+            f"{key}:{raw_value}",
+            raw_value,
+        }
+        if candidates.isdisjoint(allowed_lower):
+            warnings.append(f"Ungrounded model prediction field: {key}={raw_value}.")
+    return warnings
+
+
+def _detect_forbidden_model_summary_actions(text: str) -> list[str]:
+    patterns: tuple[tuple[re.Pattern[str], str], ...] = (
+        (re.compile(r"\bEvidenceItem\b|\bevidence_item\b", re.I), "create EvidenceItem"),
+        (re.compile(r"\bAssayResult\b|\bassay result\b", re.I), "create or claim assay result"),
+        (re.compile(r"\bapprove[sd]?\s+(?:the\s+)?model\b", re.I), "approve model"),
+        (
+            re.compile(r"\b(?:changed|updated|modified)\s+(?:the\s+)?model card\b", re.I),
+            "change model card",
+        ),
+        (
+            re.compile(r"\bclinical use\b|\bclinical recommendation\b", re.I),
+            "recommend clinical use",
+        ),
+    )
+    warnings: list[str] = []
+    for pattern, label in patterns:
+        match = pattern.search(text)
+        if match and not _is_negated_safety_constraint(text, match.start()):
+            warnings.append(f"Forbidden model Codex action: {label}.")
+    return warnings
+
+
+def _prefixed_allowed_values(allowed_lower: set[str], prefix: str) -> set[str]:
+    marker = f"{prefix}:"
+    return {
+        item.removeprefix(marker)
+        for item in allowed_lower
+        if item.startswith(marker) and item.removeprefix(marker)
+    }
 
 
 def _citation_refs(text: str) -> set[str]:
@@ -430,10 +593,37 @@ def _collect_json_refs(value: Any, refs: set[str]) -> None:
                 "generated_id",
                 "candidate_name",
                 "name",
+                "model_id",
+                "dataset_id",
+                "training_dataset_id",
+                "training_run_id",
+                "evaluation_id",
+                "prediction_id",
+                "batch_id",
+                "prediction_batch_artifact_id",
+                "endpoint_id",
+                "candidate_id",
+                "prediction_label",
+                "applicability_domain",
+                "calibration_status",
             } and raw is not None:
                 normalized = _normalize_ref(lowered, str(raw))
                 refs.add(normalized)
                 refs.add(str(raw))
+                refs.add(f"{_model_ref_prefix(lowered)}:{str(raw)}")
+            if lowered in MODEL_METRIC_KEYS and raw is not None:
+                normalized_key = _normalize_model_key(lowered)
+                normalized_value = _normalize_numeric_string(str(raw))
+                refs.add(f"metric:{normalized_key}:{normalized_value}")
+                refs.add(f"{normalized_key}:{normalized_value}")
+                refs.add(f"{normalized_key}={normalized_value}")
+            if lowered in MODEL_PREDICTION_KEYS and raw is not None:
+                normalized_key = _normalize_model_key(lowered)
+                normalized_value = str(raw).lower()
+                if normalized_key in {"confidence", "uncertainty", "predicted_probability"}:
+                    normalized_value = _normalize_numeric_string(normalized_value)
+                refs.add(f"prediction:{normalized_key}:{normalized_value}")
+                refs.add(f"{normalized_key}:{normalized_value}")
             _collect_json_refs(raw, refs)
     elif isinstance(value, list):
         for item in value:
@@ -478,6 +668,27 @@ def _normalize_ref(key: str, value: str) -> str:
     if key == "pmid" and not value.upper().startswith("PMID"):
         return f"PMID:{value}"
     return value
+
+
+def _model_ref_prefix(key: str) -> str:
+    if key == "training_dataset_id":
+        return "dataset_id"
+    if key == "batch_id":
+        return "prediction_batch_artifact_id"
+    return key
+
+
+def _normalize_model_key(key: str) -> str:
+    return key.lower().replace(" ", "_")
+
+
+def _normalize_numeric_string(value: str) -> str:
+    stripped = value.strip().rstrip(".,;")
+    try:
+        number = float(stripped)
+    except ValueError:
+        return stripped.lower()
+    return f"{number:g}"
 
 
 def _looks_like_full_article(text: str) -> bool:

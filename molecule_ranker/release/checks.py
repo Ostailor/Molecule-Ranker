@@ -217,7 +217,7 @@ V1_RELEASE_GATES: tuple[ReleaseGate, ...] = (
     ReleaseGate(
         "v1-1-agentic-generation-validation",
         "golden_workflow",
-        "V1.1 AgentGraph generation, report cards, and benchmarks are validated.",
+        "V1.2 AgentGraph generation, report cards, and benchmarks are validated.",
         (
             "molecule_ranker/agent_graph/schemas.py",
             "molecule_ranker/agent_graph/graph.py",
@@ -351,13 +351,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "1.1.0":
-        return ReleaseCheck("version", "Version is 1.1.0", "pass", "Package version is 1.1.0.")
+    if __version__ == "1.2.0":
+        return ReleaseCheck("version", "Version is 1.2.0", "pass", "Package version is 1.2.0.")
     return ReleaseCheck(
         "version",
-        "Version is 1.1.0",
+        "Version is 1.2.0",
         "fail",
-        f"Package version is {__version__}, expected 1.1.0.",
+        f"Package version is {__version__}, expected 1.2.0.",
     )
 
 

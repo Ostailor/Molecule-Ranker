@@ -11,8 +11,8 @@ more than computational hypotheses.
 
 The dashboard summarizes project runs, scores, generated molecules,
 developability, literature evidence, assay results, review workflow state,
-active learning suggestions, integrations status, Codex outputs, and artifact
-links.
+active learning suggestions, model cards, surrogate prediction artifacts,
+integrations status, Codex outputs, and artifact links.
 
 ## Building A Static Dashboard
 
@@ -31,5 +31,7 @@ summary.
 ## Safety Boundaries
 
 Dashboard text should preserve limitations and separate evidence, generated
-hypotheses, review decisions, and imported assay results. It must not imply
-clinical claims or validated outcomes.
+hypotheses, review decisions, imported assay results, and model predictions. It
+must not imply clinical claims or validated outcomes. V1.2 model cards,
+manifests, metrics, and prediction artifacts are computational prioritization
+records only; they are not `EvidenceItem` records and are not assay results.

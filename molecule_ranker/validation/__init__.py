@@ -16,6 +16,13 @@ from molecule_ranker.validation.guardrail_audit import (
     GuardrailFinding,
     run_guardrail_audit,
 )
+from molecule_ranker.validation.models import (
+    ModelGuardrailAuditReport,
+    ModelGuardrailFinding,
+    ModelValidationReport,
+    run_model_guardrail_audit,
+    run_model_validation,
+)
 from molecule_ranker.validation.runner import check_forbidden_outputs, run_golden_workflows
 from molecule_ranker.validation.schemas import (
     ForbiddenOutputFinding,
@@ -34,11 +41,16 @@ __all__ = [
     "DesignGuardrailAuditReport",
     "DesignGuardrailFinding",
     "DesignValidationReport",
+    "ModelGuardrailAuditReport",
+    "ModelGuardrailFinding",
+    "ModelValidationReport",
     "check_forbidden_outputs",
     "get_golden_workflow",
     "list_golden_workflows",
     "run_design_guardrail_audit",
     "run_design_validation",
     "run_guardrail_audit",
+    "run_model_guardrail_audit",
+    "run_model_validation",
     "run_golden_workflows",
 ]

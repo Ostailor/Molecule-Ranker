@@ -37,6 +37,12 @@ Permission = Literal[
     "design:run",
     "design:approve_plan",
     "design:export",
+    "model:read",
+    "model:train",
+    "model:predict",
+    "model:register",
+    "model:deactivate",
+    "model:export",
     "admin:manage_users",
     "admin:manage_org",
     "admin:view_audit",
@@ -79,6 +85,12 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "design:run",
         "design:approve_plan",
         "design:export",
+        "model:read",
+        "model:train",
+        "model:predict",
+        "model:register",
+        "model:deactivate",
+        "model:export",
         "admin:view_audit",
     },
     "editor": {
@@ -100,6 +112,11 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "design:read",
         "design:run",
         "design:approve_plan",
+        "model:read",
+        "model:train",
+        "model:predict",
+        "model:register",
+        "model:export",
     },
     "reviewer": {
         "project:read",
@@ -113,6 +130,7 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "codex:read",
         "design:read",
         "design:approve_plan",
+        "model:read",
     },
     "viewer": {
         "project:read",
@@ -123,6 +141,7 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "integration:read",
         "codex:read",
         "design:read",
+        "model:read",
     },
     "runner": {
         "project:read",
@@ -136,6 +155,9 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "codex:read",
         "design:read",
         "design:run",
+        "model:read",
+        "model:train",
+        "model:predict",
     },
 }
 

@@ -29,7 +29,7 @@ from molecule_ranker.server import create_app
 
 
 def test_version_is_v10() -> None:
-    assert __version__ == "1.1.0"
+    assert __version__ == "1.2.0"
 
 
 def test_connector_defaults_are_dry_run_and_block_implicit_writes() -> None:

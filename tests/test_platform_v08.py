@@ -43,7 +43,7 @@ class FakeCodexProvider:
 
 
 def test_version_is_v10() -> None:
-    assert __version__ == "1.1.0"
+    assert __version__ == "1.2.0"
 
 
 def test_hosted_auth_rbac_project_sharing_and_codex_queue(tmp_path: Path) -> None:
@@ -181,6 +181,79 @@ def test_hosted_design_jobs_enforce_permission_approval_and_budget(tmp_path: Pat
     assert queued.json()["generated_molecule_label"] == "computational_hypothesis"
 
 
+def test_hosted_model_jobs_enforce_permissions_and_prediction_boundary(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    assert (
+        client.post(
+            "/projects",
+            json={"workspace_id": "workspace-a", "name": "Research"},
+            headers=admin_headers,
+        ).status_code
+        == 200
+    )
+    created = client.post(
+        "/admin/users",
+        json={"email": "viewer@example.com", "password": "Viewer-password-1"},
+        headers=admin_headers,
+    )
+    viewer_id = created.json()["user"]["user_id"]
+    client.post(
+        "/projects/workspace-a/share",
+        json={"role": "viewer", "user_id": viewer_id},
+        headers=admin_headers,
+    )
+    viewer_headers = _login(client, "viewer@example.com", "Viewer-password-1")
+
+    blocked = client.post(
+        "/projects/workspace-a/model/jobs",
+        json={"job_type": "model_train", "dataset_id": "dataset-1"},
+        headers=viewer_headers,
+    )
+    queued_read = client.post(
+        "/projects/workspace-a/model/jobs",
+        json={"job_type": "model_evaluate", "model_id": "model-1"},
+        headers=viewer_headers,
+    )
+    queued_train = client.post(
+        "/projects/workspace-a/model/jobs",
+        json={
+            "job_type": "model_dataset_build",
+            "endpoint_name": "binding_affinity",
+            "config": {"target_symbol": "MAOB"},
+        },
+        headers=admin_headers,
+    )
+    forbidden_data = client.post(
+        "/projects/workspace-a/model/jobs",
+        json={
+            "job_type": "model_dataset_build",
+            "endpoint_name": "binding_affinity",
+            "config": {"use_patient_data": True},
+        },
+        headers=admin_headers,
+    )
+
+    assert blocked.status_code == 403
+    assert "model:train" in blocked.text
+    assert queued_read.status_code == 200, queued_read.text
+    assert queued_read.json()["prediction_boundary"] == (
+        "model_predictions_are_not_evidence_or_assay_results"
+    )
+    assert queued_train.status_code == 200, queued_train.text
+    assert queued_train.json()["job"]["job_type"] == "model_dataset_build"
+    assert forbidden_data.status_code == 403
+    assert "patient data" in forbidden_data.text
+
+
 def test_hosted_mode_blocks_arbitrary_codex_tasks(tmp_path: Path) -> None:
     client = TestClient(
         create_app(
@@ -231,6 +304,64 @@ def test_codex_worker_runs_allowlisted_project_jobs(tmp_path: Path) -> None:
     assert all(
         Path(artifact.path).is_relative_to(tmp_path) for artifact in provider.requests[0].artifacts
     )
+
+
+def test_codex_worker_allows_grounded_model_summary_task(tmp_path: Path) -> None:
+    database, user, store = _codex_project(tmp_path)
+    workspace = store.load()
+    model_artifact = tmp_path / "model-bundle.json"
+    model_artifact.write_text(
+        json.dumps(
+            {
+                "model_id": "model-1",
+                "training_dataset_id": "dataset-1",
+                "training_run_id": "training-run-1",
+                "evaluation_id": "evaluation-1",
+                "batch_id": "batch-1",
+                "metrics": {"accuracy": 0.75},
+                "predictions": [{"prediction_id": "prediction-1"}],
+            },
+            sort_keys=True,
+        )
+    )
+    workspace.artifacts.append(_artifact(model_artifact, artifact_id="model-bundle"))
+    store.save(workspace)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="codex_task",
+        requested_by=user,
+        project_id="workspace-a",
+        config_snapshot={
+            "task_type": "summarize_model_card",
+            "allowed_artifact_ids": ["model-bundle"],
+        },
+    )
+    stdout = json.dumps(
+        {
+            "status": "ok",
+            "summary": (
+                "Model model-1 cites dataset-1, training-run-1, evaluation-1, and batch-1. "
+                "accuracy: 0.75. Predictions are not evidence."
+            ),
+            "limitations": ["Predictions are not evidence."],
+            "model_id": "model-1",
+            "dataset_id": "dataset-1",
+            "training_run_id": "training-run-1",
+            "evaluation_id": "evaluation-1",
+            "prediction_batch_artifact_id": "batch-1",
+        },
+        sort_keys=True,
+    )
+    provider = FakeCodexProvider(stdout)
+
+    finished = CodexWorker(
+        database=database,
+        workspace_store=store,
+        provider=provider,
+    ).run_job(job)
+
+    assert finished.status == "succeeded"
+    assert provider.requests[0].metadata["task_type"] == "summarize_model_card"
+    assert "predictive_model_boundaries" in provider.requests[0].prompt_sections
 
 
 def test_codex_worker_excludes_forbidden_artifacts(tmp_path: Path) -> None:

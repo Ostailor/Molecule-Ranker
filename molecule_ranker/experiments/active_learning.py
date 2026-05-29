@@ -55,6 +55,7 @@ class _CandidateFeatures:
     generation_score: float | None = None
     literature_quality: float | None = None
     evidence_summary: Mapping[str, Any] | None = None
+    model_predictions: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,7 @@ class _SuggestionCandidate:
     review_priority_score: float
     experimental_gap_score: float
     risk_penalty: float
+    model_influence: Mapping[str, Any]
     warnings: tuple[str, ...]
 
 
@@ -402,6 +404,10 @@ def _suggestion_candidate(
     result_list = _results_for_feature(feature, result_index)
     evidence_score = _candidate_evidence_score(feature)
     uncertainty_score = _uncertainty_score(evidence_score, review)
+    model_influence = _model_prediction_influence(feature)
+    uncertainty_score = _clamp(
+        uncertainty_score + 0.15 * float(model_influence["uncertainty_sampling"])
+    )
     developability_score = feature.developability_score
     if developability_score is None:
         developability_score = 0.45 if feature.candidate_origin == "generated" else 0.5
@@ -410,6 +416,8 @@ def _suggestion_candidate(
     negative_count = sum(1 for result in result_list if result.outcome_label == "negative")
     safety_count = sum(1 for result in result_list if _result_is_safety_concern(result))
     risk_penalty, warnings = _risk_penalty(feature, result_list)
+    risk_penalty = _clamp(risk_penalty + float(model_influence["domain_penalty"]))
+    warnings.extend(str(warning) for warning in model_influence["warnings"])
     result_count = len(result_list)
     has_direct = result_count > 0
     experimental_gap = 1.0 if result_count == 0 else max(0.0, 1.0 - min(result_count / 3.0, 1.0))
@@ -434,6 +442,7 @@ def _suggestion_candidate(
         review_priority_score=review_priority_score,
         experimental_gap_score=experimental_gap,
         risk_penalty=risk_penalty,
+        model_influence=model_influence,
         warnings=tuple(warnings),
     )
 
@@ -475,6 +484,8 @@ def _active_learning_suggestion(
             ),
             "review_priority_score": item.review_priority_score,
             "experimental_gap_score": item.experimental_gap_score,
+            "model_influence": dict(item.model_influence),
+            "model_predictions_are_not_evidence": True,
         },
     )
 
@@ -517,10 +528,12 @@ def _acquisition_score(item: _SuggestionCandidate, strategy: str) -> float:
 
 
 def _expected_value_score(item: _SuggestionCandidate) -> float:
+    model_influence = item.model_influence
     return _clamp(
         0.60 * item.evidence_score
         + 0.25 * item.developability_score
         + 0.15 * item.review_priority_score
+        + 0.12 * float(model_influence["expected_improvement"])
         - item.risk_penalty
     )
 
@@ -588,6 +601,7 @@ def _with_diversity_score(
         review_priority_score=item.review_priority_score,
         experimental_gap_score=item.experimental_gap_score,
         risk_penalty=item.risk_penalty,
+        model_influence=item.model_influence,
         warnings=item.warnings,
     )
 
@@ -709,6 +723,66 @@ def _risk_penalty(
     return _clamp(penalty), sorted(set(warnings))
 
 
+def _model_prediction_influence(feature: _CandidateFeatures) -> dict[str, Any]:
+    predictions = [dict(prediction) for prediction in feature.model_predictions]
+    if not predictions:
+        return {
+            "prediction_count": 0,
+            "used_prediction_count": 0,
+            "expected_improvement": 0.0,
+            "uncertainty_sampling": 0.0,
+            "domain_penalty": 0.0,
+            "warnings": [],
+            "not_evidence": True,
+            "not_assay_result": True,
+        }
+    used: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    out_of_domain_count = 0
+    for prediction in predictions:
+        calibration_status = str(prediction.get("calibration_status") or "")
+        applicability_domain = str(prediction.get("applicability_domain") or "unknown")
+        confidence = prediction.get("confidence")
+        if applicability_domain == "out_of_domain":
+            out_of_domain_count += 1
+            warnings.append("Model prediction out of domain; penalized suggestion.")
+        if calibration_status == "insufficient_data":
+            warnings.append("Model prediction had insufficient calibration data; ignored.")
+            continue
+        if calibration_status not in {"calibrated", "not_applicable"}:
+            warnings.append("Uncalibrated model prediction ignored.")
+            continue
+        if not isinstance(confidence, (int, float)) or float(confidence) < 0.5:
+            warnings.append("Low-confidence model prediction ignored.")
+            continue
+        if applicability_domain not in {"in_domain", "near_domain"}:
+            continue
+        used.append(prediction)
+    probabilities = [
+        float(prediction["predicted_probability"])
+        for prediction in used
+        if isinstance(prediction.get("predicted_probability"), (int, float))
+    ]
+    uncertainties = [
+        float(prediction["uncertainty"])
+        for prediction in used
+        if isinstance(prediction.get("uncertainty"), (int, float))
+    ]
+    best_probability = max(probabilities, default=0.5)
+    mean_uncertainty = sum(uncertainties) / len(uncertainties) if uncertainties else 0.0
+    return {
+        "prediction_count": len(predictions),
+        "used_prediction_count": len(used),
+        "out_of_domain_count": out_of_domain_count,
+        "expected_improvement": round(_clamp((best_probability - 0.5) * 2.0), 3),
+        "uncertainty_sampling": round(_clamp(mean_uncertainty), 3),
+        "domain_penalty": 0.12 if out_of_domain_count else 0.0,
+        "warnings": sorted(set(warnings)),
+        "not_evidence": True,
+        "not_assay_result": True,
+    }
+
+
 def _feature_warning_text(feature: _CandidateFeatures) -> list[str]:
     summary = feature.evidence_summary or {}
     warning_values = summary.get("warnings", []) if isinstance(summary, Mapping) else []
@@ -726,11 +800,23 @@ def _result_is_safety_concern(result: AssayResult) -> bool:
 
 def _suggestion_rationale(item: _SuggestionCandidate, strategy: str) -> str:
     assay_class = _suggested_assay_class(item)
+    model_sentence = ""
+    if int(item.model_influence.get("used_prediction_count", 0)) > 0:
+        model_sentence = (
+            " Model uncertainty and calibrated surrogate prediction influence are "
+            "reported as weak prioritization signals only."
+        )
+    elif int(item.model_influence.get("out_of_domain_count", 0)) > 0:
+        model_sentence = (
+            " Out-of-domain model predictions lower priority and are not experimental "
+            "feedback."
+        )
     return sanitize_experimental_output_text(
         f"{item.features.candidate_name} is suggested for expert triage using the "
         f"{strategy} active-learning strategy. Suggested assay class: {assay_class}. "
         f"Score reflects ranking evidence, uncertainty, diversity, developability, "
         f"review priority, experimental evidence gap, and risk penalties where available. "
+        f"{model_sentence}"
         "This is not an instruction to run experiments and does not include operational "
         "wet-lab details, animal or human testing steps, or clinical-use guidance."
     )
@@ -936,6 +1022,12 @@ def _features_from_molecule_candidate(
         generation_score=_generation_score(candidate),
         literature_quality=literature_quality,
         evidence_summary=_summary_for(evidence_summaries, candidate_id, candidate.name),
+        model_predictions=_model_predictions_from_mapping(
+            {
+                **candidate.chemical_metadata,
+                **candidate.generation_metadata,
+            }
+        ),
     )
 
 
@@ -978,6 +1070,7 @@ def _features_from_generated(
         generation_score=_object_float(candidate, "generation_score")
         or _metadata_float(getattr(candidate, "generation_metadata", {}), "generation_score"),
         evidence_summary=_summary_for(evidence_summaries, candidate_id, candidate_name),
+        model_predictions=_model_predictions_from_object(candidate),
     )
 
 
@@ -1260,6 +1353,22 @@ def _dataset_id(
 def _metadata_string(metadata: Mapping[str, Any], key: str) -> str | None:
     value = metadata.get(key)
     return str(value) if value not in (None, "") else None
+
+
+def _model_predictions_from_mapping(metadata: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    predictions = metadata.get("model_predictions")
+    if not isinstance(predictions, list):
+        return ()
+    return tuple(item for item in predictions if isinstance(item, Mapping))
+
+
+def _model_predictions_from_object(candidate: Any) -> tuple[Mapping[str, Any], ...]:
+    predictions: list[Mapping[str, Any]] = []
+    for attr in ("metadata", "generation_metadata", "trace"):
+        metadata = getattr(candidate, attr, None)
+        if isinstance(metadata, Mapping):
+            predictions.extend(_model_predictions_from_mapping(metadata))
+    return tuple(predictions)
 
 
 def _clamp(value: float) -> float:

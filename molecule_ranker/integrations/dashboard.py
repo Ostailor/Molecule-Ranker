@@ -28,7 +28,7 @@ def render_integration_dashboard(summary: dict[str, Any]) -> str:
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<title>molecule-ranker V1.1 integrations</title>"
+        "<title>molecule-ranker V1.2 integrations</title>"
         "<style>"
         "body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;"
         "color:#182230;background:#f6f8fb;line-height:1.45}"
@@ -39,7 +39,7 @@ def render_integration_dashboard(summary: dict[str, Any]) -> str:
         "th,td{border:1px solid #d6deea;padding:8px;text-align:left;vertical-align:top}"
         "th{background:#eef3f8}"
         "</style></head><body>"
-        "<header><h1>molecule-ranker V1.1 integrations</h1></header>"
+        "<header><h1>molecule-ranker V1.2 integrations</h1></header>"
         "<main>"
         "<p class=\"notice\">External integrations default to read-only, dry-run, or sandbox "
         "operation. Secrets are never displayed. Write/export paths require explicit opt-in.</p>"

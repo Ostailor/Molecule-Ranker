@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -13,6 +14,7 @@ from starlette import status
 
 from molecule_ranker.integrations.connectors import create_connector
 from molecule_ranker.integrations.store import IntegrationStore
+from molecule_ranker.models.registry import ModelRegistry
 from molecule_ranker.platform.auth import (
     AuthError,
     AuthTokenConfig,
@@ -648,6 +650,7 @@ def experimental_results_page(
             "project": workspace,
             "dashboard_run": dashboard_run,
             "predictions": [prediction_fields(item) for item in dashboard_run.candidates],
+            "model_artifacts": [],
         },
     )
 
@@ -789,6 +792,380 @@ def design_active_loop_page(
         title="Active design loop history",
         section="active_loop",
     )
+
+
+@router.get("/dashboard/projects/{project_id}/models", response_class=HTMLResponse)
+def model_registry_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _model_workspace(database, user, store, project_id)
+    registry = _model_registry(database)
+    cards = registry.list_models(active_only=False)
+    body = (
+        _model_nav(project_id)
+        + _model_boundary_notice()
+        + _table(
+            [
+                "Model",
+                "Endpoint",
+                "Plugin",
+                "Calibration status",
+                "Applicability domain",
+                "Status",
+            ],
+            [
+                [
+                    _link(
+                        f"/dashboard/projects/{project_id}/models/{quote(card.model_id)}",
+                        card.model_name,
+                    ),
+                    card.endpoint.endpoint_name,
+                    card.plugin_name,
+                    _model_calibration_status(card.calibration_metrics),
+                    card.applicability_domain_method,
+                    "active" if card.metadata.get("registry_active", True) else "inactive",
+                ]
+                for card in cards
+            ],
+        )
+    )
+    if not cards:
+        body += "<p>No model cards registered.</p>"
+    return _model_dashboard_html("Model registry", workspace, body)
+
+
+@router.get("/dashboard/projects/{project_id}/models/training-runs", response_class=HTMLResponse)
+def model_training_runs_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _model_workspace(database, user, store, project_id)
+    registry = _model_registry(database)
+    runs = _model_json_artifacts(registry, "training_runs")
+    body = _model_nav(project_id) + _model_boundary_notice() + _table(
+        ["Training run", "Model", "Dataset", "Status", "Warnings"],
+        [
+            [
+                item.get("training_run_id"),
+                item.get("model_id"),
+                item.get("dataset_id"),
+                item.get("status"),
+                ", ".join(str(value) for value in item.get("warnings", [])),
+            ]
+            for item in runs
+        ],
+    )
+    if not runs:
+        body += "<p>No training runs registered.</p>"
+    return _model_dashboard_html("Training runs", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/models/evaluation-reports",
+    response_class=HTMLResponse,
+)
+def model_evaluation_reports_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _model_workspace(database, user, store, project_id)
+    registry = _model_registry(database)
+    reports = _model_json_artifacts(registry, "evaluation_reports")
+    body = _model_nav(project_id) + _model_boundary_notice() + _table(
+        ["Evaluation", "Model", "Dataset", "Split strategy", "Leakage checks", "Warnings"],
+        [
+            [
+                item.get("evaluation_id"),
+                item.get("model_id"),
+                item.get("dataset_id"),
+                item.get("split_strategy"),
+                _compact_json(item.get("leakage_checks") or {}),
+                ", ".join(str(value) for value in item.get("warnings", [])),
+            ]
+            for item in reports
+        ],
+    )
+    if not reports:
+        body += "<p>No evaluation reports registered.</p>"
+    return _model_dashboard_html("Evaluation reports", workspace, body)
+
+
+@router.get("/dashboard/projects/{project_id}/models/calibration", response_class=HTMLResponse)
+def model_calibration_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _model_workspace(database, user, store, project_id)
+    registry = _model_registry(database)
+    cards = registry.list_models(active_only=False)
+    reports = _model_json_artifacts(registry, "evaluation_reports")
+    body = _model_nav(project_id) + _model_boundary_notice() + _table(
+        ["Model", "Endpoint", "Calibration status", "Calibration metrics"],
+        [
+            [
+                _link(
+                    f"/dashboard/projects/{project_id}/models/{quote(card.model_id)}",
+                    card.model_name,
+                ),
+                card.endpoint.endpoint_name,
+                _model_calibration_status(card.calibration_metrics),
+                _compact_json(card.calibration_metrics),
+            ]
+            for card in cards
+        ],
+    )
+    body += "<h2>Calibration plots/summary</h2>"
+    body += _table(
+        ["Evaluation", "Model", "Calibration metrics"],
+        [
+            [
+                item.get("evaluation_id"),
+                item.get("model_id"),
+                _compact_json(item.get("calibration_metrics") or {}),
+            ]
+            for item in reports
+        ],
+    )
+    if any(_model_calibration_status(card.calibration_metrics) != "calibrated" for card in cards):
+        body += (
+            "<p class=\"warning\"><strong>Uncalibrated warning shown:</strong> "
+            "uncalibrated predictions must be treated as prioritization hints only.</p>"
+        )
+    return _model_dashboard_html("Calibration summary", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/models/prediction-batches",
+    response_class=HTMLResponse,
+)
+def model_prediction_batches_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _model_workspace(database, user, store, project_id)
+    registry = _model_registry(database)
+    batches = _model_json_artifacts(registry, "prediction_batches")
+    predictions = _model_prediction_records(registry)
+    body = (
+        _model_nav(project_id)
+        + _model_boundary_notice()
+        + _prediction_warnings(predictions)
+        + _table(
+            ["Batch", "Model", "Prediction count", "Created", "Metadata"],
+            [
+                [
+                    item.get("batch_id"),
+                    item.get("model_id"),
+                    len(item.get("predictions") or []),
+                    item.get("created_at"),
+                    _compact_json(item.get("metadata") or {}),
+                ]
+                for item in batches
+            ],
+        )
+        + "<h2>Prediction artifact contents</h2>"
+        + _table(
+            [
+                "Batch",
+                "Candidate",
+                "Model",
+                "Endpoint",
+                "Prediction label",
+                "Probability",
+                "Uncertainty",
+                "Confidence",
+                "Applicability domain",
+                "Calibration status",
+                "Warnings",
+            ],
+            [
+                [
+                    item.get("batch_id"),
+                    _link(
+                        f"/dashboard/projects/{project_id}/models/predictions/"
+                        f"{quote(_prediction_candidate_key(item))}",
+                        str(item.get("candidate_name") or item.get("candidate_id") or "unknown"),
+                    ),
+                    item.get("model_id"),
+                    item.get("endpoint_id"),
+                    _prediction_label(item),
+                    item.get("predicted_probability"),
+                    item.get("uncertainty"),
+                    item.get("confidence"),
+                    item.get("applicability_domain"),
+                    item.get("calibration_status"),
+                    ", ".join(str(value) for value in item.get("warnings", [])),
+                ]
+                for item in predictions
+            ],
+        )
+    )
+    if not batches:
+        body += "<p>No prediction batches registered.</p>"
+    if batches and not predictions:
+        body += "<p>No prediction artifacts found in registered batches.</p>"
+    return _model_dashboard_html("Prediction batches", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/models/predictions/{candidate_name}",
+    response_class=HTMLResponse,
+)
+def model_prediction_detail_page(
+    project_id: str,
+    candidate_name: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _model_workspace(database, user, store, project_id)
+    registry = _model_registry(database)
+    predictions = [
+        item
+        for item in _model_prediction_records(registry)
+        if str(item.get("candidate_name") or item.get("candidate_id") or "") == candidate_name
+    ]
+    body = (
+        _model_nav(project_id)
+        + _model_boundary_notice()
+        + _prediction_warnings(predictions)
+        + _table(
+            [
+                "Candidate",
+                "Model",
+                "Endpoint",
+                "Prediction label",
+                "Probability",
+                "Uncertainty",
+                "Confidence",
+                "Applicability domain",
+                "Calibration status",
+                "Warnings",
+            ],
+            [
+                [
+                    item.get("candidate_name"),
+                    item.get("model_id"),
+                    item.get("endpoint_id"),
+                    _prediction_label(item),
+                    item.get("predicted_probability"),
+                    item.get("uncertainty"),
+                    item.get("confidence"),
+                    item.get("applicability_domain"),
+                    item.get("calibration_status"),
+                    ", ".join(str(value) for value in item.get("warnings", [])),
+                ]
+                for item in predictions
+            ],
+        )
+    )
+    if not predictions:
+        body += "<p>No prediction artifacts found for this candidate.</p>"
+    return _model_dashboard_html("Prediction detail for candidate", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/models/active-design-influence",
+    response_class=HTMLResponse,
+)
+def model_active_design_influence_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _model_workspace(database, user, store, project_id)
+    design_runs = dashboard_design_runs(workspace)
+    rows: list[list[Any]] = []
+    for dashboard_run in design_runs:
+        active_learning = dashboard_run.active_learning
+        rows.append(
+            [
+                dashboard_run.run.run_id,
+                _compact_json(active_learning.get("model_influence") or {}),
+                _compact_json(active_learning.get("model_uncertainty") or {}),
+                _compact_json(active_learning.get("suggestions") or []),
+            ]
+        )
+    body = (
+        _model_nav(project_id)
+        + _model_boundary_notice()
+        + "<p>Model influence in active design is tracked as a prioritization rationale, "
+        "not experimental evidence. Calibrated surrogate oracle signals may contribute only "
+        "bounded scoring modifiers, and model uncertainty remains auditable for each run.</p>"
+        + _table(["Run", "Model influence", "Model uncertainty", "Suggestions"], rows)
+    )
+    if not rows:
+        body += "<p>No active design model influence records found.</p>"
+    return _model_dashboard_html("Model influence in active design", workspace, body)
+
+
+@router.get("/dashboard/projects/{project_id}/models/{model_id}", response_class=HTMLResponse)
+def model_card_detail_page(
+    project_id: str,
+    model_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _model_workspace(database, user, store, project_id)
+    registry = _model_registry(database)
+    try:
+        card = registry.get_model_card(model_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Model card not found.") from exc
+    body = (
+        _model_nav(project_id)
+        + _model_boundary_notice()
+        + _definition_list(
+            {
+                "Model ID": card.model_id,
+                "Model name": card.model_name,
+                "Version": card.model_version,
+                "Plugin": card.plugin_name,
+                "Endpoint": card.endpoint.endpoint_name,
+                "Target": card.endpoint.target_symbol or "",
+                "Disease": card.endpoint.disease_name or "",
+                "Calibration status": _model_calibration_status(card.calibration_metrics),
+                "Intended use": card.intended_use,
+                "Applicability domain": card.applicability_domain_method,
+            }
+        )
+        + "<h2>Limitations</h2>"
+        + "<ul>"
+        + "".join(f"<li>{_h(value)}</li>" for value in card.limitations)
+        + "</ul>"
+        + "<h2>Metrics</h2>"
+        + f"<pre>{_h(_compact_json(card.metrics))}</pre>"
+        + "<h2>Calibration metrics</h2>"
+        + f"<pre>{_h(_compact_json(card.calibration_metrics))}</pre>"
+    )
+    if _model_calibration_status(card.calibration_metrics) != "calibrated":
+        body += (
+            "<p class=\"warning\"><strong>Uncalibrated warning shown:</strong> "
+            "do not display predictions from this model as active without imported result "
+            "evidence.</p>"
+        )
+    return _model_dashboard_html("Model card detail", workspace, body)
 
 
 @router.get("/dashboard/projects/{project_id}/review", response_class=HTMLResponse)
@@ -1210,6 +1587,147 @@ def _design_page(
     )
 
 
+def _model_workspace(
+    database: PlatformDatabase,
+    user: UserAccount,
+    store: ProjectWorkspaceStore,
+    project_id: str,
+) -> ProjectWorkspace:
+    workspace = _project_or_404(store=store, project_id=project_id)
+    if not has_permission(user, "model:read", project_id=project_id, database=database):
+        raise HTTPException(status_code=403, detail="Model permission denied.")
+    return workspace
+
+
+def _model_registry(database: PlatformDatabase) -> ModelRegistry:
+    root = database.root_dir / ".molecule-ranker" / "models"
+    return ModelRegistry(
+        db_path=root / "model_registry.sqlite",
+        artifact_dir=root / "registry_artifacts",
+    )
+
+
+def _model_json_artifacts(registry: ModelRegistry, folder: str) -> list[dict[str, Any]]:
+    artifact_dir = (registry.artifact_dir / folder).resolve()
+    registry_root = registry.artifact_dir.resolve()
+    if not artifact_dir.exists() or registry_root not in artifact_dir.parents:
+        return []
+    records: list[dict[str, Any]] = []
+    for path in sorted(artifact_dir.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            records.append(payload)
+    return records
+
+
+def _model_prediction_records(registry: ModelRegistry) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for batch in _model_json_artifacts(registry, "prediction_batches"):
+        batch_id = batch.get("batch_id")
+        for prediction in batch.get("predictions") or []:
+            if isinstance(prediction, dict):
+                records.append(
+                    {
+                        "batch_id": batch_id,
+                        "batch_model_id": batch.get("model_id"),
+                        **prediction,
+                    }
+                )
+    return records
+
+
+def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) -> HTMLResponse:
+    project_id = workspace.workspace_id
+    html = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.2.0-model-ui\">"
+        "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
+        "<div class=\"brand\">molecule-ranker V1.2</div>"
+        "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        f"{_link('/dashboard', 'Projects')}"
+        f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
+        f"{_link(f'/dashboard/projects/{project_id}/models', 'Models')}"
+        f"{_link(f'/dashboard/projects/{project_id}/runs', 'Runs')}"
+        f"{_link(f'/dashboard/projects/{project_id}/design/plans', 'Design')}"
+        "</nav></div></header><main class=\"content\">"
+        "<aside class=\"research-disclaimer\">Internal research use only. Source-backed "
+        "evidence remains authoritative. Model predictions are computational prioritization "
+        "artifacts and are not assay results.</aside>"
+        f"<header class=\"page-heading\"><h1>{_h(title)}</h1>"
+        f"<p class=\"muted\">Project: {_h(project_id)}</p></header>"
+        f"{body}</main></div></body></html>\n"
+    )
+    return HTMLResponse(html)
+
+
+def _model_nav(project_id: str) -> str:
+    links = {
+        "Model registry": f"/dashboard/projects/{project_id}/models",
+        "Training runs": f"/dashboard/projects/{project_id}/models/training-runs",
+        "Evaluation reports": f"/dashboard/projects/{project_id}/models/evaluation-reports",
+        "Calibration": f"/dashboard/projects/{project_id}/models/calibration",
+        "Prediction batches": f"/dashboard/projects/{project_id}/models/prediction-batches",
+        "Active design influence": (
+            f"/dashboard/projects/{project_id}/models/active-design-influence"
+        ),
+    }
+    return "<nav class=\"section\">" + " ".join(
+        _link(href, label) for label, href in links.items()
+    ) + "</nav>"
+
+
+def _model_boundary_notice() -> str:
+    return (
+        "<p class=\"notice\"><strong>Prediction artifacts are separate. Model predictions are "
+        "predictions, not experimental evidence and not assay results.</strong> Generated "
+        "molecules still require exact imported experimental results before any direct evidence "
+        "is shown. No prediction is displayed as active without imported result evidence.</p>"
+    )
+
+
+def _model_calibration_status(metrics: dict[str, Any]) -> str:
+    return str(metrics.get("calibration_status") or metrics.get("status") or "unknown")
+
+
+def _prediction_warnings(predictions: list[dict[str, Any]]) -> str:
+    if not predictions:
+        return ""
+    warnings: list[str] = []
+    if any(str(item.get("calibration_status")) != "calibrated" for item in predictions):
+        warnings.append("Uncalibrated prediction warning shown")
+    if any(str(item.get("applicability_domain")) == "out_of_domain" for item in predictions):
+        warnings.append("Out-of-domain prediction warning shown")
+    if not warnings:
+        return ""
+    return (
+        "<p class=\"warning\"><strong>"
+        + _h("; ".join(warnings))
+        + ":</strong> these predictions must remain visually separate from evidence.</p>"
+    )
+
+
+def _prediction_label(prediction: dict[str, Any]) -> str:
+    label = str(prediction.get("prediction_label") or prediction.get("predicted_value") or "")
+    if label.lower() in {"active", "predicted_active", "surrogate_active"}:
+        return "model-favorable prediction only; imported result evidence required"
+    if label:
+        return f"{label} (prediction only)"
+    return "prediction only"
+
+
+def _prediction_candidate_key(prediction: dict[str, Any]) -> str:
+    return str(prediction.get("candidate_name") or prediction.get("candidate_id") or "")
+
+
+def _compact_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ": "))
+
+
 def _project_or_404(*, store: ProjectWorkspaceStore, project_id: str) -> ProjectWorkspace:
     workspace = load_project(store=store, project_id=project_id)
     if workspace is None:
@@ -1282,7 +1800,11 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
         + "</tr>"
         for row in rows
     )
-    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+    return (
+        "<div class=\"table-scroll\">"
+        f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+        "</div>"
+    )
 
 
 def _definition_list(values: dict[str, Any]) -> str:

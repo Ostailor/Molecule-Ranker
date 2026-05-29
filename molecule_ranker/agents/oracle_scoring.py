@@ -100,6 +100,29 @@ class OracleScoringAgent(BaseAgent):
                 retained_generated=retained_so_far,
                 enable_docking=bool(config.get("enable_docking_oracle", False)),
                 enable_surrogate=bool(config.get("enable_surrogate_activity_oracle", False)),
+                enable_surrogate_oracle=(
+                    bool(config["enable_surrogate_oracle"])
+                    if "enable_surrogate_oracle" in config
+                    else None
+                ),
+                surrogate_oracle_weight=float(config.get("surrogate_oracle_weight", 0.08)),
+                require_calibrated_predictions=bool(
+                    config.get("require_calibrated_predictions", True)
+                ),
+                allow_uncalibrated_with_warning=bool(
+                    config.get("allow_uncalibrated_with_warning", False)
+                ),
+                min_prediction_confidence=float(config.get("min_prediction_confidence", 0.5)),
+                out_of_domain_penalty=float(config.get("out_of_domain_penalty", 0.08)),
+                surrogate_endpoint_id=(
+                    str(config["surrogate_oracle_endpoint_id"])
+                    if config.get("surrogate_oracle_endpoint_id")
+                    else (
+                        str(config["predictive_model_endpoint_id"])
+                        if config.get("predictive_model_endpoint_id")
+                        else None
+                    )
+                ),
             )
             self._last_results.append(result)
             updated = candidate.model_copy(

@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from molecule_ranker.experiments.model_plugins import (
+    LocalAssaySurrogatePlugin,
+    ModelPluginRegistry,
+    ModelPredictionRequest,
+    ModelTrainingRequest,
+)
 from molecule_ranker.experiments.schemas import ExperimentalLearningDataset
 from molecule_ranker.experiments.surrogate_model import (
     SurrogateModelArtifact,
@@ -84,6 +90,89 @@ def test_simple_model_trains_on_mocked_dataset(monkeypatch):
     assert artifact.metadata["features_used"]
 
 
+def test_v12_training_artifact_has_model_card_manifest_metrics_and_leakage_split(monkeypatch):
+    monkeypatch.setattr(
+        "molecule_ranker.experiments.surrogate_model._load_sklearn_estimators",
+        lambda: _FakeEstimators(),
+    )
+
+    artifact = train_assay_surrogate_model(
+        _dataset(
+            [
+                _row("1", 1, 0.8),
+                _row("2", 0, 0.2),
+                _row("3", 1, 0.75),
+                _row("4", 0, 0.3),
+                _row("5", 1, 0.9),
+                _row("6", 0, 0.1),
+                _row("7", 1, 0.7),
+                _row("8", 0, 0.25),
+            ]
+        ),
+        config={"min_training_result_count": 4, "test_fraction": 0.25},
+    )
+
+    assert artifact.trained is True
+    assert artifact.model_card["artifact_kind"] == "model_card"
+    assert artifact.model_card["evidence_boundary"] == "not_experimental_evidence"
+    assert artifact.training_manifest["artifact_kind"] == "training_manifest"
+    assert artifact.training_manifest["leakage_controls"]["split_unit"] == "candidate_or_result"
+    assert artifact.training_manifest["assay_scope"] == {
+        "endpoint_name": "binding_affinity",
+        "disease_name": "Parkinson disease",
+        "target_symbol": "MAOB",
+        "allow_endpoint_pooling": False,
+        "allow_context_pooling": False,
+    }
+    assert artifact.metrics["artifact_kind"] == "model_metrics"
+    assert artifact.metrics["calibration"]["status"] in {"calibrated", "uncalibrated_small_dataset"}
+    assert artifact.training_manifest["labels_excluded_from_manifest"] is True
+    manifest_text = str(artifact.training_manifest)
+    assert "'label':" not in manifest_text
+    assert "binary_label" not in manifest_text
+    assert "continuous_label" not in manifest_text
+
+
+def test_local_surrogate_plugin_contract_trains_and_predicts_guarded_artifacts(monkeypatch):
+    monkeypatch.setattr(
+        "molecule_ranker.experiments.surrogate_model._load_sklearn_estimators",
+        lambda: _FakeEstimators(),
+    )
+    registry = ModelPluginRegistry()
+    plugin = LocalAssaySurrogatePlugin()
+    registry.register(plugin)
+
+    artifact = registry.get("local_assay_surrogate").train(
+        ModelTrainingRequest(
+            dataset=_dataset(
+                [
+                    _row("1", 1, 0.8),
+                    _row("2", 0, 0.2),
+                    _row("3", 1, 0.75),
+                    _row("4", 0, 0.3),
+                ]
+            ),
+            config={"min_training_result_count": 4},
+        )
+    )
+    predictions = plugin.predict(
+        ModelPredictionRequest(
+            model_artifact=artifact,
+            rows=[_row("candidate", 1, 0.55)],
+        )
+    )
+
+    assert plugin.spec.plugin_name == "local_assay_surrogate"
+    assert plugin.spec.interface_version == "1.2"
+    assert plugin.spec.allowed_output_kind == "prediction_artifact"
+    assert predictions[0]["artifact_kind"] == "prediction_artifact"
+    assert predictions[0]["evidence_boundary"] == "not_experimental_evidence"
+    assert predictions[0]["endpoint_name"] == "binding_affinity"
+    assert predictions[0]["applicability_domain"]["status"] in {"inside", "outside", "unknown"}
+    assert predictions[0]["uncertainty_score"] >= 0.0
+    assert "activity" not in predictions[0]["prediction_label"].lower()
+
+
 def test_predictions_are_bounded_and_labeled_surrogate_estimates(monkeypatch):
     monkeypatch.setattr(
         "molecule_ranker.experiments.surrogate_model._load_sklearn_estimators",
@@ -111,6 +200,9 @@ def test_predictions_are_bounded_and_labeled_surrogate_estimates(monkeypatch):
     assert 0.0 <= prediction["surrogate_model_estimate"] <= 1.0
     assert prediction["prediction_label"] == "surrogate model estimate"
     assert prediction["metadata"]["not_experimental_evidence"] is True
+    assert prediction["artifact_kind"] == "prediction_artifact"
+    assert prediction["evidence_boundary"] == "not_experimental_evidence"
+    assert prediction["metadata"]["not_assay_result"] is True
 
 
 def test_predictions_do_not_become_evidence_items(monkeypatch):

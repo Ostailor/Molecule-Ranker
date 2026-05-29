@@ -4,6 +4,14 @@ from molecule_ranker.experiments.active_learning import (
     build_experimental_learning_dataset,
     suggest_next_experiments,
 )
+from molecule_ranker.experiments.model_plugins import (
+    LocalAssaySurrogatePlugin,
+    ModelPlugin,
+    ModelPluginRegistry,
+    ModelPluginSpec,
+    ModelPredictionRequest,
+    ModelTrainingRequest,
+)
 from molecule_ranker.experiments.schemas import (
     ActiveLearningBatch,
     ActiveLearningSuggestion,
@@ -30,6 +38,12 @@ __all__ = [
     "ExperimentAuditEvent",
     "ExperimentalEvidenceSummary",
     "ExperimentalLearningDataset",
+    "LocalAssaySurrogatePlugin",
+    "ModelPlugin",
+    "ModelPluginRegistry",
+    "ModelPluginSpec",
+    "ModelPredictionRequest",
+    "ModelTrainingRequest",
     "suggest_next_experiments",
     "SurrogateModelArtifact",
     "predict_assay_surrogate_outcomes",

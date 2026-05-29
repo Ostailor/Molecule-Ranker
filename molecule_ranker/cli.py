@@ -99,6 +99,20 @@ from molecule_ranker.literature.adapters.openalex_adapter import (
 from molecule_ranker.literature.adapters.pubmed_adapter import (
     PubMedAdapter as LiteraturePubMedAdapter,
 )
+from molecule_ranker.models.calibration import (
+    calibrate_classifier_probabilities,
+    calibrate_regression_predictions,
+)
+from molecule_ranker.models.datasets import build_assay_model_training_dataset
+from molecule_ranker.models.plugin import RuleBasedSurrogatePlugin
+from molecule_ranker.models.registry import ModelRegistry
+from molecule_ranker.models.schemas import (
+    ModelCard,
+    ModelEndpoint,
+    ModelFeatureSpec,
+    ModelTrainingDataset,
+)
+from molecule_ranker.models.training import train_baseline_surrogate_model
 from molecule_ranker.orchestrator import MoleculeRankerOrchestrator
 from molecule_ranker.project import (
     ProjectWorkspaceStore as LegacyProjectWorkspaceStore,
@@ -294,6 +308,18 @@ design_app = typer.Typer(
     help="V1.1 target-conditioned generated molecule design workflows.",
     no_args_is_help=True,
 )
+model_app = typer.Typer(
+    help="V1.2 predictive model datasets, training, prediction, and registry commands.",
+    no_args_is_help=True,
+)
+model_dataset_app = typer.Typer(
+    help="Build assay-specific predictive model datasets.",
+    no_args_is_help=True,
+)
+model_registry_app = typer.Typer(
+    help="Inspect and move local predictive model registry artifacts.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
@@ -313,6 +339,9 @@ app.add_typer(platform_cli_app, name="platform")
 app.add_typer(integration_app, name="integration")
 app.add_typer(release_app, name="release")
 app.add_typer(design_app, name="design")
+app.add_typer(model_app, name="model")
+model_app.add_typer(model_dataset_app, name="dataset")
+model_app.add_typer(model_registry_app, name="registry")
 codex_app.add_typer(codex_assist_app, name="assist")
 codex_app.add_typer(codex_engineering_app, name="engineering")
 auth_cli_app.add_typer(auth_token_app, name="token")
@@ -579,6 +608,37 @@ def validate_design_command(
         typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
         typer.echo(f"JSON: {output_dir / 'design_guardrail_audit.json'}")
         typer.echo(f"Markdown: {output_dir / 'design_guardrail_audit.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("models")
+def validate_models_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    fixture: Annotated[
+        Literal["golden", "leakage", "uncalibrated_overclaim", "fake_prediction_evidence"],
+        typer.Option("--fixture", help="Synthetic model-validation fixture to run."),
+    ] = "golden",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V1.2 predictive-model validation workflow."""
+    from molecule_ranker.validation import run_model_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "models"
+    report = run_model_validation(output_dir=output_dir, fixture=fixture)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Model validation: {report.status}")
+        typer.echo(f"Fixture: {fixture}")
+        typer.echo(f"Artifacts: {len(report.artifacts)}")
+        typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
+        typer.echo(f"JSON: {output_dir / 'model_guardrail_audit.json'}")
+        typer.echo(f"Markdown: {output_dir / 'model_guardrail_audit.md'}")
     if report.status != "pass":
         raise typer.Exit(code=1)
 
@@ -3194,6 +3254,318 @@ def experimental_prioritize(
         )
     if output_path is not None:
         typer.echo(f"Report written: {output_path}")
+
+
+@model_dataset_app.command("build")
+def model_dataset_build(
+    db_path: Annotated[
+        Path,
+        typer.Option("--db-path", help="SQLite experimental result database path."),
+    ],
+    endpoint_name: Annotated[str, typer.Option("--endpoint-name")],
+    target_symbol: Annotated[str | None, typer.Option("--target-symbol")] = None,
+    disease_name: Annotated[str | None, typer.Option("--disease-name")] = None,
+    label_type: Annotated[
+        Literal["binary", "regression"],
+        typer.Option("--label-type", help="Endpoint label type."),
+    ] = "binary",
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True, writable=True),
+    ] = Path(".molecule-ranker/models/datasets"),
+    feature_families: Annotated[
+        list[str] | None,
+        typer.Option("--feature-family", help="Repeatable feature family name."),
+    ] = None,
+) -> None:
+    """Build an assay-specific training dataset from QC-passed imported results."""
+    try:
+        store = V06ExperimentalResultStore(db_path)
+        results = store.list_results()
+        candidates, generated = _model_cli_candidate_payloads(results)
+        endpoint = _model_cli_endpoint(
+            endpoint_name=endpoint_name,
+            target_symbol=target_symbol,
+            disease_name=disease_name,
+            label_type=label_type,
+        )
+        feature_spec = _model_cli_feature_spec(feature_families or ["rdkit_descriptors"])
+        build_result = build_assay_model_training_dataset(
+            store,
+            candidates=candidates,
+            generated_molecules=generated,
+            endpoint=endpoint,
+            feature_spec=feature_spec,
+            output_dir=output_dir,
+            config={},
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _echo_json(
+        {
+            "dataset_id": build_result.dataset.dataset_id,
+            "row_count": build_result.dataset.row_count,
+            "positive_count": build_result.dataset.positive_count,
+            "negative_count": build_result.dataset.negative_count,
+            "manifest": str(build_result.manifest_path),
+            "feature_matrix": str(build_result.feature_matrix_path),
+            "labels": str(build_result.labels_path),
+            "excluded_result_count": len(build_result.dataset.excluded_result_ids),
+        }
+    )
+
+
+@model_app.command("train")
+def model_train(
+    dataset_path: Annotated[
+        Path,
+        typer.Option("--dataset", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    model_type: Annotated[
+        Literal["random_forest", "logistic_regression", "dummy"],
+        typer.Option("--model-type"),
+    ] = "random_forest",
+    split_strategy: Annotated[
+        Literal["scaffold", "time_based", "random"],
+        typer.Option("--split-strategy"),
+    ] = "scaffold",
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True, writable=True),
+    ] = Path(".molecule-ranker/models/training"),
+    random_seed: Annotated[int, typer.Option("--random-seed")] = 0,
+) -> None:
+    """Train a local baseline surrogate model from a model dataset manifest."""
+    try:
+        dataset, feature_rows, labels = _load_model_cli_dataset(dataset_path)
+        train_result = train_baseline_surrogate_model(
+            dataset=dataset,
+            feature_rows=feature_rows,
+            labels=labels,
+            output_dir=output_dir,
+            config={
+                "model_type": model_type,
+                "split_strategy": split_strategy,
+                "random_seed": random_seed,
+            },
+        )
+        registry = _model_cli_registry()
+        registry.register_training_run(train_result.training_run, actor="cli")
+        if train_result.model_card is not None:
+            registry.register_model_card(train_result.model_card, actor="cli")
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _echo_json(
+        {
+            "training_run": train_result.training_run.model_dump(mode="json"),
+            "model_card": (
+                str(train_result.model_card_path) if train_result.model_card_path else None
+            ),
+            "model_artifact": (
+                str(train_result.model_artifact_path) if train_result.model_artifact_path else None
+            ),
+            "prediction_artifact": (
+                str(train_result.prediction_artifact_path)
+                if train_result.prediction_artifact_path
+                else None
+            ),
+            "status": train_result.training_run.status,
+        }
+    )
+
+
+@model_app.command("evaluate")
+def model_evaluate(
+    model_id: Annotated[str | None, typer.Option("--model-id")] = None,
+    model_card_path: Annotated[
+        Path | None,
+        typer.Option("--model-card", file_okay=True, dir_okay=False, readable=True),
+    ] = None,
+    dataset_path: Annotated[
+        Path,
+        typer.Option("--dataset", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ] = Path("dataset_manifest.json"),
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True, writable=True),
+    ] = Path(".molecule-ranker/models/evaluation"),
+) -> None:
+    """Evaluate a model card against a model dataset artifact."""
+    try:
+        model_card = _load_model_cli_model_card(model_id=model_id, model_card_path=model_card_path)
+        dataset, feature_rows, labels = _load_model_cli_dataset(dataset_path)
+        report = RuleBasedSurrogatePlugin().evaluate(
+            model_card,
+            dataset,
+            [row.get("features", {}) for row in feature_rows],
+            labels,
+            {"strategy": "cli_evaluation"},
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_path = output_dir / f"{report.evaluation_id}.json"
+        _write_json(report_path, report.model_dump(mode="json"))
+        _model_cli_registry().register_evaluation_report(report, actor="cli")
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _echo_json({"evaluation_report": str(report_path), "report": report.model_dump(mode="json")})
+
+
+@model_app.command("predict")
+def model_predict(
+    model_card_path: Annotated[
+        Path,
+        typer.Option("--model-card", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    from_run: Annotated[
+        Path,
+        typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = Path("model_predictions.json"),
+) -> None:
+    """Predict for candidates in a run artifact without creating evidence."""
+    try:
+        model_card = ModelCard.model_validate_json(model_card_path.read_text())
+        candidates, generated = _load_experiment_run_candidates(from_run, include_generated=True)
+        candidate_rows = [
+            _model_cli_candidate_row(candidate) for candidate in [*candidates, *generated]
+        ]
+        feature_rows = [
+            {
+                "predicted_probability": 0.5,
+                "uncertainty": 0.5,
+                "confidence": 0.5,
+                "applicability_domain": "unknown",
+                "calibration_status": model_card.calibration_metrics.get("status")
+                or "uncalibrated",
+                "warnings": ["CLI prediction uses model card context only."],
+            }
+            for _candidate in candidate_rows
+        ]
+        predictions = RuleBasedSurrogatePlugin().predict(
+            model_card,
+            candidate_rows,
+            feature_rows,
+            {},
+        )
+        payload = {
+            "artifact_type": "ModelPredictionArtifact",
+            "model_id": model_card.model_id,
+            "endpoint_id": model_card.endpoint.endpoint_id,
+            "predictions": [prediction.model_dump(mode="json") for prediction in predictions],
+            "warnings": [
+                "Predictions are not biomedical evidence.",
+                "Predictions are not assay results.",
+            ],
+        }
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _echo_json({"output": str(output), "prediction_count": len(predictions)})
+
+
+@model_registry_app.command("list")
+def model_registry_list() -> None:
+    """List active local model cards."""
+    try:
+        cards = _model_cli_registry().list_models(active_only=False)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_json({"models": [card.model_dump(mode="json") for card in cards]})
+
+
+@model_registry_app.command("show")
+def model_registry_show(model_id: str) -> None:
+    """Show a registered model card."""
+    try:
+        card = _model_cli_registry().get_model_card(model_id)
+    except (OSError, ValueError, KeyError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_json(card.model_dump(mode="json"))
+
+
+@model_registry_app.command("export")
+def model_registry_export(model_id: str) -> None:
+    """Export a registered model package."""
+    try:
+        package_path = Path(".molecule-ranker/models/packages") / f"{model_id}.zip"
+        exported = _model_cli_registry().export_model_package(model_id, package_path)
+    except (OSError, ValueError, KeyError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_json({"package": str(exported), "model_id": model_id})
+
+
+@model_registry_app.command("import")
+def model_registry_import(package: Path) -> None:
+    """Import a model package into the local registry."""
+    try:
+        imported = _model_cli_registry().import_model_package(package, actor="cli")
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_json({"imported_model_ids": imported})
+
+
+@model_app.command("calibrate")
+def model_calibrate(
+    model_card_path: Annotated[
+        Path,
+        typer.Option("--model-card", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    dataset_path: Annotated[
+        Path,
+        typer.Option("--dataset", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, dir_okay=True, writable=True),
+    ] = Path(".molecule-ranker/models/calibration"),
+) -> None:
+    """Compute calibration diagnostics from a model card and dataset labels."""
+    try:
+        model_card = ModelCard.model_validate_json(model_card_path.read_text())
+        dataset, _feature_rows, labels = _load_model_cli_dataset(dataset_path)
+        if dataset.endpoint.label_type == "binary":
+            probabilities = [0.5 for _label in labels]
+            result = calibrate_classifier_probabilities(probabilities, labels)
+        else:
+            predictions = [0.0 for _label in labels]
+            result = calibrate_regression_predictions(
+                predictions,
+                [float(label) for label in labels],
+            )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"{model_card.model_id}_calibration.json"
+        payload = {
+            "model_id": model_card.model_id,
+            "dataset_id": dataset.dataset_id,
+            "calibration_status": result.calibration_status,
+            "metrics": result.metrics,
+            "warnings": result.warnings,
+            "metadata": result.metadata,
+            "not_experimental_evidence": True,
+            "not_assay_result": True,
+        }
+        _write_json(path, payload)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _echo_json({"calibration_report": str(path), **payload})
 
 
 @project_app.command("init")
@@ -6899,6 +7271,162 @@ def _experiment_results_summary_payload(results: list[AssayResult]) -> dict[str,
         "warning_count": warning_count,
         "result_ids": [result.result_id for result in results],
     }
+
+
+def _model_cli_endpoint(
+    *,
+    endpoint_name: str,
+    target_symbol: str | None,
+    disease_name: str | None,
+    label_type: str,
+) -> ModelEndpoint:
+    return ModelEndpoint(
+        endpoint_id=f"endpoint-{slugify(endpoint_name)}",
+        endpoint_name=endpoint_name,
+        endpoint_category="other",
+        target_symbol=target_symbol,
+        disease_name=disease_name,
+        assay_type=None,
+        unit=None,
+        label_type=label_type,  # type: ignore[arg-type]
+        positive_label="positive" if label_type == "binary" else None,
+        directionality="binary" if label_type == "binary" else "neutral",
+        thresholds={},
+        metadata={"created_by": "model_cli"},
+    )
+
+
+def _model_cli_feature_spec(feature_families: list[str]) -> ModelFeatureSpec:
+    families = feature_families or ["rdkit_descriptors"]
+    return ModelFeatureSpec(
+        feature_spec_id=f"feature-spec-{slugify('-'.join(families))}",
+        feature_families=families,
+        fingerprint_radius=2 if "morgan_fingerprint" in families else None,
+        fingerprint_bits=2048 if "morgan_fingerprint" in families else None,
+        descriptor_names=[],
+        normalization="none",
+        metadata={"created_by": "model_cli"},
+    )
+
+
+def _model_cli_candidate_payloads(
+    results: list[AssayResult],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    candidates: dict[str, dict[str, Any]] = {}
+    generated: dict[str, dict[str, Any]] = {}
+    for result in results:
+        payload = {
+            "candidate_id": result.candidate_id or result.candidate_name,
+            "candidate_name": result.candidate_name,
+            "candidate_origin": result.candidate_origin,
+            "canonical_smiles": result.canonical_smiles,
+            "inchi_key": result.inchi_key,
+        }
+        key = str(payload["candidate_id"] or payload["candidate_name"])
+        if result.candidate_origin == "generated":
+            generated[key] = payload
+        else:
+            candidates[key] = payload
+    return list(candidates.values()), list(generated.values())
+
+
+def _load_model_cli_dataset(
+    dataset_path: Path,
+) -> tuple[ModelTrainingDataset, list[dict[str, Any]], list[Any]]:
+    dataset = ModelTrainingDataset.model_validate_json(dataset_path.read_text())
+    feature_path = _resolve_model_cli_artifact_path(dataset_path, dataset.feature_matrix_uri)
+    labels_path = _resolve_model_cli_artifact_path(dataset_path, dataset.labels_uri)
+    feature_payload = json.loads(feature_path.read_text())
+    labels_payload = json.loads(labels_path.read_text())
+    raw_rows = feature_payload.get("rows", [])
+    raw_labels = labels_payload.get("labels", [])
+    if not isinstance(raw_rows, list) or not isinstance(raw_labels, list):
+        raise ValueError("Dataset feature and label artifacts must contain JSON lists.")
+    return dataset, [_model_cli_training_row(row) for row in raw_rows], raw_labels
+
+
+def _resolve_model_cli_artifact_path(manifest_path: Path, uri: str | None) -> Path:
+    if not uri:
+        raise ValueError(f"Dataset manifest is missing artifact URI: {manifest_path}")
+    path = Path(uri)
+    if not path.is_absolute():
+        path = manifest_path.parent / path
+    if not path.exists():
+        raise ValueError(f"Dataset artifact not found: {path}")
+    return path
+
+
+def _model_cli_training_row(row: Any) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        row = {}
+    features = {
+        key: float(value)
+        for key, value in row.items()
+        if isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and key
+        not in {
+            "label",
+            "outcome_label",
+            "activity_direction",
+            "measured_value",
+            "normalized_value",
+        }
+    }
+    return {
+        **row,
+        "features": features,
+        "row_id": row.get("result_id") or row.get("candidate_id") or row.get("candidate_name"),
+    }
+
+
+def _load_model_cli_model_card(
+    *,
+    model_id: str | None,
+    model_card_path: Path | None,
+) -> ModelCard:
+    if model_card_path is not None:
+        return ModelCard.model_validate_json(model_card_path.read_text())
+    if not model_id:
+        raise ValueError("--model-id or --model-card is required.")
+    return _model_cli_registry().get_model_card(model_id)
+
+
+def _model_cli_registry() -> ModelRegistry:
+    return ModelRegistry(
+        db_path=Path(".molecule-ranker/models/model_registry.sqlite"),
+        artifact_dir=Path(".molecule-ranker/models/registry_artifacts"),
+    )
+
+
+def _model_cli_candidate_row(candidate: Any) -> dict[str, Any]:
+    if isinstance(candidate, MoleculeCandidate):
+        return {
+            "candidate_id": candidate.identifiers.get("chembl")
+            or candidate.identifiers.get("generated")
+            or candidate.name,
+            "candidate_name": candidate.name,
+            "candidate_origin": candidate.origin,
+            "canonical_smiles": candidate.chemical_metadata.get("canonical_smiles"),
+            "inchi_key": candidate.chemical_metadata.get("inchi_key"),
+        }
+    if isinstance(candidate, GeneratedMoleculeHypothesis):
+        return {
+            "candidate_id": candidate.name,
+            "candidate_name": candidate.name,
+            "candidate_origin": "generated",
+            "canonical_smiles": candidate.canonical_smiles,
+            "inchi_key": candidate.trace.get("inchi_key"),
+        }
+    if isinstance(candidate, GeneratedMolecule):
+        return {
+            "candidate_id": candidate.generated_id,
+            "candidate_name": candidate.generated_id,
+            "candidate_origin": "generated",
+            "canonical_smiles": candidate.canonical_smiles,
+            "inchi_key": candidate.inchi_key,
+        }
+    return dict(candidate) if isinstance(candidate, dict) else {"candidate_name": "candidate"}
 
 
 def _load_experiment_run_candidates(

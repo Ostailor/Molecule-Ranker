@@ -28,7 +28,7 @@ def render_hosted_dashboard(
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<title>molecule-ranker V1.1</title>"
+        "<title>molecule-ranker V1.2</title>"
         "<style>"
         "body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;"
         "color:#182230;background:#f6f8fb;line-height:1.45}"
@@ -42,7 +42,7 @@ def render_hosted_dashboard(
         "th,td{border:1px solid #d6deea;padding:8px;text-align:left;vertical-align:top}"
         "th{background:#eef3f8}"
         "</style></head><body>"
-        "<header><h1>molecule-ranker V1.1 hosted dashboard</h1></header>"
+        "<header><h1>molecule-ranker V1.2 hosted dashboard</h1></header>"
         "<main>"
         "<p class=\"notice\">Internal research platform. Source-backed evidence remains "
         "authoritative; Codex outputs are guarded assistant artifacts, not biomedical truth.</p>"

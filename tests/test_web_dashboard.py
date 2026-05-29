@@ -10,6 +10,15 @@ from fastapi.testclient import TestClient
 
 from molecule_ranker.integrations.schemas import ExternalSystem
 from molecule_ranker.integrations.store import IntegrationStore
+from molecule_ranker.models.registry import ModelRegistry
+from molecule_ranker.models.schemas import (
+    ModelCard,
+    ModelEndpoint,
+    ModelEvaluationReport,
+    ModelFeatureSpec,
+    ModelPrediction,
+    ModelTrainingRun,
+)
 from molecule_ranker.server import create_app
 from molecule_ranker.workspace.schemas import ArtifactRecord
 from molecule_ranker.workspace.store import ProjectWorkspaceStore
@@ -35,6 +44,14 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/projects/workspace-a/design/readiness",
         "/dashboard/projects/workspace-a/design/benchmarks",
         "/dashboard/projects/workspace-a/design/active-loop",
+        "/dashboard/projects/workspace-a/models",
+        "/dashboard/projects/workspace-a/models/model-1",
+        "/dashboard/projects/workspace-a/models/training-runs",
+        "/dashboard/projects/workspace-a/models/evaluation-reports",
+        "/dashboard/projects/workspace-a/models/calibration",
+        "/dashboard/projects/workspace-a/models/prediction-batches",
+        "/dashboard/projects/workspace-a/models/predictions/Candidate%201",
+        "/dashboard/projects/workspace-a/models/active-design-influence",
         "/dashboard/projects/workspace-a/activity",
         "/dashboard/projects/workspace-a/review",
         "/dashboard/projects/workspace-a/candidates/Rasagiline",
@@ -93,6 +110,8 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
         "/dashboard/projects/workspace-a/runs/run-a/experiments": [
             "Experimental evidence",
             "Model predictions",
+            "Model cards",
+            "not experimental evidence",
         ],
         "/dashboard/projects/workspace-a/runs/run-a/active-learning": [
             "Active learning view",
@@ -126,6 +145,87 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
         assert response.status_code == 200, path
         for snippet in snippets:
             assert snippet in response.text, path
+
+
+def test_model_dashboard_pages_label_predictions_and_uncalibrated_warnings(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    _create_project_with_run(client, tmp_path, admin_headers, project_id="workspace-a")
+    _seed_model_registry(tmp_path)
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    expectations = {
+        "/dashboard/projects/workspace-a/models": [
+            "Model registry",
+            "binary local surrogate",
+            "Calibration status",
+        ],
+        "/dashboard/projects/workspace-a/models/model-1": [
+            "Model card detail",
+            "Limitations",
+            "Calibration status",
+            "Uncalibrated warning shown",
+        ],
+        "/dashboard/projects/workspace-a/models/training-runs": [
+            "Training runs",
+            "skipped_insufficient_data",
+        ],
+        "/dashboard/projects/workspace-a/models/evaluation-reports": [
+            "Evaluation reports",
+            "Leakage checks",
+        ],
+        "/dashboard/projects/workspace-a/models/calibration": [
+            "Calibration summary",
+            "Uncalibrated warning shown",
+        ],
+        "/dashboard/projects/workspace-a/models/prediction-batches": [
+            "Prediction batches",
+            "Prediction artifacts are separate",
+            "Model predictions are predictions",
+            "Prediction artifact contents",
+            "Candidate 1",
+            "surrogate_positive (prediction only)",
+            "Uncalibrated prediction warning shown",
+            "Out-of-domain prediction warning shown",
+        ],
+        "/dashboard/projects/workspace-a/models/predictions/Candidate%201": [
+            "Prediction detail for candidate",
+            "prediction only",
+            "not experimental evidence",
+        ],
+        "/dashboard/projects/workspace-a/models/active-design-influence": [
+            "Model influence in active design",
+            "prioritization rationale",
+            "Calibrated surrogate oracle",
+            "model uncertainty remains auditable",
+        ],
+    }
+    for path, snippets in expectations.items():
+        response = client.get(path)
+        assert response.status_code == 200, path
+        for snippet in snippets:
+            assert snippet in response.text, path
+
+
+def test_model_dashboard_permission_enforced(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    _create_project_with_run(client, tmp_path, admin_headers, project_id="workspace-a")
+    created = client.post(
+        "/admin/users",
+        json={"email": "outsider@example.com", "password": "Outsider-password-1"},
+        headers=admin_headers,
+    )
+    assert created.status_code == 200, created.text
+    client.cookies.clear()
+    _web_login(client, "outsider@example.com", "Outsider-password-1")
+
+    response = client.get("/dashboard/projects/workspace-a/models")
+
+    assert response.status_code == 403
 
 
 def test_design_dashboard_labels_generated_molecules_as_hypotheses(tmp_path: Path) -> None:
@@ -742,6 +842,106 @@ def _write_run(run_dir: Path, *, candidate_name: str, assay_file_name: str) -> N
         )
     )
     (run_dir / "design_loop_report.md").write_text("# design_loop_report.md\n")
+
+
+def _seed_model_registry(tmp_path: Path) -> None:
+    registry = ModelRegistry(
+        db_path=tmp_path / ".molecule-ranker/models/model_registry.sqlite",
+        artifact_dir=tmp_path / ".molecule-ranker/models/registry_artifacts",
+    )
+    endpoint = ModelEndpoint(
+        endpoint_id="endpoint-binary",
+        endpoint_name="binary_endpoint",
+        endpoint_category="potency",
+        target_symbol="MAOB",
+        disease_name="Parkinson disease",
+        assay_type="biochemical",
+        unit=None,
+        label_type="binary",
+        positive_label="positive",
+        directionality="binary",
+    )
+    feature_spec = ModelFeatureSpec(
+        feature_spec_id="feature-spec-1",
+        feature_families=["rdkit_descriptors"],
+        fingerprint_radius=None,
+        fingerprint_bits=None,
+        descriptor_names=["molecular_weight"],
+        normalization="none",
+    )
+    card = ModelCard(
+        model_id="model-1",
+        model_name="binary local surrogate",
+        model_version="1.2.0",
+        plugin_name="local_sklearn_baseline",
+        endpoint=endpoint,
+        feature_spec=feature_spec,
+        training_dataset_id="dataset-1",
+        training_data_summary={"row_count": 4, "source_result_ids": ["result-1"]},
+        model_type="LogisticRegression",
+        intended_use="Assay-specific prioritization only.",
+        limitations=["Predictions are not experimental evidence."],
+        metrics={"accuracy": 0.75},
+        calibration_metrics={"status": "uncalibrated"},
+        applicability_domain_method="nearest_neighbor_tanimoto",
+        created_at=datetime(2026, 1, 3, tzinfo=UTC),
+    )
+    registry.register_model_card(card)
+    registry.register_training_run(
+        ModelTrainingRun(
+            training_run_id="training-run-1",
+            model_id="model-1",
+            dataset_id="dataset-1",
+            status="skipped_insufficient_data",
+            started_at=datetime(2026, 1, 4, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 4, tzinfo=UTC),
+            metrics={},
+            calibration_metrics={"status": "insufficient_data"},
+            warnings=["small dataset"],
+        )
+    )
+    registry.register_evaluation_report(
+        ModelEvaluationReport(
+            evaluation_id="evaluation-1",
+            model_id="model-1",
+            dataset_id="dataset-1",
+            split_strategy="scaffold",
+            metrics={"accuracy": 0.75},
+            calibration_metrics={"status": "uncalibrated"},
+            leakage_checks={"passed": True},
+            applicability_domain_summary={"out_of_domain": 1},
+            warnings=["calibration validation set too small"],
+            created_at=datetime(2026, 1, 5, tzinfo=UTC),
+        )
+    )
+    registry.save_prediction_batch(
+        "model-1",
+        "batch-1",
+        [
+            ModelPrediction(
+                prediction_id="prediction-1",
+                model_id="model-1",
+                model_version="1.2.0",
+                endpoint_id="endpoint-binary",
+                candidate_id="candidate-1",
+                candidate_name="Candidate 1",
+                candidate_origin="generated",
+                canonical_smiles="CCO",
+                inchi_key=None,
+                predicted_value=True,
+                predicted_probability=0.6,
+                prediction_label="surrogate_positive",
+                uncertainty=0.4,
+                confidence=0.6,
+                applicability_domain="out_of_domain",
+                calibration_status="uncalibrated",
+                explanation="Prediction artifact only.",
+                warnings=["not evidence"],
+                created_at=datetime(2026, 1, 6, tzinfo=UTC),
+                metadata={"not_experimental_evidence": True},
+            )
+        ],
+    )
 
 
 def _write_codex_output(

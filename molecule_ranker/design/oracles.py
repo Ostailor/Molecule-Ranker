@@ -50,7 +50,19 @@ class MultiObjectiveOracleStack:
         retained_generated: list[GeneratedMolecule],
         enable_docking: bool = False,
         enable_surrogate: bool = False,
+        enable_surrogate_oracle: bool | None = None,
+        surrogate_oracle_weight: float = 0.08,
+        require_calibrated_predictions: bool = True,
+        allow_uncalibrated_with_warning: bool = False,
+        min_prediction_confidence: float = 0.5,
+        out_of_domain_penalty: float = 0.08,
+        surrogate_endpoint_id: str | None = None,
     ) -> OracleStackResult:
+        surrogate_enabled = (
+            enable_surrogate
+            if enable_surrogate_oracle is None
+            else enable_surrogate_oracle
+        )
         oracles = [
             self._validity_oracle(candidate),
             self._novelty_oracle(candidate),
@@ -62,7 +74,15 @@ class MultiObjectiveOracleStack:
             self._experimental_gap_oracle(candidate),
             self._literature_context_oracle(objective, seeds),
             self._docking_oracle(candidate, enable_docking),
-            self._surrogate_activity_oracle(candidate, enable_surrogate),
+            self._calibrated_surrogate_oracle(
+                candidate,
+                objective,
+                enabled=surrogate_enabled,
+                require_calibrated=require_calibrated_predictions,
+                allow_uncalibrated_with_warning=allow_uncalibrated_with_warning,
+                min_confidence=min_prediction_confidence,
+                endpoint_id=surrogate_endpoint_id,
+            ),
             self._synthetic_accessibility_heuristic_oracle(candidate),
         ]
         by_name = {oracle.oracle_name: oracle for oracle in oracles}
@@ -82,7 +102,12 @@ class MultiObjectiveOracleStack:
         experimental_gap_value = by_name["experimental_gap_oracle"].score
         structure_score = by_name["docking_oracle"].score if enable_docking else None
         surrogate_score = (
-            by_name["surrogate_activity_oracle"].score if enable_surrogate else None
+            by_name["calibrated_surrogate_oracle"].score if surrogate_enabled else None
+        )
+        surrogate_penalty = (
+            out_of_domain_penalty
+            if "surrogate_out_of_domain" in by_name["calibrated_surrogate_oracle"].risk_flags
+            else 0.0
         )
         composite = self._composite(
             target_context_score=target_context_score,
@@ -95,6 +120,8 @@ class MultiObjectiveOracleStack:
             seed_evidence_score=seed_evidence_score,
             structure_score=structure_score,
             surrogate_score=surrogate_score,
+            surrogate_weight=self._clamp(surrogate_oracle_weight),
+            surrogate_penalty=self._clamp(surrogate_penalty),
         )
         risk_flags = sorted({flag for oracle in oracles for flag in oracle.risk_flags})
         if "critical_developability_risk" in risk_flags:
@@ -115,7 +142,9 @@ class MultiObjectiveOracleStack:
         if structure_score is not None:
             component_scores["structure_score"] = round(structure_score, 3)
         if surrogate_score is not None:
-            component_scores["surrogate_score"] = round(surrogate_score, 3)
+            component_scores["calibrated_surrogate_score"] = round(surrogate_score, 3)
+            if surrogate_penalty:
+                component_scores["surrogate_domain_penalty"] = round(surrogate_penalty, 3)
         return OracleStackResult(
             generated_id=candidate.generated_id,
             experiment_worthiness_score=round(self._clamp(composite), 3),
@@ -123,12 +152,13 @@ class MultiObjectiveOracleStack:
             component_scores=component_scores,
             risk_flags=risk_flags,
             oracles=oracles,
-            explanation=self._explanation(enable_docking, enable_surrogate),
+            explanation=self._explanation(enable_docking, surrogate_enabled),
             metadata={
                 "score_name": "experiment_worthiness_score",
                 "claim_boundary": "computational triage only",
                 "docking_enabled": enable_docking,
-                "surrogate_enabled": enable_surrogate,
+                "surrogate_enabled": surrogate_enabled,
+                "surrogate_oracle_weight": self._clamp(surrogate_oracle_weight),
             },
         )
 
@@ -415,38 +445,189 @@ class MultiObjectiveOracleStack:
             {"enabled": True, "available": True, "raw_score": raw},
         )
 
-    def _surrogate_activity_oracle(
+    def _calibrated_surrogate_oracle(
         self,
         candidate: GeneratedMolecule,
+        objective: GenerationObjective | None,
+        *,
         enabled: bool,
+        require_calibrated: bool,
+        allow_uncalibrated_with_warning: bool,
+        min_confidence: float,
+        endpoint_id: str | None,
     ) -> OracleResult:
-        raw = candidate.metadata.get("surrogate_activity_score")
+        raw, prediction_metadata, risk_flags = self._calibrated_surrogate_prediction_signal(
+            candidate,
+            objective,
+            require_calibrated=require_calibrated,
+            allow_uncalibrated_with_warning=allow_uncalibrated_with_warning,
+            min_confidence=self._clamp(min_confidence),
+            endpoint_id=endpoint_id,
+        )
         if not enabled:
             return self._oracle(
-                "surrogate_activity_oracle",
+                "calibrated_surrogate_oracle",
                 0.5,
                 0.1,
                 ["surrogate_absent"],
-                "Surrogate activity model is absent or disabled; neutral weak signal used.",
-                {"enabled": False, "available": False},
+                "Surrogate model signal is absent or disabled; neutral weak signal used.",
+                {"enabled": False, "available": False, "not_experimental_evidence": True},
             )
         if not isinstance(raw, (int, float)):
             return self._oracle(
-                "surrogate_activity_oracle",
+                "calibrated_surrogate_oracle",
                 0.5,
                 0.1,
-                ["surrogate_absent"],
-                "Surrogate enabled but no imported experimental model score exists.",
-                {"enabled": True, "available": False},
+                risk_flags or ["surrogate_absent"],
+                "Surrogate enabled but no eligible calibrated prediction artifact exists.",
+                {
+                    "enabled": True,
+                    "available": False,
+                    "not_experimental_evidence": True,
+                    "not_assay_result": True,
+                    "selection": prediction_metadata,
+                },
             )
+        applicability_domain = str(prediction_metadata.get("applicability_domain") or "")
+        score = 0.25 if applicability_domain == "out_of_domain" else self._clamp(float(raw))
+        confidence = self._clamp(float(prediction_metadata.get("confidence") or 0.25))
         return self._oracle(
-            "surrogate_activity_oracle",
-            self._clamp(float(raw)),
-            0.25,
-            ["weak_surrogate_signal"],
-            "Surrogate score is a weak prioritization signal, not predicted activity.",
-            {"enabled": True, "available": True, "raw_score": raw},
+            "calibrated_surrogate_oracle",
+            score,
+            min(confidence, 0.45),
+            ["weak_calibrated_surrogate_signal", *risk_flags],
+            (
+                "Calibrated surrogate prediction is a weak prioritization signal, "
+                "not evidence or an assay result."
+            ),
+            {
+                "enabled": True,
+                "available": True,
+                "raw_score": raw,
+                "not_experimental_evidence": True,
+                "not_assay_result": True,
+                "prediction_artifact": prediction_metadata,
+            },
         )
+
+    def _calibrated_surrogate_prediction_signal(
+        self,
+        candidate: GeneratedMolecule,
+        objective: GenerationObjective | None,
+        *,
+        require_calibrated: bool,
+        allow_uncalibrated_with_warning: bool,
+        min_confidence: float,
+        endpoint_id: str | None,
+    ) -> tuple[float | None, dict[str, Any], list[str]]:
+        predictions = candidate.metadata.get("model_predictions")
+        if predictions is None:
+            predictions = candidate.metadata.get("surrogate_predictions")
+        endpoint_ids = self._expected_surrogate_endpoint_ids(objective, endpoint_id)
+        rejected: list[str] = []
+        if isinstance(predictions, list):
+            eligible: list[tuple[float, dict[str, Any], list[str]]] = []
+            for item in predictions:
+                if not isinstance(item, dict):
+                    continue
+                value, metadata, risk_flags, exclusion = self._prediction_signal_value(
+                    item,
+                    endpoint_ids=endpoint_ids,
+                    require_calibrated=require_calibrated,
+                    allow_uncalibrated_with_warning=allow_uncalibrated_with_warning,
+                    min_confidence=min_confidence,
+                )
+                if value is None:
+                    if exclusion:
+                        rejected.append(exclusion)
+                    continue
+                eligible.append((value, metadata, risk_flags))
+            if eligible:
+                eligible.sort(
+                    key=lambda item: (item[1].get("confidence", 0.0), item[0]),
+                    reverse=True,
+                )
+                return eligible[0]
+        return None, {"rejected_reasons": sorted(set(rejected))}, sorted(set(rejected))
+
+    def _prediction_signal_value(
+        self,
+        prediction: dict[str, Any],
+        *,
+        endpoint_ids: set[str],
+        require_calibrated: bool,
+        allow_uncalibrated_with_warning: bool,
+        min_confidence: float,
+    ) -> tuple[float | None, dict[str, Any], list[str], str | None]:
+        endpoint = str(prediction.get("endpoint_id") or "")
+        if not endpoint_ids:
+            return None, {}, [], "surrogate_endpoint_context_absent"
+        if endpoint_ids and endpoint not in endpoint_ids:
+            return None, {}, [], "surrogate_endpoint_mismatch"
+        confidence = prediction.get("confidence")
+        if not isinstance(confidence, (int, float)) or float(confidence) < min_confidence:
+            return None, {}, [], "surrogate_low_confidence"
+        calibration_status = str(prediction.get("calibration_status") or "unknown")
+        risk_flags: list[str] = []
+        if calibration_status == "insufficient_data":
+            return None, {}, [], "surrogate_insufficient_calibration_data"
+        if calibration_status != "calibrated":
+            if require_calibrated and not allow_uncalibrated_with_warning:
+                return None, {}, [], "surrogate_uncalibrated"
+            risk_flags.append("surrogate_uncalibrated")
+        applicability_domain = str(prediction.get("applicability_domain") or "unknown")
+        if applicability_domain in {"unknown", ""}:
+            return None, {}, [], "surrogate_applicability_unknown"
+        if applicability_domain == "out_of_domain":
+            risk_flags.append("surrogate_out_of_domain")
+        value = self._prediction_score(prediction)
+        if value is None:
+            return None, {}, [], "surrogate_prediction_value_absent"
+        metadata = {
+            "prediction_id": prediction.get("prediction_id"),
+            "model_id": prediction.get("model_id"),
+            "model_version": prediction.get("model_version"),
+            "endpoint_id": endpoint,
+            "confidence": self._clamp(float(confidence)),
+            "uncertainty": self._clamp(float(prediction.get("uncertainty") or 0.0)),
+            "applicability_domain": applicability_domain,
+            "calibration_status": calibration_status,
+            "not_evidence": bool(prediction.get("not_evidence", True)),
+            "not_assay_result": bool(prediction.get("not_assay_result", True)),
+        }
+        return value, metadata, risk_flags, None
+
+    def _prediction_score(self, prediction: dict[str, Any]) -> float | None:
+        probability = prediction.get("predicted_probability")
+        if isinstance(probability, (int, float)):
+            return self._clamp(float(probability))
+        value = prediction.get("predicted_value")
+        if isinstance(value, bool):
+            return 0.85 if value else 0.15
+        if isinstance(value, (int, float)):
+            return self._clamp(float(value))
+        label = str(prediction.get("prediction_label") or "").lower()
+        if label in {"positive", "improved", "true", "yes"}:
+            return 0.75
+        if label in {"negative", "worsened", "false", "no"}:
+            return 0.25
+        return None
+
+    def _expected_surrogate_endpoint_ids(
+        self,
+        objective: GenerationObjective | None,
+        endpoint_id: str | None,
+    ) -> set[str]:
+        endpoint_ids = {str(endpoint_id)} if endpoint_id else set()
+        metadata = objective.metadata if objective is not None else {}
+        for key in ("model_endpoint_id", "endpoint_id", "assay_endpoint_id"):
+            value = metadata.get(key)
+            if value:
+                endpoint_ids.add(str(value))
+        values = metadata.get("predictive_model_endpoint_ids")
+        if isinstance(values, list):
+            endpoint_ids.update(str(value) for value in values if value)
+        return endpoint_ids
 
     def _synthetic_accessibility_heuristic_oracle(
         self,
@@ -514,6 +695,8 @@ class MultiObjectiveOracleStack:
         seed_evidence_score: float,
         structure_score: float | None,
         surrogate_score: float | None,
+        surrogate_weight: float,
+        surrogate_penalty: float,
     ) -> float:
         score = (
             0.16 * target_context_score
@@ -528,7 +711,8 @@ class MultiObjectiveOracleStack:
         if structure_score is not None:
             score += 0.03 * structure_score
         if surrogate_score is not None:
-            score += 0.05 * surrogate_score
+            score += surrogate_weight * (surrogate_score - 0.5)
+            score -= surrogate_penalty
         return self._clamp(score)
 
     def _explanation(self, enable_docking: bool, enable_surrogate: bool) -> str:

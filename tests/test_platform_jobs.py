@@ -149,6 +149,110 @@ def test_codex_design_plan_requires_approval_for_large_generation(tmp_path: Path
     assert approved.status == "queued"
 
 
+def test_model_training_and_validation_jobs_are_supported_but_guarded(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+
+    training = queue.enqueue(
+        job_type="model_training",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={
+            "endpoint_name": "binding_affinity",
+            "target_symbol": "MAOB",
+            "use_patient_data": False,
+        },
+    )
+    validation = queue.enqueue(
+        job_type="model_validation",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"model_id": "model-binding-affinity-1"},
+    )
+    dataset_build = queue.enqueue(
+        job_type="model_dataset_build",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"endpoint_name": "binding_affinity", "target_symbol": "MAOB"},
+    )
+    train = queue.enqueue(
+        job_type="model_train",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"dataset_id": "dataset-1"},
+    )
+    evaluate = queue.enqueue(
+        job_type="model_evaluate",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"model_id": "model-binding-affinity-1"},
+    )
+    predict = queue.enqueue(
+        job_type="model_predict",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"model_id": "model-binding-affinity-1"},
+    )
+    calibrate = queue.enqueue(
+        job_type="model_calibrate",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"model_id": "model-binding-affinity-1"},
+    )
+
+    assert training.status == "queued"
+    assert validation.status == "queued"
+    assert dataset_build.status == "queued"
+    assert train.status == "queued"
+    assert evaluate.status == "queued"
+    assert predict.status == "queued"
+    assert calibrate.status == "queued"
+
+    try:
+        queue.enqueue(
+            job_type="model_training",
+            requested_by=user,
+            project_id="project-1",
+            config_snapshot={"endpoint_name": "binding_affinity", "use_patient_data": True},
+        )
+    except PermissionError as exc:
+        assert "patient" in str(exc).lower()
+    else:
+        raise AssertionError("Expected model training patient-data guardrail.")
+
+
+def test_model_job_permissions_are_enforced(tmp_path: Path) -> None:
+    database = PlatformDatabase(tmp_path, db_path=tmp_path / "platform.sqlite")
+    viewer = database.create_user(email="viewer@example.com", password="Viewer-password-1")
+    database.grant_project_permission(
+        project_id="project-1",
+        role="viewer",
+        actor_user_id=viewer.user_id,
+        user_id=viewer.user_id,
+    )
+    queue = PlatformJobQueue(database)
+
+    readable = queue.enqueue(
+        job_type="model_evaluate",
+        requested_by=viewer,
+        project_id="project-1",
+        config_snapshot={"model_id": "model-binding-affinity-1"},
+    )
+
+    assert readable.status == "queued"
+    try:
+        queue.enqueue(
+            job_type="model_train",
+            requested_by=viewer,
+            project_id="project-1",
+            config_snapshot={"dataset_id": "dataset-1"},
+        )
+    except PermissionError as exc:
+        assert "model:train" in str(exc)
+    else:
+        raise AssertionError("Expected model training permission denial.")
+
+
 def test_design_generation_budget_limit_enforced(tmp_path: Path) -> None:
     database, user = _database_with_project_user(tmp_path)
 

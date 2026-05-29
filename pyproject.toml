@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "molecule-ranker"
-version = "1.1.0"
+version = "1.2.0"
 description = "Internal research platform for source-backed molecule ranking and guarded Codex orchestration."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -15,16 +15,21 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V1.1 upgrades the V1.0 validated internal research platform with an "
-            "agentic scientific design workflow and stronger generated-molecule triage. "
+            "V1.2 upgrades the V1.1 validated internal research platform with a "
+            "formal predictive model plugin system and calibrated assay-specific "
+            "surrogate model artifacts. "
             "The validated internal research platform MVP boundary remains intact: "
-            "generated molecules are computational hypotheses, not biomedical claims.",
+            "model predictions and generated molecules are computational prioritization "
+            "signals, not biomedical claims.",
             "",
             "## Included",
             "",
             "- End-to-end golden workflows in deterministic mocked validation mode.",
             "- Versioned artifact and API contracts for V1.0 platform outputs.",
-            "- AgentGraph runtime for V1.1 scientific design planning and traceability.",
+            "- AgentGraph runtime for scientific design planning and traceability.",
+            "- Formal model plugin interface for local and future external providers.",
+            "- Assay-specific surrogate model cards, manifests, metrics, and prediction "
+            "artifacts kept separate from evidence and assay results.",
             "- Generated report cards with objective alignment, uncertainty, diversity, "
             "critique, readiness, and active-learning triage fields.",
             "- Generator benchmark metrics for readiness, uncertainty, and generator coverage.",

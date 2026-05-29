@@ -1,22 +1,24 @@
 # molecule-ranker
 
 `molecule-ranker` is a validated internal research platform MVP for
-source-backed molecule ranking and research operations. V1.1 builds on the
-validated V1.0 platform with an AgentGraph scientific design workflow,
-generated-molecule report cards, uncertainty/diversity/readiness triage, and
-generator benchmarking. V1.0 supports
-source-backed ranking, generated molecule hypotheses, developability triage,
-literature evidence, experimental feedback, review workflows, Codex-backed
-orchestration, hosted platform mode, and guarded external integrations.
+source-backed molecule ranking and research operations. V1.2 builds on the
+validated V1.1 platform with a formal predictive model plugin interface,
+calibrated assay-specific surrogate model artifacts, and hosted model training
+and validation job surfaces. V1.1 already supports AgentGraph scientific design
+workflows, generated-molecule report cards, uncertainty/diversity/readiness
+triage, generator benchmarking, source-backed ranking, generated molecule
+hypotheses, developability triage, literature evidence, experimental feedback,
+review workflows, Codex-backed orchestration, hosted platform mode, and guarded
+external integrations.
 
-V1.1 is for internal research use only. It is not a regulated clinical product.
+V1.2 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
 treat, are safe, or are active. Codex is an orchestration and summarization
 layer, not scientific truth. Data provenance, audit logs, and guardrails are
 core design principles.
 
-Given a disease name, V1.1 resolves the disease through public biomedical data
+Given a disease name, V1.2 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -26,18 +28,24 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V1.1
+## Current Scope Through V1.2
 
-V1.1 implements existing-molecule ranking, opt-in generated hypotheses,
+V1.2 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V1.1 adds deterministic AgentGraph orchestration
-for generated-molecule design planning, target-conditioned objective metadata,
-seed/scaffold traceability, ensemble-aware generation metadata, oracle scoring,
-medicinal chemistry critique, uncertainty/diversity estimates,
-experiment-readiness triage, active-learning design metadata, improved generated
-report cards, generator benchmarking, and V1.1 validation workflows.
+external integration primitives. V1.2 adds a formal model plugin interface,
+assay-specific local surrogate training from QC-passed imported results,
+deterministic featurization manifests, leakage-aware splits, calibration and
+applicability-domain metadata, model cards, training manifests, metrics,
+prediction artifacts, hosted model jobs, and dashboard labeling that keeps model
+predictions separate from experimental evidence and assay results. V1.1 added
+deterministic AgentGraph orchestration for generated-molecule design planning,
+target-conditioned objective metadata, seed/scaffold traceability,
+ensemble-aware generation metadata, oracle scoring, medicinal chemistry
+critique, uncertainty/diversity estimates, experiment-readiness triage,
+active-learning design metadata, improved generated report cards, generator
+benchmarking, and validation workflows.
 
 - Resolve disease names to public biomedical disease entities with ambiguity handling.
 - Retrieve real disease-associated targets with richer target identifiers and metadata.
@@ -79,6 +87,19 @@ report cards, generator benchmarking, and V1.1 validation workflows.
   result records, link results to candidates and exact generated structures,
   summarize experimental evidence, adjust scores only when linked and
   QC-appropriate, and suggest active-learning batches for expert triage.
+- Build endpoint-specific learning datasets from imported QC-passed assay
+  results without pooling unrelated endpoints unless explicitly configured and
+  labeled.
+- Train optional local assay surrogate models when enough labeled data exists,
+  with deterministic feature names, leakage-aware train/test split manifests,
+  calibration metadata, uncertainty scores, and applicability-domain checks.
+- Persist model cards, training manifests, metrics, and prediction artifacts as
+  model records, not `EvidenceItem` records and not assay results.
+- Let oracle scoring and active design use calibrated surrogate prediction
+  artifacts only as weak prioritization signals; generated molecules still need
+  exact imported experimental results to gain direct evidence.
+- Register hosted model training, model validation, and model prediction jobs
+  with guardrails that reject patient, clinical, and dosing data.
 - Register local runs in a `ProjectWorkspace`, track artifacts through an
   `ArtifactRegistry`, compare multiple runs, generate a project dashboard, and
   expose a local JSON project API.
@@ -119,7 +140,7 @@ report cards, generator benchmarking, and V1.1 validation workflows.
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V1.1 does not:
+V1.2 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -141,6 +162,12 @@ V1.1 does not:
 - Make patient-specific recommendations.
 - Fabricate assay results, infer assay outcomes from model scores, or treat
   surrogate model predictions as experimental evidence.
+- Promote model predictions to `EvidenceItem`, assay results, direct evidence,
+  activity claims, safety claims, efficacy claims, binding claims, treatment
+  claims, or cure claims.
+- Train surrogate models across unrelated assay endpoints unless endpoint
+  pooling is explicitly configured and labeled.
+- Let Codex invent model metrics or prediction values.
 - Treat Codex CLI as a biomedical source of truth.
 - Let Codex invent targets, molecules, assay results, citations, evidence, or
   scores.
@@ -166,6 +193,8 @@ Install dependencies and verify the version:
 uv sync --all-groups
 uv run molecule-ranker version
 ```
+
+Current release: `1.2.0`.
 
 Run a source-backed ranking workflow locally. Generation, docking, external
 writes, Codex, review workflows, and experimental evidence are disabled unless
@@ -312,6 +341,132 @@ curl -X POST "$MOLECULE_RANKER_HOST/projects/project-1/design/plans/approve" \
     "approval_note": "Reviewed against source-backed run artifacts."
   }'
 ```
+
+## V1.2 Predictive Model Plugins and Surrogates
+
+V1.2 adds a stronger predictive model plugin system and calibrated
+assay-specific surrogate models. Models learn only from imported assay results
+that pass QC and link to exact candidate identities. They do not learn from
+literature claims, Codex summaries, seed analog assumptions, patient data,
+clinical data, dosing data, or generated-molecule hypotheses without exact
+imported result linkage.
+
+Model predictions are separate from evidence and experimental results. A
+prediction artifact is never an `EvidenceItem`, never an assay result, and
+never a claim of activity, binding, safety, efficacy, treatment, or cure.
+Predictions are endpoint-specific and context-specific; unrelated endpoints are
+kept separate unless explicit pooling is configured and labeled.
+
+Calibration and applicability-domain checks are required for trustworthy
+interpretation. Uncalibrated predictions, insufficient-calibration predictions,
+unknown-domain predictions, and out-of-domain predictions are flagged and are
+ignored or penalized by guarded scoring paths. Generated molecule predictions
+are hypothesis-prioritization signals only; generated molecules still require
+exact imported experimental results for the tested structure to gain direct
+evidence.
+
+V1.2 model workflows do not provide medical advice, synthesis instructions, lab
+protocols, dosing, patient guidance, or clinical claims.
+
+Build an endpoint-specific model dataset from imported assay results:
+
+```bash
+uv run molecule-ranker model dataset build \
+  --db-path .experiments/results.sqlite \
+  --endpoint-name synthetic_maob_activity \
+  --target-symbol MAOB \
+  --disease-name "Parkinson disease" \
+  --label-type binary \
+  --output-dir results/parkinson-disease/models/dataset \
+  --feature-family rdkit_descriptors \
+  --feature-family target_context
+```
+
+Train a baseline local surrogate:
+
+```bash
+uv run molecule-ranker model train \
+  --dataset results/parkinson-disease/models/dataset/<dataset-id>_manifest.json \
+  --model-type random_forest \
+  --split-strategy scaffold \
+  --output-dir results/parkinson-disease/models/training \
+  --random-seed 17
+```
+
+For small synthetic or dependency-light validation runs, use the pure-Python
+dummy baseline:
+
+```bash
+uv run molecule-ranker model train \
+  --dataset results/parkinson-disease/models/dataset/<dataset-id>_manifest.json \
+  --model-type dummy \
+  --split-strategy random \
+  --output-dir results/parkinson-disease/models/training
+```
+
+Evaluate a model with leakage checks:
+
+```bash
+uv run molecule-ranker model evaluate \
+  --model-card results/parkinson-disease/models/training/model_card.json \
+  --dataset results/parkinson-disease/models/dataset/<dataset-id>_manifest.json \
+  --output-dir results/parkinson-disease/models/evaluation
+```
+
+Calibrate a model against held-out labels:
+
+```bash
+uv run molecule-ranker model calibrate \
+  --model-card results/parkinson-disease/models/training/model_card.json \
+  --dataset results/parkinson-disease/models/dataset/<dataset-id>_manifest.json \
+  --output-dir results/parkinson-disease/models/calibration
+```
+
+Predict on saved run artifacts without creating evidence:
+
+```bash
+uv run molecule-ranker model predict \
+  --model-card results/parkinson-disease/models/training/model_card.json \
+  --from-run results/parkinson-disease/ \
+  --output results/parkinson-disease/model_predictions.json
+```
+
+Use predictions in the design oracle only as bounded prioritization signals.
+Attach prediction artifacts to generated candidate metadata and enable the
+surrogate oracle in the design/oracle config:
+
+```json
+{
+  "enable_predictive_models": true,
+  "enable_surrogate_oracle": true,
+  "surrogate_oracle_endpoint_id": "endpoint-model-validation-maob",
+  "surrogate_oracle_weight": 0.08,
+  "require_calibrated_predictions": true,
+  "allow_uncalibrated_with_warning": false,
+  "min_prediction_confidence": 0.5,
+  "out_of_domain_penalty": 0.08
+}
+```
+
+Inspect the local model registry:
+
+```bash
+uv run molecule-ranker model registry list
+uv run molecule-ranker model registry show model-validation-baseline
+uv run molecule-ranker model registry export model-validation-baseline
+```
+
+Run deterministic V1.2 model validation:
+
+```bash
+uv run molecule-ranker validate models
+```
+
+The model validation workflow imports synthetic assay results, builds an
+endpoint-specific dataset, trains a baseline surrogate, evaluates leakage,
+calibrates when enough data exist, predicts on existing/generated candidates,
+integrates eligible predictions into oracle scoring, generates model reports,
+and verifies guardrails.
 
 ## V1.0 Release Readiness
 

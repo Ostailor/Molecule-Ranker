@@ -397,6 +397,89 @@ def test_guardrails_grounded_summary_passes() -> None:
     assert checked.guardrail_warnings == []
 
 
+def test_model_codex_guardrails_flag_fake_metric(tmp_path: Path) -> None:
+    artifact = _model_artifact(tmp_path)
+    artifact_refs, citation_ids = collect_allowed_refs_from_artifacts([str(artifact)])
+    result = _result(
+        json.dumps(
+            {
+                "status": "ok",
+                "summary": "accuracy: 0.99 for model_id model-1",
+                "model_id": "model-1",
+                "dataset_id": "dataset-1",
+                "training_run_id": "training-run-1",
+                "evaluation_id": "evaluation-1",
+                "prediction_batch_artifact_id": "batch-1",
+            },
+            sort_keys=True,
+        ),
+        task_type="explain_model_metrics",
+    )
+
+    checked = check_output(result, artifact_refs, citation_ids)
+
+    assert checked.status == "guardrail_failed"
+    assert any("Unbacked model metric" in warning for warning in checked.guardrail_warnings)
+
+
+def test_model_codex_guardrails_flag_ungrounded_prediction(tmp_path: Path) -> None:
+    artifact = _model_artifact(tmp_path)
+    artifact_refs, citation_ids = collect_allowed_refs_from_artifacts([str(artifact)])
+    result = _result(
+        json.dumps(
+            {
+                "status": "ok",
+                "summary": "prediction_id: prediction-999 is favorable.",
+                "model_id": "model-1",
+                "dataset_id": "dataset-1",
+                "training_run_id": "training-run-1",
+                "evaluation_id": "evaluation-1",
+                "prediction_batch_artifact_id": "batch-1",
+            },
+            sort_keys=True,
+        ),
+        task_type="explain_prediction_batch",
+    )
+
+    checked = check_output(result, artifact_refs, citation_ids)
+
+    assert checked.status == "guardrail_failed"
+    assert any(
+        "Ungrounded model prediction field" in warning for warning in checked.guardrail_warnings
+    )
+
+
+def test_model_codex_guardrails_allow_safe_grounded_summary(tmp_path: Path) -> None:
+    artifact = _model_artifact(tmp_path)
+    artifact_refs, citation_ids = collect_allowed_refs_from_artifacts([str(artifact)])
+    result = _result(
+        json.dumps(
+            {
+                "status": "ok",
+                "summary": (
+                    "Model model-1 uses dataset dataset-1; training_run_id training-run-1 "
+                    "and evaluation_id evaluation-1 report accuracy: 0.75. "
+                    "Prediction batch artifact batch-1 contains prediction_id prediction-1. "
+                    "Predictions are not evidence and not assay results."
+                ),
+                "model_id": "model-1",
+                "dataset_id": "dataset-1",
+                "training_run_id": "training-run-1",
+                "evaluation_id": "evaluation-1",
+                "prediction_batch_artifact_id": "batch-1",
+                "limitations": ["Predictions are not evidence."],
+            },
+            sort_keys=True,
+        ),
+        task_type="summarize_model_card",
+    )
+
+    checked = check_output(result, artifact_refs, citation_ids)
+
+    assert checked.status == "succeeded"
+    assert checked.guardrail_warnings == []
+
+
 def test_prompt_templates_include_safety_constraints(tmp_path: Path) -> None:
     for task_type in [
         "summarize_run",
@@ -445,6 +528,17 @@ def test_prompt_templates_include_artifact_grounding_instructions(tmp_path: Path
     assert payload["artifacts"][0]["path"] == str(report.resolve())
 
 
+def test_model_prompt_templates_include_model_boundaries(tmp_path: Path) -> None:
+    task = _task(tmp_path, task_type="summarize_model_card")
+    payload = json.loads(build_codex_prompt(task, CodexBackboneConfig()).prompt_text)
+    instructions = " ".join(payload["instructions"])
+
+    assert "Codex is limited to artifact summarization and debugging" in instructions
+    assert "Codex cannot invent metrics" in instructions
+    assert "Codex cannot change model cards" in instructions
+    assert "prediction_batch_artifact_id" in instructions
+
+
 def _task(
     tmp_path: Path,
     *,
@@ -469,13 +563,45 @@ def _task(
     )
 
 
-def _result(text: str) -> CodexTaskResult:
+def _result(text: str, *, task_type: str = "summarize_run") -> CodexTaskResult:
     return CodexTaskResult(
         task_id="task-1",
-        task_type="summarize_run",
+        task_type=task_type,  # type: ignore[arg-type]
         status="succeeded",
         output_text=text,
         stdout=text,
         stderr="",
         return_code=0,
     )
+
+
+def _model_artifact(tmp_path: Path) -> Path:
+    artifact = tmp_path / "model_bundle.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "model_id": "model-1",
+                "training_dataset_id": "dataset-1",
+                "training_run_id": "training-run-1",
+                "evaluation_id": "evaluation-1",
+                "batch_id": "batch-1",
+                "metrics": {"accuracy": 0.75},
+                "calibration_metrics": {"brier": 0.2, "status": "uncalibrated"},
+                "predictions": [
+                    {
+                        "prediction_id": "prediction-1",
+                        "candidate_name": "Candidate 1",
+                        "endpoint_id": "endpoint-binary",
+                        "predicted_probability": 0.6,
+                        "prediction_label": "surrogate_positive",
+                        "uncertainty": 0.4,
+                        "confidence": 0.6,
+                        "applicability_domain": "near_domain",
+                        "calibration_status": "uncalibrated",
+                    }
+                ],
+            },
+            sort_keys=True,
+        )
+    )
+    return artifact

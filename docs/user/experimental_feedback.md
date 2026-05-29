@@ -38,3 +38,20 @@ candidate identity, target, and linkage metadata.
 Assay results may inform ranking scores, review workflow comments, active
 learning batches, integrations records, Codex summaries, and dashboard views.
 They must remain separate from review decisions.
+
+## V1.2 Surrogate Models
+
+V1.2 can build endpoint-specific learning datasets from imported QC-passed assay
+results and train optional local surrogate models when enough labeled results
+exist. These models write model cards, training manifests, metrics, calibration
+metadata, applicability-domain checks, and prediction artifacts.
+
+Surrogate predictions are not biomedical evidence, are not assay results, and
+must never become `EvidenceItem` records. They are weak prioritization signals
+for oracle scoring and active design only. Generated molecules still require an
+exact imported experimental result for the tested structure before they gain
+direct experimental evidence.
+
+Do not pool unrelated assay endpoints unless the training configuration
+explicitly enables and labels that pooling. Do not use patient, clinical, or
+dosing data for surrogate model training or prediction jobs.

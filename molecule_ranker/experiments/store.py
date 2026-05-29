@@ -103,6 +103,27 @@ class ExperimentalResultStore:
                     payload_json text not null
                 );
 
+                create table if not exists model_artifacts (
+                    model_id text primary key,
+                    endpoint_name text,
+                    target_symbol text,
+                    disease_name text,
+                    created_at text not null,
+                    model_card_json text not null,
+                    training_manifest_json text not null,
+                    metrics_json text not null
+                );
+
+                create table if not exists model_prediction_artifacts (
+                    prediction_id text primary key,
+                    model_id text not null,
+                    candidate_id text,
+                    endpoint_name text,
+                    created_at text not null,
+                    payload_json text not null,
+                    foreign key (model_id) references model_artifacts(model_id)
+                );
+
                 create index if not exists idx_assay_results_candidate
                     on assay_results(candidate_name, candidate_id, candidate_origin, inchi_key);
                 create index if not exists idx_assay_results_target
@@ -111,6 +132,8 @@ class ExperimentalResultStore:
                     on assay_results(outcome_label, activity_direction, qc_status);
                 create index if not exists idx_assay_results_dates
                     on assay_results(result_date, imported_at);
+                create index if not exists idx_model_predictions_model
+                    on model_prediction_artifacts(model_id, endpoint_name, candidate_id);
                 """
             )
 
@@ -345,6 +368,154 @@ class ExperimentalResultStore:
         if row is None:
             raise ValueError(f"Unknown active-learning batch: {batch_id}")
         return ActiveLearningBatch.model_validate_json(row["payload_json"])
+
+    def save_model_artifact(
+        self,
+        *,
+        model_id: str,
+        model_card: dict[str, Any],
+        training_manifest: dict[str, Any],
+        metrics: dict[str, Any],
+    ) -> dict[str, Any]:
+        _assert_model_artifact_boundary(model_card)
+        _assert_model_artifact_boundary(training_manifest)
+        _assert_model_artifact_boundary(metrics)
+        now = datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or replace into model_artifacts (
+                    model_id, endpoint_name, target_symbol, disease_name, created_at,
+                    model_card_json, training_manifest_json, metrics_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    model_id,
+                    model_card.get("endpoint_name")
+                    or training_manifest.get("assay_scope", {}).get("endpoint_name"),
+                    model_card.get("target_symbol")
+                    or training_manifest.get("assay_scope", {}).get("target_symbol"),
+                    model_card.get("disease_name")
+                    or training_manifest.get("assay_scope", {}).get("disease_name"),
+                    now.isoformat(),
+                    json.dumps(model_card, sort_keys=True),
+                    json.dumps(training_manifest, sort_keys=True),
+                    json.dumps(metrics, sort_keys=True),
+                ),
+            )
+            self._insert_audit_event(
+                connection,
+                _audit_event(
+                    event_type="model_artifact_saved",
+                    actor=None,
+                    object_type="ModelArtifact",
+                    object_id=model_id,
+                    summary=f"Saved model artifact {model_id}.",
+                    metadata={"artifact_kinds": ["model_card", "training_manifest", "metrics"]},
+                ),
+            )
+        return self.get_model_artifact(model_id)
+
+    def get_model_artifact(self, model_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "select * from model_artifacts where model_id = ?",
+                (model_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"Unknown model artifact: {model_id}")
+        return {
+            "model_id": row["model_id"],
+            "model_card": json.loads(row["model_card_json"]),
+            "training_manifest": json.loads(row["training_manifest_json"]),
+            "metrics": json.loads(row["metrics_json"]),
+        }
+
+    def list_model_artifacts(
+        self,
+        *,
+        endpoint_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        where, params = _where_equals({"endpoint_name": endpoint_name})
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"select model_id from model_artifacts {where} order by created_at, model_id",
+                params,
+            ).fetchall()
+        return [self.get_model_artifact(row["model_id"]) for row in rows]
+
+    def save_prediction_artifacts(
+        self,
+        *,
+        model_id: str,
+        predictions: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            existing = connection.execute(
+                "select 1 from model_artifacts where model_id = ?",
+                (model_id,),
+            ).fetchone()
+            if existing is None:
+                raise ValueError(f"Unknown model artifact: {model_id}")
+            for prediction in predictions:
+                _assert_prediction_boundary(prediction)
+                prediction_id = str(
+                    prediction.get("prediction_id")
+                    or _hashed_id(
+                        "prediction",
+                        model_id,
+                        prediction.get("candidate_id"),
+                        prediction.get("candidate_name"),
+                        prediction.get("endpoint_name"),
+                    )
+                )
+                payload = {**prediction, "prediction_id": prediction_id, "model_id": model_id}
+                connection.execute(
+                    """
+                    insert or replace into model_prediction_artifacts (
+                        prediction_id, model_id, candidate_id, endpoint_name, created_at,
+                        payload_json
+                    ) values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        prediction_id,
+                        model_id,
+                        payload.get("candidate_id"),
+                        payload.get("endpoint_name"),
+                        datetime.now(UTC).isoformat(),
+                        json.dumps(payload, sort_keys=True),
+                    ),
+                )
+            self._insert_audit_event(
+                connection,
+                _audit_event(
+                    event_type="model_prediction_artifacts_saved",
+                    actor=None,
+                    object_type="ModelPredictionArtifact",
+                    object_id=model_id,
+                    summary=f"Saved {len(predictions)} model prediction artifact(s).",
+                    metadata={"model_id": model_id, "prediction_count": len(predictions)},
+                ),
+            )
+        return self.list_prediction_artifacts(model_id=model_id)
+
+    def list_prediction_artifacts(
+        self,
+        *,
+        model_id: str | None = None,
+        endpoint_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        where, params = _where_equals({"model_id": model_id, "endpoint_name": endpoint_name})
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                select payload_json from model_prediction_artifacts
+                {where}
+                order by created_at, prediction_id
+                """,
+                params,
+            ).fetchall()
+        return [json.loads(row["payload_json"]) for row in rows]
 
     def export_results_json(self, output_path: str | Path) -> Path:
         path = Path(output_path)
@@ -591,3 +762,24 @@ def _interpret_summary(counts: Counter[str]) -> str:
     if counts.get("failed_qc", 0):
         return "Only failed-QC imported outcomes are available for this candidate."
     return "No decisive imported experimental outcomes are available."
+
+
+def _assert_model_artifact_boundary(payload: dict[str, Any]) -> None:
+    if payload.get("artifact_kind") not in {
+        "model_card",
+        "training_manifest",
+        "model_metrics",
+    }:
+        raise ValueError("Model artifacts must be cards, manifests, or metrics.")
+    if payload.get("evidence_boundary") not in {None, "not_experimental_evidence"}:
+        raise ValueError("Model artifacts must not be experimental evidence.")
+
+
+def _assert_prediction_boundary(payload: dict[str, Any]) -> None:
+    if payload.get("artifact_kind") != "prediction_artifact":
+        raise ValueError("Model predictions must be prediction artifacts.")
+    if payload.get("evidence_boundary") != "not_experimental_evidence":
+        raise ValueError("Model predictions must not be experimental evidence.")
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict) or not metadata.get("not_assay_result"):
+        raise ValueError("Model predictions must be labeled as not assay results.")

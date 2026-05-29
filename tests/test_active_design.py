@@ -62,6 +62,7 @@ def _generated(
     novelty: str = "novel_analog",
     diversity: float = 0.7,
     uncertainty_value: float = 0.48,
+    model_predictions: list[dict[str, object]] | None = None,
 ) -> GeneratedMolecule:
     return GeneratedMolecule(
         generated_id=generated_id,
@@ -97,6 +98,7 @@ def _generated(
         ),
         metadata={
             "scaffold_id": scaffold_id,
+            **({"model_predictions": model_predictions} if model_predictions else {}),
             "oracle_scoring": {
                 "experiment_worthiness_score": oracle_score,
                 "component_scores": {
@@ -262,3 +264,36 @@ def test_no_feedback_uses_oracle_only_strategy() -> None:
     ).lower()
     assert "protocol" not in followup_text
     assert "reagent" not in followup_text
+
+
+def test_active_design_rationale_mentions_model_uncertainty() -> None:
+    prediction = {
+        "prediction_id": "pred-1",
+        "model_id": "model-1",
+        "model_version": "1",
+        "endpoint_id": "endpoint-maob",
+        "predicted_probability": 0.68,
+        "prediction_label": "positive",
+        "uncertainty": 0.74,
+        "confidence": 0.72,
+        "applicability_domain": "near_domain",
+        "calibration_status": "calibrated",
+        "warnings": [],
+        "not_evidence": True,
+        "not_assay_result": True,
+    }
+    signal = ActiveLearningDesignPlanner().score_candidate(
+        _generated(
+            "gen-model",
+            "CCOc1ccccn1",
+            scaffold_id="scaffold-model",
+            model_predictions=[prediction],
+        ),
+        experimental_results=[],
+    )
+
+    influence = signal.metadata["model_influence"]
+    assert influence["prediction_count"] == 1
+    assert "model uncertainty" in influence["rationale"].lower()
+    assert influence["not_evidence"] is True
+    assert signal.metadata["surrogate_estimates_are_not_evidence"] is True

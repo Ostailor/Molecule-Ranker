@@ -76,6 +76,15 @@ class DesignJobRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class ModelJobRequest(BaseModel):
+    job_type: str
+    model_id: str | None = None
+    endpoint_name: str | None = None
+    dataset_id: str | None = None
+    run_id: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 class DesignPlanApprovalRequest(BaseModel):
     plan_id: str
     run_id: str | None = None
@@ -561,6 +570,45 @@ def enqueue_design_job(
         "job": job.model_dump(mode="json"),
         "generated_molecule_label": "computational_hypothesis",
         "warning": "Generated molecules are computational hypotheses and require expert review.",
+    }
+
+
+@router.post("/projects/{project_id}/model/jobs")
+def enqueue_model_job(
+    project_id: str,
+    request: ModelJobRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    config = dict(request.config)
+    if request.model_id is not None:
+        config["model_id"] = request.model_id
+    if request.endpoint_name is not None:
+        config["endpoint_name"] = request.endpoint_name
+    if request.dataset_id is not None:
+        config["dataset_id"] = request.dataset_id
+    if request.run_id is not None:
+        config["run_id"] = request.run_id
+    try:
+        job = PlatformJobQueue(database).enqueue(
+            job_type=request.job_type,
+            requested_by=user,
+            project_id=project_id,
+            config_snapshot=config,
+            metadata={
+                "predictive_model_v1_2": True,
+                "predictions_are_not_evidence": True,
+                "predictions_are_not_assay_results": True,
+            },
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": job.status,
+        "job": job.model_dump(mode="json"),
+        "prediction_boundary": "model_predictions_are_not_evidence_or_assay_results",
     }
 
 

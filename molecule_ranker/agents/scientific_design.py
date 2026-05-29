@@ -142,6 +142,48 @@ class OracleScoringAgent:
                     if isinstance(config, dict)
                     else False
                 ),
+                enable_surrogate_oracle=(
+                    bool(config["enable_surrogate_oracle"])
+                    if isinstance(config, dict) and "enable_surrogate_oracle" in config
+                    else None
+                ),
+                surrogate_oracle_weight=float(
+                    config.get("surrogate_oracle_weight", 0.08)
+                    if isinstance(config, dict)
+                    else 0.08
+                ),
+                require_calibrated_predictions=bool(
+                    config.get("require_calibrated_predictions", True)
+                    if isinstance(config, dict)
+                    else True
+                ),
+                allow_uncalibrated_with_warning=bool(
+                    config.get("allow_uncalibrated_with_warning", False)
+                    if isinstance(config, dict)
+                    else False
+                ),
+                min_prediction_confidence=float(
+                    config.get("min_prediction_confidence", 0.5)
+                    if isinstance(config, dict)
+                    else 0.5
+                ),
+                out_of_domain_penalty=float(
+                    config.get("out_of_domain_penalty", 0.08)
+                    if isinstance(config, dict)
+                    else 0.08
+                ),
+                surrogate_endpoint_id=(
+                    str(
+                        config.get("surrogate_oracle_endpoint_id")
+                        or config.get("predictive_model_endpoint_id")
+                    )
+                    if isinstance(config, dict)
+                    and (
+                        config.get("surrogate_oracle_endpoint_id")
+                        or config.get("predictive_model_endpoint_id")
+                    )
+                    else None
+                ),
             )
             oracle_results.append(result.model_dump(mode="json"))
             retained_so_far.append(candidate)

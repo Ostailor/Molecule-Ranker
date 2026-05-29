@@ -19,6 +19,7 @@ from molecule_ranker.codex.provider import (
     CodexResponse,
 )
 from molecule_ranker.codex_backbone.guardrails import (
+    MODEL_CODEX_TASK_TYPES,
     collect_allowed_refs_from_artifacts,
     has_blocking_task_guardrail,
     is_secret_path,
@@ -41,6 +42,12 @@ SAFE_CODEX_TASK_TYPES = {
     "candidate_dossier",
     "project_dashboard",
     "review_export",
+    "summarize_model_card",
+    "explain_model_metrics",
+    "explain_prediction_batch",
+    "suggest_feature_debugging",
+    "draft_model_limitations",
+    "explain_active_design_model_influence",
 }
 CACHE_PATH_MARKERS = {".cache", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
 DEFAULT_FORBIDDEN_COMMANDS = [
@@ -182,7 +189,7 @@ class CodexWorker:
                 response=response,
                 context=context,
             )
-            warnings = self._post_guardrail_warnings(response, context)
+            warnings = self._post_guardrail_warnings(task_type, response, context)
             if warnings:
                 metrics.increment("codex_guardrail_failures_total")
                 result = self._job_result(
@@ -334,6 +341,50 @@ class CodexWorker:
             "allowed_commands": [],
             "forbidden_commands": DEFAULT_FORBIDDEN_COMMANDS,
         }
+        if task_type in MODEL_CODEX_TASK_TYPES:
+            prompt_sections["predictive_model_boundaries"] = [
+                "Codex is limited to model artifact summarization and debugging.",
+                "Do not invent metrics, predictions, assay results, or model-card content.",
+                "Do not change model cards, approve models, create EvidenceItem records, or "
+                "create AssayResult records.",
+                "Do not recommend clinical use or claim activity, safety, efficacy, binding, "
+                "treatment, or cure.",
+                "Cite model_id, dataset_id, training_run_id, evaluation_id, and "
+                "prediction_batch_artifact_id.",
+            ]
+            expected_schema = {
+                "type": "object",
+                "required": [
+                    "status",
+                    "summary",
+                    "limitations",
+                    "model_id",
+                    "dataset_id",
+                    "training_run_id",
+                    "evaluation_id",
+                    "prediction_batch_artifact_id",
+                ],
+                "properties": {
+                    "status": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "limitations": {"type": "array"},
+                    "model_id": {"type": "string"},
+                    "dataset_id": {"type": "string"},
+                    "training_run_id": {"type": "string"},
+                    "evaluation_id": {"type": "string"},
+                    "prediction_batch_artifact_id": {"type": "string"},
+                },
+            }
+        else:
+            expected_schema = {
+                "type": "object",
+                "required": ["status", "summary", "limitations"],
+                "properties": {
+                    "status": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "limitations": {"type": "array"},
+                },
+            }
         request = CodexRequest(
             task=task_text,
             prompt_sections=prompt_sections,
@@ -347,15 +398,7 @@ class CodexWorker:
                 )
                 for artifact in context.included
             ],
-            expected_json_schema={
-                "type": "object",
-                "required": ["status", "summary", "limitations"],
-                "properties": {
-                    "status": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "limitations": {"type": "array"},
-                },
-            },
+            expected_json_schema=expected_schema,
             output_format="json",
             metadata={"job_id": job.job_id, "task_type": task_type},
         )
@@ -467,6 +510,7 @@ class CodexWorker:
 
     def _post_guardrail_warnings(
         self,
+        task_type: str,
         response: CodexResponse,
         context: ScopedArtifactContext,
     ) -> list[str]:
@@ -476,7 +520,15 @@ class CodexWorker:
         if response.status == "guardrail_violation" and not warnings:
             warnings.append("Codex provider reported a guardrail violation.")
         stdout = response.stdout or json.dumps(response.parsed_json or {})
-        warnings.extend(output_guardrail_warnings(stdout))
+        artifact_paths = [artifact.isolated_path for artifact in context.included]
+        allowed_refs, _citation_ids = collect_allowed_refs_from_artifacts(artifact_paths)
+        warnings.extend(
+            output_guardrail_warnings(
+                stdout,
+                task_type=task_type,
+                allowed_artifact_refs=allowed_refs,
+            )
+        )
         if redact_secrets(stdout) != stdout or redact_secrets(response.stderr) != response.stderr:
             warnings.append("Codex output contained secret-like material.")
         isolated_roots = {

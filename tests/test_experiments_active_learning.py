@@ -391,6 +391,48 @@ def test_generated_no_direct_evidence_is_handled_as_hypothesis():
     assert any("generated" in warning.lower() for warning in suggestion.warnings)
 
 
+def test_active_learning_suggestion_tracks_model_uncertainty_influence():
+    generated = _generated_candidate().model_copy(
+        update={
+            "generation_metadata": {
+                "generation_score": 0.58,
+                "model_predictions": [
+                    {
+                        "prediction_id": "pred-1",
+                        "model_id": "model-1",
+                        "model_version": "1",
+                        "endpoint_id": "endpoint-maob",
+                        "predicted_probability": 0.68,
+                        "prediction_label": "positive",
+                        "uncertainty": 0.76,
+                        "confidence": 0.74,
+                        "applicability_domain": "near_domain",
+                        "calibration_status": "calibrated",
+                        "warnings": [],
+                        "not_evidence": True,
+                        "not_assay_result": True,
+                    }
+                ],
+            }
+        }
+    )
+
+    batch = suggest_next_experiments(
+        [],
+        [generated],
+        [],
+        [],
+        {"strategy": "uncertainty", "top_k": 1},
+    )
+
+    suggestion = batch.suggestions[0]
+    influence = suggestion.metadata["model_influence"]
+    assert influence["used_prediction_count"] == 1
+    assert influence["not_evidence"] is True
+    assert "model uncertainty" in suggestion.rationale.lower()
+    assert "evidenceitem" not in str(suggestion.model_dump()).lower()
+
+
 def test_expert_priority_uses_review_decisions_and_outputs_guardrail_text():
     item = _review_item(review_item_id="review-gap", candidate_id="GAP", candidate_name="Gap")
     candidate = _candidate_with(name="Gap", candidate_id="GAP", smiles="CCN", score=0.6)

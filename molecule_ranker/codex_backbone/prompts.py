@@ -46,6 +46,18 @@ COMMON_SAFETY_CONSTRAINTS = [
     "Codex outputs must cite internal artifact IDs and external record refs supplied in context.",
 ]
 
+MODEL_CODEX_SAFETY_CONSTRAINTS = [
+    "For predictive model tasks, Codex is limited to artifact summarization and debugging.",
+    "Codex cannot invent metrics, predictions, assay results, or model-card content.",
+    "Codex cannot change model cards, approve models, create EvidenceItem records, or create "
+    "AssayResult records.",
+    "Codex cannot recommend clinical use or claim activity, safety, efficacy, binding, "
+    "treatment, or cure.",
+    "Model predictions must be labeled as predictions, not evidence and not assay results.",
+    "Every model summary must cite model_id, dataset_id, training_run_id, evaluation_id, and "
+    "prediction_batch_artifact_id from supplied artifacts.",
+]
+
 TEMPLATE_ALIASES = {
     "draft_dossier": "draft_dossier_summary",
 }
@@ -314,6 +326,141 @@ TASK_TEMPLATES: dict[str, dict[str, Any]] = {
             "review_questions": ["safe review questions"],
             "artifact_refs": ["artifact IDs or file paths used"],
             "external_record_refs": ["external record refs used"],
+        },
+    },
+    "summarize_model_card": {
+        "description": "Summarize a predictive model card for hosted review.",
+        "required_inputs": [
+            "model card JSON",
+            "training run JSON",
+            "evaluation report JSON",
+            "prediction batch artifact JSON",
+        ],
+        "optional_inputs": ["dataset manifest", "calibration summary"],
+        "instructions": [
+            *MODEL_CODEX_SAFETY_CONSTRAINTS,
+            "Summarize limitations and calibration status from artifacts only.",
+            "Do not edit, approve, or reinterpret the model card.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "summary": "string",
+            "limitations": ["artifact-backed limitation strings"],
+            "calibration_status": "string",
+            "model_id": "string",
+            "dataset_id": "string",
+            "training_run_id": "string",
+            "evaluation_id": "string",
+            "prediction_batch_artifact_id": "string",
+            "artifact_refs": ["artifact IDs or file paths used"],
+        },
+    },
+    "explain_model_metrics": {
+        "description": "Explain existing model metrics without inventing values.",
+        "required_inputs": ["model card metrics", "training run metrics", "evaluation metrics"],
+        "optional_inputs": ["calibration metrics"],
+        "instructions": [
+            *MODEL_CODEX_SAFETY_CONSTRAINTS,
+            "Explain only metric keys and values present in the supplied artifacts.",
+            "If a metric is missing, say it is missing.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "metric_explanations": ["artifact-backed metric explanation strings"],
+            "missing_metrics": ["metric names not found in artifacts"],
+            "model_id": "string",
+            "dataset_id": "string",
+            "training_run_id": "string",
+            "evaluation_id": "string",
+            "prediction_batch_artifact_id": "string",
+            "artifact_refs": ["artifact IDs or file paths used"],
+        },
+    },
+    "explain_prediction_batch": {
+        "description": "Explain an existing prediction batch artifact.",
+        "required_inputs": ["prediction batch artifact", "model card", "evaluation report"],
+        "optional_inputs": ["candidate metadata"],
+        "instructions": [
+            *MODEL_CODEX_SAFETY_CONSTRAINTS,
+            "Explain only predictions present in the supplied prediction batch artifact.",
+            "Clearly flag uncalibrated and out-of-domain predictions.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "prediction_summary": "string",
+            "warnings": ["warning strings"],
+            "model_id": "string",
+            "dataset_id": "string",
+            "training_run_id": "string",
+            "evaluation_id": "string",
+            "prediction_batch_artifact_id": "string",
+            "artifact_refs": ["artifact IDs or file paths used"],
+        },
+    },
+    "suggest_feature_debugging": {
+        "description": "Suggest deterministic feature debugging from model artifacts.",
+        "required_inputs": ["feature schema", "training manifest", "evaluation report"],
+        "optional_inputs": ["leakage check report"],
+        "instructions": [
+            *MODEL_CODEX_SAFETY_CONSTRAINTS,
+            "Suggest only engineering/debugging checks for deterministic features.",
+            "Do not suggest wet-lab, synthesis, clinical, or dosing actions.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "debugging_suggestions": ["feature-debugging suggestion strings"],
+            "model_id": "string",
+            "dataset_id": "string",
+            "training_run_id": "string",
+            "evaluation_id": "string",
+            "prediction_batch_artifact_id": "string",
+            "artifact_refs": ["artifact IDs or file paths used"],
+        },
+    },
+    "draft_model_limitations": {
+        "description": "Draft limitations text from existing model artifacts.",
+        "required_inputs": ["model card", "training run", "evaluation report", "prediction batch"],
+        "optional_inputs": ["calibration summary", "applicability-domain summary"],
+        "instructions": [
+            *MODEL_CODEX_SAFETY_CONSTRAINTS,
+            "Draft limitations only from supplied artifacts.",
+            "Do not modify the model card or approve model use.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "draft_limitations": ["artifact-backed limitation strings"],
+            "model_id": "string",
+            "dataset_id": "string",
+            "training_run_id": "string",
+            "evaluation_id": "string",
+            "prediction_batch_artifact_id": "string",
+            "artifact_refs": ["artifact IDs or file paths used"],
+        },
+    },
+    "explain_active_design_model_influence": {
+        "description": "Explain recorded surrogate-model influence in active design.",
+        "required_inputs": [
+            "active-design influence artifact",
+            "model card",
+            "evaluation report",
+            "prediction batch",
+        ],
+        "optional_inputs": ["active-learning suggestions"],
+        "instructions": [
+            *MODEL_CODEX_SAFETY_CONSTRAINTS,
+            "Explain model influence as prioritization rationale only.",
+            "Do not call predictions activity evidence or assay results.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "influence_summary": "string",
+            "uncertainty_notes": ["artifact-backed uncertainty strings"],
+            "model_id": "string",
+            "dataset_id": "string",
+            "training_run_id": "string",
+            "evaluation_id": "string",
+            "prediction_batch_artifact_id": "string",
+            "artifact_refs": ["artifact IDs or file paths used"],
         },
     },
     "summarize_project": {

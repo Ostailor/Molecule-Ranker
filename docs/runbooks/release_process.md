@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Package and verify molecule-ranker V1.1 as a validated internal research
+Package and verify molecule-ranker V1.2 as a validated internal research
 platform MVP.
 
 ## Prerequisites
@@ -36,7 +36,7 @@ molecule-ranker api export-openapi --output openapi-v1.json
 
 ## Failure Modes
 
-- Version is not `1.1.0`.
+- Version is not `1.2.0`.
 - Golden workflow or contract validation fails.
 - Security or guardrail audit fails.
 - Demo artifacts are missing or not clearly synthetic.

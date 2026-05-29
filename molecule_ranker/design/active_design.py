@@ -170,11 +170,14 @@ class ActiveLearningDesignPlanner:
         diversity_score = self._diversity_score(candidate)
         uncertainty_score = self._uncertainty_score(candidate)
         risk_score = self._risk_score(candidate, safety_count=safety_count)
+        model_influence = self._model_prediction_influence(candidate)
+        risk_score = self._clamp(risk_score + model_influence["domain_penalty"])
         experimental_gap_score = 0.0 if exact_results else 1.0
 
         exploit_score = self._clamp(
             0.62 * oracle_score
             + 0.18 * (positive_count > 0)
+            + 0.08 * model_influence["expected_improvement"]
             - 0.22 * min(negative_count, 2)
             - 0.28 * min(safety_count, 1)
         )
@@ -183,18 +186,21 @@ class ActiveLearningDesignPlanner:
             + 0.28 * diversity_score
             + 0.20 * experimental_gap_score
             + 0.10 * oracle_score
+            + 0.08 * model_influence["uncertainty_sampling"]
             - 0.18 * risk_score
         )
         risk_reduction_score = self._clamp(
             0.45 * risk_score
             + 0.35 * min(safety_count, 1)
             + 0.12 * (1.0 - oracle_score)
+            + 0.10 * model_influence["risk_reduction_value"]
             + 0.08 * negative_count
         )
         uncertainty_focus_score = self._clamp(
             0.62 * uncertainty_score
             + 0.25 * experimental_gap_score
             + 0.13 * diversity_score
+            + 0.12 * model_influence["uncertainty_sampling"]
             - 0.20 * risk_score
         )
         balanced_score = self._clamp(
@@ -228,15 +234,24 @@ class ActiveLearningDesignPlanner:
                 safety_count=safety_count,
                 novelty_score=novelty_score,
                 diversity_score=diversity_score,
-                uncertainty_score=uncertainty_score,
+                uncertainty_score=max(
+                    uncertainty_score,
+                    model_influence["uncertainty_sampling"],
+                ),
                 experimental_gap_score=experimental_gap_score,
             ),
-            warnings=self._candidate_warnings(candidate, exact_results, safety_count),
+            warnings=sorted(
+                {
+                    *self._candidate_warnings(candidate, exact_results, safety_count),
+                    *model_influence["warnings"],
+                }
+            ),
             metadata={
                 "exact_feedback_only": True,
                 "surrogate_estimates_are_not_evidence": True,
                 "oracle_scores_are_not_experimental_feedback": True,
                 "risk_score": round(risk_score, 3),
+                "model_influence": model_influence,
                 "feedback_summary": {
                     "positive": positive_count,
                     "negative": negative_count,
@@ -530,6 +545,89 @@ class ActiveLearningDesignPlanner:
         if any("critical" in str(flag).lower() for flag in risk_flags):
             risk += 0.4
         return self._clamp(risk)
+
+    def _model_prediction_influence(self, candidate: GeneratedMolecule) -> dict[str, Any]:
+        predictions = candidate.metadata.get("model_predictions")
+        if not isinstance(predictions, list):
+            return {
+                "prediction_count": 0,
+                "used_prediction_count": 0,
+                "expected_improvement": 0.0,
+                "uncertainty_sampling": 0.0,
+                "risk_reduction_value": 0.0,
+                "domain_penalty": 0.0,
+                "warnings": [],
+                "rationale": "No calibrated surrogate prediction influenced active design.",
+                "not_evidence": True,
+                "not_assay_result": True,
+            }
+        used: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        out_of_domain_count = 0
+        for prediction in predictions:
+            if not isinstance(prediction, Mapping):
+                continue
+            calibration_status = str(prediction.get("calibration_status") or "")
+            applicability_domain = str(prediction.get("applicability_domain") or "unknown")
+            confidence = prediction.get("confidence")
+            if applicability_domain == "out_of_domain":
+                out_of_domain_count += 1
+                warnings.append("model_prediction_out_of_domain_penalized")
+            if calibration_status == "insufficient_data":
+                warnings.append("model_prediction_insufficient_calibration_ignored")
+                continue
+            if calibration_status not in {"calibrated", "not_applicable"}:
+                warnings.append("model_prediction_uncalibrated_ignored")
+                continue
+            if not isinstance(confidence, (int, float)) or float(confidence) < 0.5:
+                warnings.append("model_prediction_low_confidence_ignored")
+                continue
+            if applicability_domain not in {"in_domain", "near_domain"}:
+                continue
+            used.append(dict(prediction))
+        probability_values = [
+            float(prediction["predicted_probability"])
+            for prediction in used
+            if isinstance(prediction.get("predicted_probability"), (int, float))
+        ]
+        uncertainty_values = [
+            float(prediction["uncertainty"])
+            for prediction in used
+            if isinstance(prediction.get("uncertainty"), (int, float))
+        ]
+        best_probability = max(probability_values, default=0.5)
+        mean_uncertainty = (
+            sum(uncertainty_values) / len(uncertainty_values) if uncertainty_values else 0.0
+        )
+        domain_penalty = 0.12 if out_of_domain_count else 0.0
+        expected_improvement = self._clamp((best_probability - 0.5) * 2.0)
+        uncertainty_sampling = self._clamp(mean_uncertainty)
+        risk_reduction_value = self._clamp(max(uncertainty_sampling, domain_penalty))
+        if used:
+            rationale = (
+                "Calibrated surrogate predictions contributed weak expected-improvement "
+                "and model uncertainty terms for prioritization only."
+            )
+        elif out_of_domain_count:
+            rationale = (
+                "Out-of-domain surrogate predictions were penalized; model uncertainty "
+                "is not experimental feedback."
+            )
+        else:
+            rationale = "No eligible calibrated surrogate prediction influenced active design."
+        return {
+            "prediction_count": len([item for item in predictions if isinstance(item, Mapping)]),
+            "used_prediction_count": len(used),
+            "out_of_domain_count": out_of_domain_count,
+            "expected_improvement": round(expected_improvement, 3),
+            "uncertainty_sampling": round(uncertainty_sampling, 3),
+            "risk_reduction_value": round(risk_reduction_value, 3),
+            "domain_penalty": round(domain_penalty, 3),
+            "warnings": sorted(set(warnings)),
+            "rationale": rationale,
+            "not_evidence": True,
+            "not_assay_result": True,
+        }
 
     def _strategy_score(
         self,

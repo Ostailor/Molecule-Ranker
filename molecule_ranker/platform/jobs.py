@@ -30,6 +30,14 @@ QUEUE_JOB_TYPES = {
     "registry_mapping_review",
     "external_export",
     "active_learning",
+    "model_training",
+    "model_validation",
+    "model_prediction",
+    "model_dataset_build",
+    "model_train",
+    "model_evaluate",
+    "model_predict",
+    "model_calibrate",
     "review_export",
     "dashboard_build",
     "codex_task",
@@ -52,6 +60,14 @@ JOB_PERMISSION: dict[str, str] = {
     "registry_mapping_review": "integration:sync",
     "external_export": "integration:sync",
     "active_learning": "run:create",
+    "model_training": "run:create",
+    "model_validation": "run:create",
+    "model_prediction": "run:create",
+    "model_dataset_build": "model:train",
+    "model_train": "model:train",
+    "model_evaluate": "model:read",
+    "model_predict": "model:predict",
+    "model_calibrate": "model:train",
     "review_export": "artifact:export",
     "dashboard_build": "project:read",
     "codex_task": "codex:run",
@@ -120,6 +136,7 @@ class PlatformJobQueue:
             project_id=project_id,
             config_snapshot=config,
         )
+        _enforce_hosted_model_policy(job_type=job_type, config_snapshot=config)
         now = _now()
         job = PlatformJob(
             job_id=f"job-{uuid.uuid4().hex[:16]}",
@@ -511,6 +528,53 @@ def _enforce_hosted_design_policy(
             database=database,
         ):
             raise PermissionError("Missing permission design:export.")
+
+
+def _enforce_hosted_model_policy(
+    *,
+    job_type: str,
+    config_snapshot: dict[str, Any],
+) -> None:
+    model_job_types = {
+        "model_training",
+        "model_validation",
+        "model_prediction",
+        "model_dataset_build",
+        "model_train",
+        "model_evaluate",
+        "model_predict",
+        "model_calibrate",
+    }
+    if job_type not in model_job_types:
+        return
+    forbidden_flags = {
+        "use_patient_data": "patient data",
+        "use_clinical_data": "clinical data",
+        "use_dosing_data": "dosing data",
+    }
+    for key, label in forbidden_flags.items():
+        if bool(config_snapshot.get(key)):
+            raise PermissionError(f"Predictive model jobs must not use {label}.")
+    if job_type in {"model_training", "model_dataset_build", "model_train"}:
+        endpoint = str(config_snapshot.get("endpoint_name") or "").strip()
+        if job_type != "model_train" and not endpoint:
+            raise PlatformDatabaseError("Model training requires endpoint_name.")
+        if bool(config_snapshot.get("allow_endpoint_pooling")) and not str(
+            config_snapshot.get("pooled_endpoint_label") or ""
+        ).strip():
+            raise PlatformDatabaseError(
+                "Endpoint pooling requires an explicit pooled_endpoint_label."
+            )
+    if job_type in {
+        "model_validation",
+        "model_prediction",
+        "model_evaluate",
+        "model_predict",
+        "model_calibrate",
+    } and not str(
+        config_snapshot.get("model_id") or ""
+    ).strip():
+        raise PlatformDatabaseError(f"{job_type} requires model_id.")
 
 
 def _design_generation_budget(config_snapshot: dict[str, Any]) -> int:

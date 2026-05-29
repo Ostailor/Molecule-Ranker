@@ -9,7 +9,7 @@ from molecule_ranker.generation.schemas import (
     NoveltyClass,
     SeedMolecule,
 )
-from molecule_ranker.schemas import DevelopabilityAssessment
+from molecule_ranker.schemas import DevelopabilityAssessment, EvidenceItem
 
 
 def _objective() -> GenerationObjective:
@@ -187,6 +187,26 @@ def test_docking_disabled_by_default() -> None:
     assert "docking_disabled" in docking.risk_flags
 
 
+def _prediction(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "prediction_id": "pred-1",
+        "model_id": "model-1",
+        "model_version": "1",
+        "endpoint_id": "endpoint-maob",
+        "predicted_probability": 0.82,
+        "prediction_label": "positive",
+        "uncertainty": 0.22,
+        "confidence": 0.78,
+        "applicability_domain": "in_domain",
+        "calibration_status": "calibrated",
+        "warnings": [],
+        "not_evidence": True,
+        "not_assay_result": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_surrogate_absent_handled() -> None:
     result = MultiObjectiveOracleStack().score(
         candidate=_generated(),
@@ -195,10 +215,127 @@ def test_surrogate_absent_handled() -> None:
         retained_generated=[],
     )
 
-    surrogate = result.oracle_by_name("surrogate_activity_oracle")
+    surrogate = result.oracle_by_name("calibrated_surrogate_oracle")
     assert surrogate.metadata["available"] is False
     assert surrogate.score == 0.5
     assert "surrogate_absent" in surrogate.risk_flags
+
+
+def test_calibrated_positive_prediction_increases_oracle_score_modestly() -> None:
+    stack = MultiObjectiveOracleStack()
+    objective = _objective()
+    baseline = stack.score(
+        candidate=_generated(),
+        objective=objective,
+        seeds=[_seed()],
+        retained_generated=[],
+    )
+    with_prediction = stack.score(
+        candidate=_generated(
+            metadata={"scaffold_id": "new-scaffold", "model_predictions": [_prediction()]}
+        ),
+        objective=objective,
+        seeds=[_seed()],
+        retained_generated=[],
+        enable_surrogate_oracle=True,
+        surrogate_endpoint_id="endpoint-maob",
+        surrogate_oracle_weight=0.08,
+    )
+
+    surrogate = with_prediction.oracle_by_name("calibrated_surrogate_oracle")
+    delta = with_prediction.experiment_worthiness_score - baseline.experiment_worthiness_score
+    assert 0.0 < delta <= 0.04
+    assert surrogate.score == 0.82
+    assert surrogate.metadata["not_experimental_evidence"] is True
+    assert surrogate.metadata["not_assay_result"] is True
+
+
+def test_uncalibrated_prediction_ignored_or_warned() -> None:
+    result = MultiObjectiveOracleStack().score(
+        candidate=_generated(
+            metadata={
+                "scaffold_id": "new-scaffold",
+                "model_predictions": [_prediction(calibration_status="uncalibrated")],
+            }
+        ),
+        objective=_objective(),
+        seeds=[_seed()],
+        retained_generated=[],
+        enable_surrogate_oracle=True,
+        surrogate_endpoint_id="endpoint-maob",
+        require_calibrated_predictions=True,
+    )
+
+    surrogate = result.oracle_by_name("calibrated_surrogate_oracle")
+    assert surrogate.score == 0.5
+    assert "surrogate_uncalibrated" in surrogate.risk_flags
+    assert surrogate.metadata["available"] is False
+
+
+def test_endpoint_mismatched_prediction_ignored() -> None:
+    result = MultiObjectiveOracleStack().score(
+        candidate=_generated(
+            metadata={
+                "scaffold_id": "new-scaffold",
+                "model_predictions": [_prediction(endpoint_id="endpoint-other")],
+            }
+        ),
+        objective=_objective(),
+        seeds=[_seed()],
+        retained_generated=[],
+        enable_surrogate_oracle=True,
+        surrogate_endpoint_id="endpoint-maob",
+    )
+
+    surrogate = result.oracle_by_name("calibrated_surrogate_oracle")
+    assert surrogate.score == 0.5
+    assert "surrogate_endpoint_mismatch" in surrogate.risk_flags
+
+
+def test_out_of_domain_prediction_penalized() -> None:
+    baseline = MultiObjectiveOracleStack().score(
+        candidate=_generated(),
+        objective=_objective(),
+        seeds=[_seed()],
+        retained_generated=[],
+    )
+    out_of_domain = MultiObjectiveOracleStack().score(
+        candidate=_generated(
+            metadata={
+                "scaffold_id": "new-scaffold",
+                "model_predictions": [
+                    _prediction(applicability_domain="out_of_domain", confidence=0.92)
+                ],
+            }
+        ),
+        objective=_objective(),
+        seeds=[_seed()],
+        retained_generated=[],
+        enable_surrogate_oracle=True,
+        surrogate_endpoint_id="endpoint-maob",
+        out_of_domain_penalty=0.08,
+    )
+
+    assert out_of_domain.experiment_worthiness_score < baseline.experiment_worthiness_score
+    assert "surrogate_out_of_domain" in out_of_domain.risk_flags
+
+
+def test_model_prediction_does_not_become_evidence_item() -> None:
+    result = MultiObjectiveOracleStack().score(
+        candidate=_generated(
+            metadata={"scaffold_id": "new-scaffold", "model_predictions": [_prediction()]}
+        ),
+        objective=_objective(),
+        seeds=[_seed()],
+        retained_generated=[],
+        enable_surrogate_oracle=True,
+        surrogate_endpoint_id="endpoint-maob",
+    )
+
+    dumped = result.model_dump(mode="json")
+    assert all(not isinstance(value, EvidenceItem) for value in dumped.values())
+    assert "EvidenceItem" not in str(dumped)
+    assert "activity evidence" not in str(dumped).lower()
 
 
 def test_score_explanation_cautious() -> None:
