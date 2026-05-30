@@ -151,6 +151,7 @@ table {
   border-collapse: collapse;
   background: var(--surface);
   border: 1px solid var(--border);
+  table-layout: fixed;
 }
 
 .table-scroll {
@@ -170,6 +171,8 @@ td {
   padding: 9px 10px;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 th {
@@ -322,13 +325,9 @@ input {
     padding: 12px 0;
   }
 
-  .table-scroll table {
-    min-width: 720px;
-  }
-
   th,
   td {
-    overflow-wrap: normal;
+    overflow-wrap: anywhere;
     word-break: normal;
     padding: 8px 6px;
   }

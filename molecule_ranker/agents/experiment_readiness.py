@@ -12,6 +12,7 @@ from molecule_ranker.generation.schemas import (
     GenerationRun,
     SeedMolecule,
 )
+from molecule_ranker.structure.structure_oracles import structure_oracle_context_from_metadata
 
 ReadinessBucket = Literal[
     "ready_for_expert_review",
@@ -34,6 +35,7 @@ class ExperimentReadinessScore(BaseModel):
     medchem_critique: float = Field(ge=0.0, le=1.0)
     review_priority_context: float = Field(ge=0.0, le=1.0)
     assay_feasibility_context: float = Field(ge=0.0, le=1.0)
+    structure_context: float = Field(default=0.5, ge=0.0, le=1.0)
     readiness_score: float = Field(ge=0.0, le=1.0)
 
 
@@ -198,6 +200,7 @@ class ExperimentReadinessAgent(BaseAgent):
         )
         blocking_risks = self._blocking_risks(candidate)
         score = self._composite_score(components)
+        score = self._structure_adjusted_score(candidate, score, config)
         if blocking_risks:
             score = min(score, 0.20)
         if self._uncontrolled_risk(candidate):
@@ -277,6 +280,7 @@ class ExperimentReadinessAgent(BaseAgent):
             "medchem_critique": self._medchem_critique_score(candidate),
             "review_priority_context": self._review_priority_context(candidate, objective),
             "assay_feasibility_context": self._assay_feasibility_context(candidate),
+            "structure_context": self._structure_context_score(candidate),
         }
 
     def _composite_score(self, components: Mapping[str, float]) -> float:
@@ -292,6 +296,7 @@ class ExperimentReadinessAgent(BaseAgent):
             + 0.10 * components["medchem_critique"]
             + 0.04 * components["review_priority_context"]
             + 0.03 * components["assay_feasibility_context"]
+            + 0.03 * (components["structure_context"] - 0.5)
         )
         return self._clamp(weighted)
 
@@ -341,6 +346,8 @@ class ExperimentReadinessAgent(BaseAgent):
         medchem = self._medchem_payload(candidate)
         if medchem.get("recommended_action") == "reject":
             risks.append("medchem_critic_recommends_reject")
+        if self._structure_pose_status(candidate) == "reject":
+            risks.append("poor_structure_pose_qc")
         return sorted(set(str(risk) for risk in risks if str(risk).strip()))
 
     def _with_readiness_metadata(
@@ -588,12 +595,57 @@ class ExperimentReadinessAgent(BaseAgent):
             warnings.add("structural_alerts_require_review")
         if self._uncontrolled_risk(candidate):
             warnings.add("uncontrolled_uncertainty_risk")
+        if self._structure_context(candidate):
+            warnings.add("structure_oracle_is_optional_weak_signal")
+        if self._structure_pose_status(candidate) == "reject":
+            warnings.add("structure_pose_qc_deprioritized_candidate")
         return sorted(warnings)
 
     def _oracle_components(self, candidate: GeneratedMolecule) -> dict[str, Any]:
         oracle = self._mapping(candidate.metadata.get("oracle_scoring"))
         components = self._mapping(oracle.get("component_scores"))
         return dict(components)
+
+    def _structure_context_score(self, candidate: GeneratedMolecule) -> float:
+        context = self._structure_context(candidate)
+        if not context:
+            return 0.5
+        applicability = str(context.get("applicability_domain") or "unknown")
+        if applicability == "unavailable":
+            return 0.5
+        status = self._structure_pose_status(candidate)
+        if status == "reject":
+            return 0.05
+        value = context.get("consensus_score")
+        if isinstance(value, (int, float)):
+            return self._clamp(float(value))
+        oracle = self._mapping(candidate.metadata.get("oracle_scoring"))
+        components = self._mapping(oracle.get("component_scores"))
+        value = components.get("consensus_structure_score") or components.get("structure_score")
+        if isinstance(value, (int, float)):
+            return self._clamp(float(value))
+        return 0.5
+
+    def _structure_adjusted_score(
+        self,
+        candidate: GeneratedMolecule,
+        score: float,
+        config: Mapping[str, Any],
+    ) -> float:
+        if not bool(config.get("enable_structure_oracle", False)):
+            return score
+        context_score = self._structure_context_score(candidate)
+        adjusted = score + 0.04 * (context_score - 0.5)
+        if self._structure_pose_status(candidate) == "reject":
+            adjusted = min(adjusted, 0.42)
+        return self._clamp(adjusted)
+
+    def _structure_pose_status(self, candidate: GeneratedMolecule) -> str:
+        context = self._structure_context(candidate)
+        return str(context.get("pose_qc_status") or "").lower()
+
+    def _structure_context(self, candidate: GeneratedMolecule) -> dict[str, Any]:
+        return structure_oracle_context_from_metadata(candidate.metadata)
 
     def _medchem_payload(self, candidate: GeneratedMolecule) -> dict[str, Any]:
         return self._mapping(candidate.metadata.get("medicinal_chemistry_critique"))

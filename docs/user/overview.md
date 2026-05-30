@@ -11,16 +11,17 @@ more than computational hypotheses.
 
 molecule-ranker helps internal research teams organize disease, target,
 candidate, literature, developability, review, assay results, active learning,
-integrations, Codex, and dashboard artifacts in one workspace. It is designed
-for transparent triage and reproducible handoff, not for declaring biomedical
-truth.
+integrations, optional structure workflows, Codex, and dashboard artifacts in
+one workspace. It is designed for transparent triage and reproducible handoff,
+not for declaring biomedical truth.
 
 ## What It Does Not Do
 
 The platform does not diagnose, treat, prescribe, recommend patient action, or
-replace scientific review. It does not turn generated molecules into validated
-research findings. It does not invent citations, assay results, clinical claims,
-or external-system records.
+replace scientific review. It does not turn generated molecules, docking scores,
+poses, or structure-based scores into validated research findings. It does not
+invent citations, assay results, structures, binding sites, docking scores,
+interactions, clinical claims, or external-system records.
 
 ## How To Read Outputs
 

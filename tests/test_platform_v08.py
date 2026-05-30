@@ -42,8 +42,8 @@ class FakeCodexProvider:
         )
 
 
-def test_version_is_v10() -> None:
-    assert __version__ == "1.2.0"
+def test_version_is_v13() -> None:
+    assert __version__ == "1.3.0"
 
 
 def test_hosted_auth_rbac_project_sharing_and_codex_queue(tmp_path: Path) -> None:
@@ -254,6 +254,85 @@ def test_hosted_model_jobs_enforce_permissions_and_prediction_boundary(tmp_path:
     assert "patient data" in forbidden_data.text
 
 
+def test_hosted_structure_jobs_enforce_permissions_acknowledgement_and_budget(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    assert (
+        client.post(
+            "/projects",
+            json={"workspace_id": "workspace-a", "name": "Research"},
+            headers=admin_headers,
+        ).status_code
+        == 200
+    )
+    created = client.post(
+        "/admin/users",
+        json={"email": "viewer@example.com", "password": "Viewer-password-1"},
+        headers=admin_headers,
+    )
+    viewer_id = created.json()["user"]["user_id"]
+    client.post(
+        "/projects/workspace-a/share",
+        json={"role": "viewer", "user_id": viewer_id},
+        headers=admin_headers,
+    )
+    viewer_headers = _login(client, "viewer@example.com", "Viewer-password-1")
+
+    unauthorized = client.post(
+        "/projects/workspace-a/structure/jobs",
+        json={"job_type": "structure_select", "target_symbol": "LRRK2"},
+        headers=viewer_headers,
+    )
+    missing_ack = client.post(
+        "/projects/workspace-a/structure/jobs",
+        json={"job_type": "structure_dock", "target_symbol": "LRRK2", "enable_docking": True},
+        headers=admin_headers,
+    )
+    missing_budget = client.post(
+        "/projects/workspace-a/structure/jobs",
+        json={
+            "job_type": "structure_dock",
+            "target_symbol": "LRRK2",
+            "enable_docking": True,
+            "warning_acknowledged": True,
+            "max_ligands": 250,
+        },
+        headers=admin_headers,
+    )
+    queued = client.post(
+        "/projects/workspace-a/structure/jobs",
+        json={
+            "job_type": "structure_dock",
+            "target_symbol": "LRRK2",
+            "enable_docking": True,
+            "warning_acknowledged": True,
+            "max_ligands": 25,
+            "budget_limit": 25,
+        },
+        headers=admin_headers,
+    )
+
+    assert unauthorized.status_code == 403
+    assert "structure:run" in unauthorized.text
+    assert missing_ack.status_code == 403
+    assert "acknowledgement" in missing_ack.text
+    assert missing_budget.status_code == 400
+    assert "budget_limit" in missing_budget.text
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["job"]["job_type"] == "structure_dock"
+    assert queued.json()["structure_report_boundary"] == "not_binding_evidence"
+
+
 def test_hosted_mode_blocks_arbitrary_codex_tasks(tmp_path: Path) -> None:
     client = TestClient(
         create_app(
@@ -362,6 +441,141 @@ def test_codex_worker_allows_grounded_model_summary_task(tmp_path: Path) -> None
     assert finished.status == "succeeded"
     assert provider.requests[0].metadata["task_type"] == "summarize_model_card"
     assert "predictive_model_boundaries" in provider.requests[0].prompt_sections
+
+
+def test_codex_structure_summary_passes_when_grounded(tmp_path: Path) -> None:
+    database, user, store = _codex_project(tmp_path)
+    workspace = store.load()
+    structure_artifact = tmp_path / "structure-bundle.json"
+    _write_structure_codex_artifact(structure_artifact)
+    workspace.artifacts.append(_artifact(structure_artifact, artifact_id="structure-bundle"))
+    store.save(workspace)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="codex_task",
+        requested_by=user,
+        project_id="workspace-a",
+        config_snapshot={
+            "task_type": "summarize_structure_assessment",
+            "allowed_artifact_ids": ["structure-bundle"],
+        },
+    )
+    stdout = _structure_codex_stdout(
+        summary=(
+            "Assessment for RCSB_PDB:1ABC cites selection-1, receptor-1, dock-1, "
+            "pose-1, profile-1, and artifact structure-bundle. Docking score -7.0 is "
+            "a computational signal only. Contact A:LYS33 is reported from the artifact."
+        )
+    )
+
+    provider = FakeCodexProvider(stdout)
+    finished = CodexWorker(
+        database=database,
+        workspace_store=store,
+        provider=provider,
+    ).run_job(job)
+
+    assert finished.status == "succeeded"
+    assert provider.requests[0].metadata["task_type"] == "summarize_structure_assessment"
+    assert "structure_workflow_boundaries" in provider.requests[0].prompt_sections
+
+
+def test_codex_structure_summary_flags_fake_residue_contact(tmp_path: Path) -> None:
+    database, user, store = _codex_project(tmp_path)
+    workspace = store.load()
+    structure_artifact = tmp_path / "structure-bundle.json"
+    _write_structure_codex_artifact(structure_artifact)
+    workspace.artifacts.append(_artifact(structure_artifact, artifact_id="structure-bundle"))
+    store.save(workspace)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="codex_task",
+        requested_by=user,
+        project_id="workspace-a",
+        config_snapshot={
+            "task_type": "summarize_structure_assessment",
+            "allowed_artifact_ids": ["structure-bundle"],
+        },
+    )
+    stdout = _structure_codex_stdout(
+        summary=(
+            "Assessment cites RCSB_PDB:1ABC, selection-1, receptor-1, dock-1, "
+            "pose-1, profile-1, and structure-bundle, but adds residue contact A:ASP999."
+        )
+    )
+
+    finished = CodexWorker(
+        database=database,
+        workspace_store=store,
+        provider=FakeCodexProvider(stdout),
+    ).run_job(job)
+
+    assert finished.status == "guardrail_failed"
+    assert "Unbacked structure residue contact" in (finished.error_summary or "")
+
+
+def test_codex_structure_summary_flags_fake_docking_score(tmp_path: Path) -> None:
+    database, user, store = _codex_project(tmp_path)
+    workspace = store.load()
+    structure_artifact = tmp_path / "structure-bundle.json"
+    _write_structure_codex_artifact(structure_artifact)
+    workspace.artifacts.append(_artifact(structure_artifact, artifact_id="structure-bundle"))
+    store.save(workspace)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="codex_task",
+        requested_by=user,
+        project_id="workspace-a",
+        config_snapshot={
+            "task_type": "summarize_structure_assessment",
+            "allowed_artifact_ids": ["structure-bundle"],
+        },
+    )
+    stdout = _structure_codex_stdout(
+        summary=(
+            "Assessment cites RCSB_PDB:1ABC, selection-1, receptor-1, dock-1, pose-1, "
+            "profile-1, and structure-bundle. docking_score: -12.3."
+        )
+    )
+
+    finished = CodexWorker(
+        database=database,
+        workspace_store=store,
+        provider=FakeCodexProvider(stdout),
+    ).run_job(job)
+
+    assert finished.status == "guardrail_failed"
+    assert "Unbacked structure docking score" in (finished.error_summary or "")
+
+
+def test_codex_structure_summary_flags_binding_overclaim(tmp_path: Path) -> None:
+    database, user, store = _codex_project(tmp_path)
+    workspace = store.load()
+    structure_artifact = tmp_path / "structure-bundle.json"
+    _write_structure_codex_artifact(structure_artifact)
+    workspace.artifacts.append(_artifact(structure_artifact, artifact_id="structure-bundle"))
+    store.save(workspace)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="codex_task",
+        requested_by=user,
+        project_id="workspace-a",
+        config_snapshot={
+            "task_type": "summarize_structure_assessment",
+            "allowed_artifact_ids": ["structure-bundle"],
+        },
+    )
+    stdout = _structure_codex_stdout(
+        summary=(
+            "Rasagiline binds MAOB based on pose-1. The report cites RCSB_PDB:1ABC, "
+            "selection-1, receptor-1, dock-1, profile-1, and structure-bundle."
+        )
+    )
+
+    finished = CodexWorker(
+        database=database,
+        workspace_store=store,
+        provider=FakeCodexProvider(stdout),
+    ).run_job(job)
+
+    assert finished.status == "guardrail_failed"
+    assert "Forbidden biomedical claim" in (finished.error_summary or "")
 
 
 def test_codex_worker_excludes_forbidden_artifacts(tmp_path: Path) -> None:
@@ -512,6 +726,45 @@ def _write_run(run_dir: Path) -> None:
     }
     (run_dir / "candidates.json").write_text(json.dumps(payload))
     (run_dir / "report.md").write_text("# Report\n")
+
+
+def _write_structure_codex_artifact(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "structure_id": "RCSB_PDB:1ABC",
+                "selection_id": "selection-1",
+                "receptor_prep_id": "receptor-1",
+                "docking_run_id": "dock-1",
+                "pose_id": "pose-1",
+                "interaction_profile_id": "profile-1",
+                "artifact_ids": ["structure-bundle"],
+                "docking_score": -7.0,
+                "key_residue_contacts": ["A:LYS33"],
+                "interactions": [{"residue": "A:LYS33", "type": "hydrophobic"}],
+                "limitations": ["Docking scores do not prove binding."],
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def _structure_codex_stdout(summary: str) -> str:
+    return json.dumps(
+        {
+            "status": "ok",
+            "summary": summary,
+            "limitations": ["Docking scores do not prove binding."],
+            "structure_id": "RCSB_PDB:1ABC",
+            "selection_id": "selection-1",
+            "receptor_prep_id": "receptor-1",
+            "docking_run_id": "dock-1",
+            "pose_id": "pose-1",
+            "interaction_profile_id": "profile-1",
+            "artifact_ids": ["structure-bundle"],
+        },
+        sort_keys=True,
+    )
 
 
 def _codex_project(tmp_path: Path):

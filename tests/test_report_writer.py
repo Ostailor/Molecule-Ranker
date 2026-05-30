@@ -50,6 +50,17 @@ from molecule_ranker.schemas import (
 from molecule_ranker.schemas import (
     DevelopabilityAssessment as LegacyDevelopabilityAssessment,
 )
+from molecule_ranker.structure.schemas import (
+    BindingSiteDefinition,
+    DockingPose,
+    DockingRun,
+    Ligand3DPreparation,
+    ProteinLigandInteractionProfile,
+    ReceptorPreparation,
+    StructureAwareAssessment,
+    StructureRecord,
+    StructureSelection,
+)
 
 RETRIEVED_AT = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 
@@ -444,6 +455,181 @@ def _generation_run(
             "generator_version": "v1.1",
             "run_timestamp": "2026-01-02T03:04:05+00:00",
         },
+    )
+
+
+def _structure_record_v13() -> StructureRecord:
+    return StructureRecord(
+        structure_id="structure-1",
+        source="RCSB_PDB",
+        external_id="6XYZ",
+        target_symbol="MAOB",
+        target_identifiers={"uniprot": "P27338"},
+        structure_type="experimental",
+        experimental_method="X-ray diffraction",
+        resolution_angstrom=2.1,
+        coverage={"chain_A": 0.92},
+        chains=["A"],
+        ligands=[{"ligand_id": "FAD", "source": "RCSB_PDB"}],
+        mutations=[],
+        organism="Homo sapiens",
+        release_date="2020-01-02",
+        quality_metrics={"synthetic_test_record": True},
+        url="https://example.org/structure/6XYZ",
+        retrieved_at=RETRIEVED_AT,
+        metadata={"retrieval_policy": "synthetic_reporting_test"},
+    )
+
+
+def _structure_selection_v13() -> StructureSelection:
+    return StructureSelection(
+        selection_id="selection-1",
+        target_symbol="MAOB",
+        selected_structure_id="structure-1",
+        selected_chain_ids=["A"],
+        selection_reason="Synthetic suitable experimental structure selected for reporting.",
+        confidence=0.8,
+        rejected_structures=[
+            {"structure_id": "AF-P27338-F1", "reason": "predicted lower confidence"}
+        ],
+        warnings=[],
+        metadata={"policy": "conservative_structure_selection"},
+    )
+
+
+def _receptor_preparation_v13() -> ReceptorPreparation:
+    return ReceptorPreparation(
+        receptor_prep_id="receptor-prep-1",
+        structure_id="structure-1",
+        target_symbol="MAOB",
+        input_structure_path="inputs/6XYZ.pdb",
+        prepared_receptor_path="prepared/receptor.pdbqt",
+        preparation_method="metadata_only",
+        protonation_policy="unchanged",
+        kept_chains=["A"],
+        removed_chains=[],
+        kept_heterogens=["FAD"],
+        removed_heterogens=["HOH"],
+        missing_atoms_fixed=False,
+        missing_hydrogens_added=False,
+        missing_loops_modeled=False,
+        alternate_locations_resolved=True,
+        warnings=["Prepared receptor is a computational artifact only."],
+        confidence=0.7,
+        metadata={},
+    )
+
+
+def _ligand_preparation_v13() -> Ligand3DPreparation:
+    return Ligand3DPreparation(
+        ligand_prep_id="ligand-prep-1",
+        molecule_id="GEN-MAOB-0001",
+        molecule_name="GEN-MAOB-0001",
+        origin="generated",
+        canonical_smiles="CCOc1ccccc1N",
+        conformer_count=3,
+        prepared_ligand_paths=["prepared/GEN-MAOB-0001.sdf"],
+        charge_method="gasteiger",
+        protonation_policy="neutral pH heuristic",
+        stereochemistry_status="specified",
+        warnings=["Generated molecule remains a computational hypothesis."],
+        confidence=0.62,
+        metadata={},
+    )
+
+
+def _binding_site_v13() -> BindingSiteDefinition:
+    return BindingSiteDefinition(
+        binding_site_id="site-1",
+        target_symbol="MAOB",
+        structure_id="structure-1",
+        method="co_crystal_ligand",
+        center=[1.0, 2.0, 3.0],
+        box_size=[18.0, 18.0, 18.0],
+        residues=["TYR398"],
+        reference_ligand_id="FAD",
+        confidence=0.75,
+        warnings=[],
+        metadata={"provenance": "synthetic test co-crystal ligand metadata"},
+    )
+
+
+def _docking_run_v13() -> DockingRun:
+    return DockingRun(
+        docking_run_id="dock-run-1",
+        target_symbol="MAOB",
+        structure_id="structure-1",
+        receptor_prep_id="receptor-prep-1",
+        binding_site_id="site-1",
+        docking_engine="NullDockingEngine",
+        docking_engine_version=None,
+        config={"max_docked_ligands": 1},
+        started_at=RETRIEVED_AT,
+        completed_at=RETRIEVED_AT,
+        status="succeeded",
+        ligand_count=1,
+        pose_count=1,
+        artifacts={"log": "artifacts/dock.log"},
+        warnings=["Docking scores are not proof of binding."],
+        metadata={"not_experimental_evidence": True},
+    )
+
+
+def _docking_pose_v13() -> DockingPose:
+    return DockingPose(
+        pose_id="pose-1",
+        docking_run_id="dock-run-1",
+        molecule_id="GEN-MAOB-0001",
+        molecule_name="GEN-MAOB-0001",
+        canonical_smiles="CCOc1ccccc1N",
+        target_symbol="MAOB",
+        structure_id="structure-1",
+        binding_site_id="site-1",
+        pose_rank=1,
+        docking_score=0.55,
+        score_units="normalized_docking_score_0_1",
+        pose_path="poses/pose-1.pdbqt",
+        interaction_summary={"hydrogen_bond_like": 1},
+        pose_quality={"status": "pass", "checks": {"inside_box": True}},
+        confidence=0.4,
+        warnings=["Pose is not experimental evidence."],
+        metadata={"not_experimental_evidence": True},
+    )
+
+
+def _interaction_profile_v13() -> ProteinLigandInteractionProfile:
+    return ProteinLigandInteractionProfile(
+        profile_id="profile-1",
+        pose_id="pose-1",
+        target_symbol="MAOB",
+        molecule_id="GEN-MAOB-0001",
+        interactions=[{"interaction_type": "hydrogen_bond_like", "residue": "TYR398"}],
+        interaction_counts={"hydrogen_bond_like": 1},
+        key_residue_contacts=["TYR398"],
+        reference_similarity=0.4,
+        warnings=["Interactions are pose-derived computational annotations."],
+        confidence=0.45,
+        metadata={},
+    )
+
+
+def _structure_assessment_v13() -> StructureAwareAssessment:
+    return StructureAwareAssessment(
+        assessment_id="assessment-1",
+        molecule_id="GEN-MAOB-0001",
+        molecule_name="GEN-MAOB-0001",
+        target_symbol="MAOB",
+        structure_id="structure-1",
+        docking_pose_ids=["pose-1"],
+        structure_score=0.7,
+        pose_confidence=0.4,
+        interaction_score=0.5,
+        consensus_score=0.56,
+        applicability_domain="suitable_experimental_structure",
+        recommendation="retain_for_review",
+        warnings=["Structure scores are not activity evidence."],
+        explanation="Computational structure-aware review signal only.",
+        metadata={"pose_qc_status": "pass"},
     )
 
 
@@ -981,6 +1167,98 @@ def test_report_writer_creates_success_artifacts(tmp_path):
     )
 
 
+def test_report_writer_creates_v1_3_structure_artifacts_and_sections(tmp_path):
+    context = _scored_context(tmp_path)
+    context.config.update(
+        {
+            "structures": [_structure_record_v13()],
+            "structure_selection": [_structure_selection_v13()],
+            "receptor_preparation": [_receptor_preparation_v13()],
+            "ligand_preparation": [_ligand_preparation_v13()],
+            "binding_sites": [_binding_site_v13()],
+            "docking_runs": [_docking_run_v13()],
+            "docking_poses": [_docking_pose_v13()],
+            "interaction_profiles": [_interaction_profile_v13()],
+            "structure_aware_assessments": [_structure_assessment_v13()],
+        }
+    )
+
+    ReportWriterAgent().run(context)
+
+    output_dir = tmp_path / "parkinson-disease"
+    expected_files = [
+        "structures.json",
+        "structure_selection.json",
+        "receptor_preparation.json",
+        "ligand_preparation.json",
+        "binding_sites.json",
+        "docking_runs.json",
+        "docking_poses.json",
+        "interaction_profiles.json",
+        "structure_aware_assessments.json",
+        "structure_benchmark_report.json",
+        "structure_report.md",
+    ]
+    for filename in expected_files:
+        assert (output_dir / filename).exists(), filename
+
+    structures_payload = json.loads((output_dir / "structures.json").read_text())
+    assert structures_payload["structures"][0]["structure_id"] == "structure-1"
+    benchmark_payload = json.loads(
+        (output_dir / "structure_benchmark_report.json").read_text()
+    )
+    assert benchmark_payload["metrics"]["generated_molecules_with_structure_assessment"] == 1
+
+    report = (output_dir / "report.md").read_text()
+    structure_report = (output_dir / "structure_report.md").read_text()
+    required_sections = [
+        "## Structure Data Summary",
+        "## Structure Selection",
+        "## Receptor Preparation",
+        "## Binding Site Definition",
+        "## Ligand Preparation",
+        "## Docking Summary",
+        "## Pose QC Summary",
+        "## Protein-Ligand Interaction Profiles",
+        "## Structure-Aware Assessments",
+        "## Structure Workflow Limitations",
+    ]
+    for section in required_sections:
+        assert section in report
+        assert section in structure_report
+
+    required_disclaimers = [
+        "Docking scores do not prove binding.",
+        "Poses are computational hypotheses.",
+        "Predicted structures are lower-confidence than suitable experimental structures.",
+        "Generated molecules remain computational hypotheses.",
+        "No synthesis instructions.",
+        "No lab protocols.",
+        "No clinical claims.",
+    ]
+    for disclaimer in required_disclaimers:
+        assert disclaimer in report
+        assert disclaimer in structure_report
+
+    assert "Generated molecule warning" in report
+    structure_text = structure_report.lower()
+    forbidden = (
+        "synthesis route",
+        "reaction condition",
+        "step-by-step",
+        "lab protocol:",
+        "dosing",
+        "mg/kg",
+        "cures ",
+        "treats ",
+        "proven safe",
+        "proven active",
+        "confirmed binding",
+        "binding optimization",
+    )
+    assert not any(phrase in structure_text for phrase in forbidden)
+
+
 def test_report_writer_failed_run_does_not_create_success_report(tmp_path):
     context = PipelineContext(
         disease_input="Parkinson disease",
@@ -1029,8 +1307,16 @@ def test_generated_molecule_report_includes_v1_1_design_sections(tmp_path):
                         "target_context_score": 0.8,
                         "novelty_score": 0.7,
                         "developability_score": 0.6,
+                        "structure_score": 0.54,
+                        "docking_pose_score": 0.48,
+                        "consensus_structure_score": 0.54,
                     },
                     "risk_flags": [],
+                },
+                "structure_oracle": {
+                    "applicability_domain": "suitable_experimental_structure",
+                    "pose_qc_status": "pass",
+                    "not_experimental_evidence": True,
                 },
                 "uncertainty": {
                     "overall_uncertainty": 0.33,
@@ -1085,6 +1371,7 @@ def test_generated_molecule_report_includes_v1_1_design_sections(tmp_path):
     assert "## Oracle Scoring Summary" in report
     assert "Oracle breakdown" in report
     assert "target_context_score=0.800" in report
+    assert "consensus_structure_score=0.540" in report
     assert "## Experiment-Ready Generated Hypotheses" in report
     assert "Design objective" in report
     assert "Generator source" in report
@@ -1106,6 +1393,15 @@ def test_generated_molecule_report_includes_v1_1_design_sections(tmp_path):
     assert "Experiment-readiness means worth expert triage, not proven activity." in report
     assert "No synthesis instructions are provided." in report
     assert "No lab protocols are provided." in report
+    generated_payload = json.loads(
+        (tmp_path / "parkinson-disease" / "generated_molecules.json").read_text()
+    )
+    report_card = generated_payload["retained_generated_molecules"][0]["v1_1_report_card"]
+    assert report_card["structure_oracle"]["not_experimental_evidence"] is True
+    assert (
+        report_card["structure_oracle"]["component_scores"]["consensus_structure_score"]
+        == 0.54
+    )
     v1_1_section = report.split("## Design Plan", 1)[1].split("## Targets Considered", 1)[0]
     lower_report = v1_1_section.lower()
     forbidden = (

@@ -680,6 +680,18 @@ def active_learning_page(
     )
 
 
+@router.get("/dashboard/projects/{project_id}/structure/{section}", response_class=HTMLResponse)
+def structure_dashboard_page(
+    project_id: str,
+    section: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    return _structure_page(project_id, section, user, database, store)
+
+
 @router.get("/dashboard/projects/{project_id}/design/plans", response_class=HTMLResponse)
 def design_plans_page(
     project_id: str,
@@ -1262,6 +1274,13 @@ def dashboard_artifact_download(
     artifact = next((item for item in workspace.artifacts if item.artifact_id == artifact_id), None)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found.")
+    if _is_pose_artifact(artifact.artifact_type) and not has_permission(
+        user,
+        "structure:export",
+        project_id=project_id,
+        database=database,
+    ):
+        raise HTTPException(status_code=403, detail="Missing permission structure:export.")
     path = safe_artifact_path(Path(artifact.path), root_dir=store.root_dir)
     return FileResponse(
         path,
@@ -1560,6 +1579,202 @@ def _run_or_404(
     return workspace, dashboard_run
 
 
+STRUCTURE_DASHBOARD_SECTIONS: dict[str, dict[str, Any]] = {
+    "target-structures": {
+        "title": "Target structures",
+        "filename": "structures.json",
+        "key": "structures",
+        "columns": ["structure_id", "source", "target_symbol", "structure_type"],
+        "notice": "Structure reports cannot be interpreted as binding evidence.",
+    },
+    "selection": {
+        "title": "Structure selection",
+        "filename": "structure_selection.json",
+        "key": "structure_selection",
+        "columns": ["selection_id", "selected_structure_id", "confidence"],
+        "notice": "Structure selection is provenance-aware computational triage.",
+    },
+    "receptor-preparation": {
+        "title": "Receptor preparation",
+        "filename": "receptor_preparation.json",
+        "key": "receptor_preparation",
+        "columns": ["receptor_prep_id", "structure_id", "preparation_method"],
+        "notice": "Receptor preparation is a computational workflow.",
+    },
+    "binding-sites": {
+        "title": "Binding sites",
+        "filename": "binding_sites.json",
+        "key": "binding_sites",
+        "columns": ["binding_site_id", "method", "confidence"],
+        "notice": "Binding-site boxes and residues require provenance.",
+    },
+    "docking-runs": {
+        "title": "Docking runs",
+        "filename": "docking_runs.json",
+        "key": "docking_runs",
+        "columns": ["docking_run_id", "docking_engine", "status"],
+        "notice": "Docking is a computational workflow. Docking scores do not prove binding.",
+    },
+    "docking-poses": {
+        "title": "Docking poses",
+        "filename": "docking_poses.json",
+        "key": "docking_poses",
+        "columns": ["pose_id", "docking_score", "confidence"],
+        "notice": "Docking poses are computational hypotheses.",
+    },
+    "interaction-profiles": {
+        "title": "Interaction profiles",
+        "filename": "interaction_profiles.json",
+        "key": "interaction_profiles",
+        "columns": ["profile_id", "interaction_counts", "confidence"],
+        "notice": "Interactions are computational pose annotations, not experimental evidence.",
+    },
+    "assessments": {
+        "title": "Structure-aware assessments",
+        "filename": "structure_aware_assessments.json",
+        "key": "structure_aware_assessments",
+        "columns": ["assessment_id", "recommendation", "consensus_score"],
+        "notice": "Structure-aware assessments are not binding evidence.",
+    },
+    "benchmarks": {
+        "title": "Structure benchmark reports",
+        "filename": "structure_benchmark_report.json",
+        "key": "metrics",
+        "columns": ["metric", "value"],
+        "notice": "Benchmark reports audit workflow quality and do not validate binding.",
+    },
+}
+
+
+def _structure_page(
+    project_id: str,
+    section: str,
+    user: UserAccount,
+    database: PlatformDatabase,
+    store: ProjectWorkspaceStore,
+) -> HTMLResponse:
+    workspace = _project_or_404(store=store, project_id=project_id)
+    if not has_permission(user, "structure:read", project_id=project_id, database=database):
+        raise HTTPException(status_code=403, detail="Structure permission denied.")
+    spec = STRUCTURE_DASHBOARD_SECTIONS.get(section)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Structure dashboard section not found.")
+    records = _structure_dashboard_records(workspace, spec)
+    body = (
+        _structure_nav(project_id)
+        + "<p class=\"notice\">Structure reports cannot be interpreted as binding evidence. "
+        "Docking scores do not prove binding. Poses are computational hypotheses.</p>"
+        + f"<p class=\"muted\">{_h(spec['notice'])}</p>"
+        + _table(
+            [str(column).replace("_", " ").title() for column in spec["columns"]],
+            [
+                [
+                    _compact_json(record.get(column))
+                    if isinstance(record.get(column), (dict, list))
+                    else record.get(column, "")
+                    for column in spec["columns"]
+                ]
+                for record in records
+            ],
+        )
+    )
+    if not records:
+        body += "<p>No structure artifacts are available for this section.</p>"
+    body += (
+        "<p class=\"muted\">No synthesis instructions, lab protocols, dosing guidance, "
+        "or clinical claims are provided.</p>"
+    )
+    return _structure_dashboard_html(str(spec["title"]), workspace, body)
+
+
+def _structure_nav(project_id: str) -> str:
+    links = [
+        ("Target structures", "target-structures"),
+        ("Structure selection", "selection"),
+        ("Receptor preparation", "receptor-preparation"),
+        ("Binding sites", "binding-sites"),
+        ("Docking runs", "docking-runs"),
+        ("Docking poses", "docking-poses"),
+        ("Interaction profiles", "interaction-profiles"),
+        ("Structure-aware assessments", "assessments"),
+        ("Structure benchmark reports", "benchmarks"),
+    ]
+    return "<nav class=\"nav\">" + " ".join(
+        _link(f"/dashboard/projects/{project_id}/structure/{slug}", label)
+        for label, slug in links
+    ) + "</nav>"
+
+
+def _structure_dashboard_html(
+    title: str,
+    workspace: ProjectWorkspace,
+    body: str,
+) -> HTMLResponse:
+    project_id = workspace.workspace_id
+    html = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.3.0-structure-ui3\">"
+        "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
+        "<div class=\"brand\">molecule-ranker V1.3</div>"
+        "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        f"{_link('/dashboard', 'Projects')}"
+        f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
+        f"{_link(f'/dashboard/projects/{project_id}/structure/target-structures', 'Structure')}"
+        f"{_link(f'/dashboard/projects/{project_id}/runs', 'Runs')}"
+        f"{_link(f'/dashboard/projects/{project_id}/design/plans', 'Design')}"
+        "</nav></div></header><main class=\"content\">"
+        "<aside class=\"research-disclaimer\">Internal research use only. Source-backed "
+        "evidence remains authoritative. Structure reports cannot be interpreted as binding "
+        "evidence.</aside>"
+        f"<header class=\"page-heading\"><h1>{_h(title)}</h1>"
+        f"<p class=\"muted\">Project: {_h(project_id)}</p></header>"
+        f"{body}</main></div></body></html>\n"
+    )
+    return HTMLResponse(html)
+
+
+def _structure_dashboard_records(
+    workspace: ProjectWorkspace,
+    spec: dict[str, Any],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for run in workspace.runs:
+        path = Path(run.run_dir) / str(spec["filename"])
+        if not path.exists() or not safe_artifact_path(path, root_dir=Path(workspace.root_dir)):
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        records.extend(_structure_records_from_payload(payload, str(spec["key"])))
+    return records
+
+
+def _structure_records_from_payload(payload: Any, key: str) -> list[dict[str, Any]]:
+    if key == "metrics" and isinstance(payload, dict):
+        metrics = payload.get("metrics", payload)
+        if isinstance(metrics, dict):
+            return [
+                {"metric": metric, "value": value}
+                for metric, value in sorted(metrics.items())
+            ]
+    if isinstance(payload, list):
+        return [dict(item) for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    value = payload.get(key)
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [dict(value)]
+    singular = payload.get(key.rstrip("s"))
+    if isinstance(singular, dict):
+        return [dict(singular)]
+    return []
+
+
 def _design_page(
     project_id: str,
     request: Request,
@@ -1645,9 +1860,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.2.0-model-ui\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.3.0-structure-ui3\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.2</div>"
+        "<div class=\"brand\">molecule-ranker V1.3</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -1818,6 +2033,13 @@ def _link(href: str, label: Any) -> str:
 
 def _is_html(value: Any) -> bool:
     return isinstance(value, str) and (value.startswith("<a ") or value.startswith("<span "))
+
+
+def _is_pose_artifact(artifact_type: str) -> bool:
+    normalized = artifact_type.lower().replace("-", "_")
+    return normalized in {"docking_pose", "pose_file", "structure_pose"} or (
+        "pose" in normalized and "docking" in normalized
+    )
 
 
 def _mode_badge(mode: Any) -> str:

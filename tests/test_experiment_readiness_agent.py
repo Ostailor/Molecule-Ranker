@@ -173,6 +173,40 @@ def test_high_risk_molecule_rejected() -> None:
     assert updated.metadata["experiment_readiness_v1_1"]["readiness_bucket"] == "reject"
 
 
+def test_poor_pose_decreases_experiment_readiness() -> None:
+    base = _generated(metadata={})
+    poor_pose = _generated(
+        metadata={
+            "structure_oracle": {
+                "applicability_domain": "suitable_experimental_structure",
+                "pose_qc_status": "reject",
+                "consensus_score": 0.2,
+                "not_experimental_evidence": True,
+            }
+        }
+    )
+    agent = ExperimentReadinessAgent()
+
+    base_score = agent.score_candidate(
+        candidate=base,
+        objective=_objective(),
+        parent_seeds=[_seed()],
+        cluster_counts={"cluster-a": 2},
+        config={"enable_structure_oracle": True},
+    )
+    poor_score = agent.score_candidate(
+        candidate=poor_pose,
+        objective=_objective(),
+        parent_seeds=[_seed()],
+        cluster_counts={"cluster-a": 2},
+        config={"enable_structure_oracle": True},
+    )
+
+    assert poor_score.readiness_score < base_score.readiness_score
+    assert "poor_structure_pose_qc" in poor_score.blocking_risks
+    assert any("structure" in warning for warning in poor_score.warnings)
+
+
 def test_diverse_plausible_molecule_retained_for_expert_review() -> None:
     candidate = _generated(
         metadata={

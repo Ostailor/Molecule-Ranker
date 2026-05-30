@@ -234,6 +234,50 @@ def test_negative_result_reduces_exploit_score() -> None:
     assert negative_signal.metadata["surrogate_estimates_are_not_evidence"] is True
 
 
+def test_negative_experimental_result_dominates_structure_suggestion() -> None:
+    candidate = _generated(
+        "gen-1",
+        "CCOc1ccccn1",
+        scaffold_id="scaffold-a",
+        oracle_score=0.95,
+    ).model_copy(
+        update={
+            "metadata": {
+                **_generated(
+                    "gen-1",
+                    "CCOc1ccccn1",
+                    scaffold_id="scaffold-a",
+                    oracle_score=0.95,
+                ).metadata,
+                "oracle_scoring": {
+                    "experiment_worthiness_score": 0.95,
+                    "component_scores": {
+                        "structure_score": 0.95,
+                        "consensus_structure_score": 0.95,
+                    },
+                    "risk_flags": ["weak_structure_signal"],
+                },
+            }
+        }
+    )
+
+    signal = ActiveLearningDesignPlanner().score_candidate(
+        candidate,
+        experimental_results=[
+            _result(
+                "negative-gen-1",
+                smiles="CCOc1ccccn1",
+                outcome_label="negative",
+                activity_direction="inactive",
+            )
+        ],
+    )
+
+    assert signal.negative_feedback_count == 1
+    assert signal.exploit_score <= 0.38
+    assert "negative_experimental_feedback_overrides_structure_oracle" in signal.warnings
+
+
 def test_safety_result_shifts_risk_reduction() -> None:
     _, _, result = _plan(
         strategy="balanced",

@@ -1,24 +1,34 @@
 # molecule-ranker
 
 `molecule-ranker` is a validated internal research platform MVP for
-source-backed molecule ranking and research operations. V1.2 builds on the
-validated V1.1 platform with a formal predictive model plugin interface,
-calibrated assay-specific surrogate model artifacts, and hosted model training
-and validation job surfaces. V1.1 already supports AgentGraph scientific design
+source-backed molecule ranking and research operations. V1.3 builds on the
+validated V1.2 platform with conservative structure-based design and
+protein-ligand workflow hardening: auditable target structure selection,
+externally prepared receptor and ligand artifact tracking, docking
+reproducibility metadata, pose QC, consensus rescoring, interaction profiles,
+structure-aware generated molecule filtering, report cards, and hosted
+structure job guardrails. V1.2 already provides a formal predictive model
+plugin interface, calibrated assay-specific surrogate model artifacts, and
+hosted model training and validation job surfaces. V1.1 already supports
+AgentGraph scientific design
 workflows, generated-molecule report cards, uncertainty/diversity/readiness
 triage, generator benchmarking, source-backed ranking, generated molecule
 hypotheses, developability triage, literature evidence, experimental feedback,
 review workflows, Codex-backed orchestration, hosted platform mode, and guarded
 external integrations.
 
-V1.2 is for internal research use only. It is not a regulated clinical product.
+V1.3 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
-treat, are safe, or are active. Codex is an orchestration and summarization
-layer, not scientific truth. Data provenance, audit logs, and guardrails are
-core design principles.
+treat, are safe, bind, inhibit, activate, or are active. Docking scores are not
+proof of binding, poses are not experimental evidence, structure-based scores
+are not activity evidence, and predicted structures are lower-confidence than
+suitable experimental structures. Codex is an orchestration and summarization
+layer, not scientific truth; it may not invent structures, poses, binding
+sites, docking scores, or interactions. Data provenance, audit logs, and
+guardrails are core design principles.
 
-Given a disease name, V1.2 resolves the disease through public biomedical data
+Given a disease name, V1.3 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -28,13 +38,15 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V1.2
+## Current Scope Through V1.3
 
-V1.2 implements existing-molecule ranking, opt-in generated hypotheses,
+V1.3 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V1.2 adds a formal model plugin interface,
+external integration primitives. V1.3 adds advanced structure workflow
+hardening while keeping all structure work optional and conservative. V1.2 added
+a formal model plugin interface,
 assay-specific local surrogate training from QC-passed imported results,
 deterministic featurization manifests, leakage-aware splits, calibration and
 applicability-domain metadata, model cards, training manifests, metrics,
@@ -72,8 +84,15 @@ benchmarking, and validation workflows.
   heuristics, synthesizability scoring, and chemical liability flags for
   existing and generated molecules when parseable structures are available.
 - Apply a bounded developability adjustment to evidence-backed ranking scores.
-- Optionally retrieve target structure metadata and optionally run docking only
-  when explicitly enabled. Docking is disabled by default.
+- Optionally retrieve target structure metadata, select structures with an
+  auditable policy that prefers suitable experimental structures, and optionally
+  run docking only when explicitly enabled. Docking is disabled by default.
+- Track externally prepared receptor artifacts, ligand 3D artifacts, binding-site
+  selection methods, docking reproducibility metadata, pose QC, consensus
+  rescoring, and protein-ligand interaction profiles without treating any of
+  them as evidence.
+- Emit structure-based report cards and hosted structure job artifacts with
+  guardrails that require explicit docking limitation acknowledgements.
 - Record optional structure-aware filter pass/fail state without claiming that a
   molecule is safe, binds a target, or is practically synthesizable.
 - Rank generated structures separately from evidence-backed molecules.
@@ -140,13 +159,15 @@ benchmarking, and validation workflows.
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V1.2 does not:
+V1.3 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
 - Use hardcoded generated molecules.
 - Invent fallback targets, molecules, evidence, citations, or scores.
 - Invent evidence for generated molecules.
+- Invent structures, poses, binding sites, docking scores, or interactions.
+- Promote docking scores, poses, or structure-based scores to evidence.
 - Use LLMs to invent citations, paper claims, or biomedical relationships.
 - Create fake citations or placeholder papers.
 - Create synthesis protocols, retrosynthesis, synthesis planning, wet-lab,
@@ -194,7 +215,7 @@ uv sync --all-groups
 uv run molecule-ranker version
 ```
 
-Current release: `1.2.0`.
+Current release: `1.3.0`.
 
 Run a source-backed ranking workflow locally. Generation, docking, external
 writes, Codex, review workflows, and experimental evidence are disabled unless
@@ -467,6 +488,195 @@ endpoint-specific dataset, trains a baseline surrogate, evaluates leakage,
 calibrates when enough data exist, predicts on existing/generated candidates,
 integrates eligible predictions into oracle scoring, generates model reports,
 and verifies guardrails.
+
+## V1.3 Structure-Based Design and Protein-Ligand Workflow Hardening
+
+V1.3 adds advanced structure-based design and protein-ligand workflow
+hardening. Structure workflows are optional and conservative: the normal
+source-backed ranking, generation, model, review, and experimental feedback
+paths do not require structures or docking.
+
+RCSB PDB and AlphaFold DB can provide target structure metadata. Experimental
+structures are preferred when suitable. Predicted structures are lower
+confidence than suitable experimental structures and are labeled accordingly in
+structure records, selections, reports, hosted jobs, and validation artifacts.
+
+Receptor preparation, ligand 3D preparation, binding-site definition, docking,
+pose QC, protein-ligand interaction profiling, consensus rescoring, and
+structure-aware assessments are computational workflows. Docking scores do not
+prove binding. Poses do not prove activity. Structure-aware assessments are
+prioritization signals only; they are not experimental evidence, activity
+evidence, safety evidence, or validation. Generated molecules remain
+computational hypotheses.
+
+V1.3 structure workflows provide no medical advice, synthesis instructions, lab
+protocols, dosing, patient guidance, or clinical claims.
+Codex may plan and summarize structure workflows only from cited artifacts; it
+may not invent structures, binding sites, residues, poses, docking scores, or
+interactions.
+
+Find structure metadata from RCSB PDB:
+
+```bash
+uv run molecule-ranker structure find \
+  --target-symbol LRRK2 \
+  --target-id uniprot:Q5S007 \
+  --source rcsb \
+  --output results/lrrk2/structures.json
+```
+
+Find predicted structure metadata from AlphaFold DB:
+
+```bash
+uv run molecule-ranker structure find \
+  --target-symbol LRRK2 \
+  --target-id Q5S007 \
+  --source alphafold \
+  --output results/lrrk2/alphafold_structures.json
+```
+
+Select a structure with the conservative V1.3 policy:
+
+```bash
+uv run molecule-ranker structure select \
+  --structures results/lrrk2/structures.json \
+  --target-symbol LRRK2 \
+  --output results/lrrk2/structure_selection.json
+```
+
+Prepare a receptor artifact record. `metadata_only` is the safest default and
+does not modify coordinates:
+
+```bash
+uv run molecule-ranker structure prepare-receptor \
+  --structure-id RCSB_PDB:6XYZ \
+  --structure-file artifacts/structures/6xyz.pdb \
+  --method metadata_only \
+  --output results/lrrk2/receptor_preparation.json
+```
+
+Prepare ligand 3D artifacts from an existing run, preserving generated
+molecule provenance when included:
+
+```bash
+uv run molecule-ranker structure prepare-ligands \
+  --from-run results/lrrk2/ \
+  --include-generated \
+  --max-ligands 25 \
+  --output results/lrrk2/ligand_preparation.json
+```
+
+Define a binding site from the selected structure metadata. Binding-site
+definitions must be provenance-backed; molecule-ranker does not invent residue
+lists or boxes:
+
+```bash
+uv run molecule-ranker structure define-site \
+  --structure-selection results/lrrk2/structure_selection.json \
+  --method co_crystal_ligand \
+  --output results/lrrk2/binding_sites.json
+```
+
+Run the null docking engine for a no-op validation/dry-run path. This writes a
+docking run record without claiming docking was performed:
+
+```bash
+uv run molecule-ranker structure dock \
+  --receptor results/lrrk2/receptor_preparation.json \
+  --ligands results/lrrk2/ligand_preparation.json \
+  --binding-site results/lrrk2/binding_sites.json \
+  --engine null \
+  --max-ligands 25 \
+  --output results/lrrk2/docking_runs.json
+```
+
+Run AutoDock Vina only when it is explicitly enabled, installed, and reviewed.
+Vina docking remains computational prioritization only:
+
+```bash
+uv run molecule-ranker structure dock \
+  --receptor results/lrrk2/receptor_preparation.json \
+  --ligands results/lrrk2/ligand_preparation.json \
+  --binding-site results/lrrk2/binding_sites.json \
+  --engine vina \
+  --enable-docking \
+  --max-ligands 10 \
+  --output results/lrrk2/docking_runs.json
+```
+
+Assess pose artifacts and write conservative structure-aware assessments:
+
+```bash
+uv run molecule-ranker structure assess \
+  --docking-runs results/lrrk2/docking_runs.json \
+  --poses results/lrrk2/docking_poses.json \
+  --output results/lrrk2/structure_aware_assessments.json
+```
+
+Run the structure-aware design loop from Python when generated candidates and
+structure-aware assessments are already present. The loop uses
+"structure-aware prioritization," not binding optimization:
+
+```bash
+uv run python - <<'PY'
+import json
+from pathlib import Path
+
+from molecule_ranker.generation.schemas import GeneratedMolecule
+from molecule_ranker.structure.schemas import StructureAwareAssessment
+from molecule_ranker.structure.structure_aware_design import StructureAwareGenerationLoop
+
+run_dir = Path("results/lrrk2")
+generated_payload = json.loads((run_dir / "generated_candidates_v2.json").read_text())
+assessment_payload = json.loads((run_dir / "structure_aware_assessments.json").read_text())
+
+generated = [
+    GeneratedMolecule.model_validate(item)
+    for item in generated_payload["retained_generated_molecules"]
+]
+assessments = [
+    StructureAwareAssessment.model_validate(item)
+    for item in assessment_payload["structure_aware_assessments"]
+]
+
+result = StructureAwareGenerationLoop().plan_next_round(
+    generated_candidates=generated,
+    assessments=assessments,
+    batch_size=8,
+)
+(run_dir / "structure_aware_design_loop_report.md").write_text(result.report_markdown)
+PY
+```
+
+Queue a hosted structure job. Docking jobs require `structure:dock`, explicit
+warning acknowledgement, and a budget limit for large jobs:
+
+```bash
+curl -X POST http://127.0.0.1:8765/projects/<project-id>/structure/jobs \
+  -H "Authorization: Bearer $MOLECULE_RANKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_type": "structure_dock",
+    "target_symbol": "LRRK2",
+    "enable_docking": true,
+    "warning_acknowledged": true,
+    "max_ligands": 25,
+    "budget_limit": 25
+  }'
+```
+
+Run deterministic V1.3 structure validation:
+
+```bash
+uv run molecule-ranker validate structure
+```
+
+The structure validation workflow uses mocked structure artifacts to find
+structures, select a structure, prepare receptor and ligand records, define a
+binding site, run null docking, run pose QC, profile interactions, rescore
+consensus, generate a structure report, and verify guardrails. It fails if a
+fixture overclaims binding or validation, invents a docking score, or uses a
+binding-site source without acceptable provenance.
 
 ## V1.0 Release Readiness
 
@@ -2102,6 +2312,8 @@ does not write a normal `report.md` that looks successful.
 - V1.2: stronger predictive model plugin system and calibrated assay-specific
   surrogates.
 - V1.3: advanced structure-based design and protein-ligand workflow hardening.
+- V1.4: multi-objective portfolio optimization and program-level decision
+  analytics.
 - V2.0: validated enterprise discovery operating system.
 
 ## Development

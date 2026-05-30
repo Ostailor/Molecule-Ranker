@@ -30,6 +30,13 @@ from molecule_ranker.validation.schemas import (
     GoldenWorkflow,
     GoldenWorkflowResult,
 )
+from molecule_ranker.validation.structure import (
+    StructureGuardrailAuditReport,
+    StructureGuardrailFinding,
+    StructureValidationReport,
+    run_structure_guardrail_audit,
+    run_structure_validation,
+)
 
 __all__ = [
     "ForbiddenOutputFinding",
@@ -44,6 +51,9 @@ __all__ = [
     "ModelGuardrailAuditReport",
     "ModelGuardrailFinding",
     "ModelValidationReport",
+    "StructureGuardrailAuditReport",
+    "StructureGuardrailFinding",
+    "StructureValidationReport",
     "check_forbidden_outputs",
     "get_golden_workflow",
     "list_golden_workflows",
@@ -52,5 +62,7 @@ __all__ = [
     "run_guardrail_audit",
     "run_model_guardrail_audit",
     "run_model_validation",
+    "run_structure_guardrail_audit",
+    "run_structure_validation",
     "run_golden_workflows",
 ]

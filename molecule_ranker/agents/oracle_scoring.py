@@ -114,6 +114,8 @@ class OracleScoringAgent(BaseAgent):
                 ),
                 min_prediction_confidence=float(config.get("min_prediction_confidence", 0.5)),
                 out_of_domain_penalty=float(config.get("out_of_domain_penalty", 0.08)),
+                enable_structure_oracle=bool(config.get("enable_structure_oracle", False)),
+                structure_oracle_weight=float(config.get("structure_oracle_weight", 0.05)),
                 surrogate_endpoint_id=(
                     str(config["surrogate_oracle_endpoint_id"])
                     if config.get("surrogate_oracle_endpoint_id")

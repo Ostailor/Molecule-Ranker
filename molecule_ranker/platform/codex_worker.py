@@ -20,6 +20,7 @@ from molecule_ranker.codex.provider import (
 )
 from molecule_ranker.codex_backbone.guardrails import (
     MODEL_CODEX_TASK_TYPES,
+    STRUCTURE_CODEX_TASK_TYPES,
     collect_allowed_refs_from_artifacts,
     has_blocking_task_guardrail,
     is_secret_path,
@@ -48,6 +49,11 @@ SAFE_CODEX_TASK_TYPES = {
     "suggest_feature_debugging",
     "draft_model_limitations",
     "explain_active_design_model_influence",
+    "suggest_structure_selection_review_questions",
+    "summarize_structure_assessment",
+    "explain_pose_qc_failure",
+    "draft_structure_report_summary",
+    "plan_followup_structure_workflow",
 }
 CACHE_PATH_MARKERS = {".cache", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
 DEFAULT_FORBIDDEN_COMMANDS = [
@@ -375,6 +381,46 @@ class CodexWorker:
                     "prediction_batch_artifact_id": {"type": "string"},
                 },
             }
+        elif task_type in STRUCTURE_CODEX_TASK_TYPES:
+            prompt_sections["structure_workflow_boundaries"] = [
+                "Codex is limited to planning, review-question generation, and summarization.",
+                "Do not invent structures, binding sites, residues, docking scores, poses, "
+                "or protein-ligand interactions.",
+                "Do not claim binding, activity, safety, efficacy, inhibition, activation, "
+                "treatment, or cure from structure artifacts.",
+                "Do not generate lab protocols, dosing guidance, or synthesis instructions.",
+                "State that docking scores, poses, and interactions are computational "
+                "annotations only, not experimental evidence.",
+                "Cite structure_id, selection_id, receptor_prep_id, docking_run_id, pose_id, "
+                "interaction_profile_id, and artifact_ids.",
+            ]
+            expected_schema = {
+                "type": "object",
+                "required": [
+                    "status",
+                    "summary",
+                    "limitations",
+                    "structure_id",
+                    "selection_id",
+                    "receptor_prep_id",
+                    "docking_run_id",
+                    "pose_id",
+                    "interaction_profile_id",
+                    "artifact_ids",
+                ],
+                "properties": {
+                    "status": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "limitations": {"type": "array"},
+                    "structure_id": {"type": "string"},
+                    "selection_id": {"type": "string"},
+                    "receptor_prep_id": {"type": "string"},
+                    "docking_run_id": {"type": "string"},
+                    "pose_id": {"type": "string"},
+                    "interaction_profile_id": {"type": "string"},
+                    "artifact_ids": {"type": "array"},
+                },
+            }
         else:
             expected_schema = {
                 "type": "object",
@@ -522,6 +568,9 @@ class CodexWorker:
         stdout = response.stdout or json.dumps(response.parsed_json or {})
         artifact_paths = [artifact.isolated_path for artifact in context.included]
         allowed_refs, _citation_ids = collect_allowed_refs_from_artifacts(artifact_paths)
+        for artifact in context.included:
+            allowed_refs.add(artifact.source_artifact_id)
+            allowed_refs.add(Path(artifact.isolated_path).name)
         warnings.extend(
             output_guardrail_warnings(
                 stdout,

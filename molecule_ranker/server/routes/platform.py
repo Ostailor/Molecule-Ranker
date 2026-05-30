@@ -85,6 +85,22 @@ class ModelJobRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class StructureJobRequest(BaseModel):
+    job_type: str
+    target_symbol: str | None = None
+    run_id: str | None = None
+    structure_id: str | None = None
+    binding_site_id: str | None = None
+    enable_docking: bool = False
+    warning_acknowledged: bool = False
+    max_ligands: int | None = Field(default=None, ge=0)
+    budget_limit: int | None = Field(default=None, ge=0)
+    use_codex_planner: bool = False
+    structure_plan_approved: bool = False
+    approval_id: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 class DesignPlanApprovalRequest(BaseModel):
     plan_id: str
     run_id: str | None = None
@@ -609,6 +625,55 @@ def enqueue_model_job(
         "status": job.status,
         "job": job.model_dump(mode="json"),
         "prediction_boundary": "model_predictions_are_not_evidence_or_assay_results",
+    }
+
+
+@router.post("/projects/{project_id}/structure/jobs")
+def enqueue_structure_job(
+    project_id: str,
+    request: StructureJobRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    config = dict(request.config)
+    for key, value in {
+        "target_symbol": request.target_symbol,
+        "run_id": request.run_id,
+        "structure_id": request.structure_id,
+        "binding_site_id": request.binding_site_id,
+        "max_ligands": request.max_ligands,
+        "budget_limit": request.budget_limit,
+        "approval_id": request.approval_id,
+    }.items():
+        if value is not None:
+            config[key] = value
+    config["enable_docking"] = request.enable_docking
+    config["use_codex_planner"] = request.use_codex_planner
+    config["structure_plan_approved"] = request.structure_plan_approved
+    if request.warning_acknowledged:
+        config["structure_warning_acknowledged"] = True
+        config["docking_limitations_acknowledged"] = True
+    try:
+        job = PlatformJobQueue(database).enqueue(
+            job_type=request.job_type,
+            requested_by=user,
+            project_id=project_id,
+            config_snapshot=config,
+            metadata={
+                "structure_v1_3": True,
+                "structure_reports_not_binding_evidence": True,
+                "human_review_required": True,
+            },
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": job.status,
+        "job": job.model_dump(mode="json"),
+        "structure_report_boundary": "not_binding_evidence",
+        "warning": "Structure reports are computational prioritization artifacts only.",
     }
 
 

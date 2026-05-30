@@ -160,6 +160,26 @@ from molecule_ranker.schemas import (
     Target,
 )
 from molecule_ranker.server import run_local_server
+from molecule_ranker.structure.adapters.alphafold_adapter import AlphaFoldStructureAdapter
+from molecule_ranker.structure.adapters.rcsb_adapter import RCSBStructureAdapter
+from molecule_ranker.structure.adapters.user_structure_adapter import UserStructureAdapter
+from molecule_ranker.structure.benchmarks import StructureBenchmarkHarness
+from molecule_ranker.structure.binding_site import BindingSiteConfig, define_binding_site
+from molecule_ranker.structure.docking import DockingConfig, run_docking
+from molecule_ranker.structure.ligand_prep import LigandPrepConfig, prepare_ligand_3d
+from molecule_ranker.structure.receptor_prep import ReceptorPrepConfig, prepare_receptor
+from molecule_ranker.structure.rescoring import score_structure_aware_assessment
+from molecule_ranker.structure.schemas import (
+    BindingSiteDefinition,
+    DockingPose,
+    DockingRun,
+    Ligand3DPreparation,
+    ReceptorPreparation,
+    StructureAwareAssessment,
+    StructureRecord,
+    StructureSelection,
+)
+from molecule_ranker.structure.selection import select_structure
 from molecule_ranker.utils import slugify
 from molecule_ranker.validation import run_golden_workflows
 from molecule_ranker.workspace import (
@@ -320,6 +340,10 @@ model_registry_app = typer.Typer(
     help="Inspect and move local predictive model registry artifacts.",
     no_args_is_help=True,
 )
+structure_app = typer.Typer(
+    help="V1.3 optional structure workflow artifact commands.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
@@ -340,6 +364,7 @@ app.add_typer(integration_app, name="integration")
 app.add_typer(release_app, name="release")
 app.add_typer(design_app, name="design")
 app.add_typer(model_app, name="model")
+app.add_typer(structure_app, name="structure")
 model_app.add_typer(model_dataset_app, name="dataset")
 model_app.add_typer(model_registry_app, name="registry")
 codex_app.add_typer(codex_assist_app, name="assist")
@@ -639,6 +664,37 @@ def validate_models_command(
         typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
         typer.echo(f"JSON: {output_dir / 'model_guardrail_audit.json'}")
         typer.echo(f"Markdown: {output_dir / 'model_guardrail_audit.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("structure")
+def validate_structure_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    fixture: Annotated[
+        Literal["golden", "overclaim", "fake_docking_score", "fake_binding_site_source"],
+        typer.Option("--fixture", help="Synthetic structure-validation fixture to run."),
+    ] = "golden",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V1.3 structure workflow validation."""
+    from molecule_ranker.validation import run_structure_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "structure"
+    report = run_structure_validation(output_dir=output_dir, fixture=fixture)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Structure validation: {report.status}")
+        typer.echo(f"Fixture: {fixture}")
+        typer.echo(f"Artifacts: {len(report.artifacts)}")
+        typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
+        typer.echo(f"JSON: {output_dir / 'structure_guardrail_audit.json'}")
+        typer.echo(f"Markdown: {output_dir / 'structure_guardrail_audit.md'}")
     if report.status != "pass":
         raise typer.Exit(code=1)
 
@@ -2631,9 +2687,7 @@ def auth_token_create(
     database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
     token = generate_opaque_token(prefix="mrs")
     expires_at = (
-        datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
-        if expires_in_seconds
-        else None
+        datetime.now(UTC) + timedelta(seconds=expires_in_seconds) if expires_in_seconds else None
     )
     try:
         token_id = database.create_service_account_token(
@@ -2702,7 +2756,6 @@ def auth_token_revoke(
         _echo_json(payload)
         return
     typer.echo(f"Revoked token: {token_id}")
-
 
 
 @experiment_app.command("import")
@@ -3927,8 +3980,7 @@ def project_compare(
             output_path.parent.mkdir(parents=True, exist_ok=True)
             if json_output:
                 output_path.write_text(
-                    json.dumps(comparison.model_dump(mode="json"), indent=2, sort_keys=True)
-                    + "\n"
+                    json.dumps(comparison.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
                 )
             else:
                 output_path.write_text(rendered)
@@ -6182,8 +6234,7 @@ def rank(
         typer.Option(
             "--enable-docking",
             help=(
-                "Enable optional docking plugin path when explicit structure inputs are "
-                "available."
+                "Enable optional docking plugin path when explicit structure inputs are available."
             ),
         ),
     ] = False,
@@ -6965,6 +7016,355 @@ def benchmark_developability(
     typer.echo(json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True))
 
 
+@structure_app.command("find")
+def structure_find(
+    target_symbol: Annotated[str, typer.Option("--target-symbol")],
+    target_id: Annotated[str | None, typer.Option("--target-id")] = None,
+    source: Annotated[str, typer.Option("--source")] = "rcsb",
+    output: Annotated[Path, typer.Option("--output")] = Path("structures.json"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Find or register target structure records without making evidence claims."""
+    try:
+        output_path = _safe_structure_artifact_path(output)
+        records: list[StructureRecord] = []
+        warnings: list[str] = []
+        normalized_source = source.lower()
+        if normalized_source == "user":
+            if target_id is None:
+                raise ValueError("--target-id must be a PDB/mmCIF path when --source user.")
+            adapter = UserStructureAdapter(
+                allowed_roots=[Path.cwd(), Path(target_id).resolve().parent]
+            )
+            records.append(
+                adapter.load(
+                    target_id,
+                    target_symbol=target_symbol,
+                    target_identifiers={"user": target_id},
+                    metadata={"cli_source": "structure find"},
+                )
+            )
+            warnings.extend(adapter.warnings)
+        elif normalized_source in {"rcsb", "alphafold"}:
+            target = _structure_cli_target(target_symbol, target_id)
+            cache_dir = output_path.parent / ".structure_cache" / normalized_source
+            raw_dir = output_path.parent / "raw_structure_metadata"
+            if normalized_source == "rcsb":
+                adapter = RCSBStructureAdapter(cache_dir=cache_dir, raw_artifact_dir=raw_dir)
+            else:
+                adapter = AlphaFoldStructureAdapter(cache_dir=cache_dir, raw_artifact_dir=raw_dir)
+            records.extend(adapter.retrieve(target))
+            warnings.extend(adapter.warnings)
+            if not records:
+                warnings.append(
+                    f"No {normalized_source} structures retrieved for {target_symbol}."
+                )
+        else:
+            raise ValueError("--source must be one of rcsb, alphafold, user.")
+        payload = _structure_cli_payload(
+            "structures", [record.model_dump(mode="json") for record in records], warnings
+        )
+        _write_structure_cli_json(output_path, payload)
+        _structure_cli_echo(
+            payload, json_output, f"Wrote {len(records)} structure record(s) to {output_path}."
+        )
+    except Exception as exc:
+        _structure_cli_fail(exc)
+
+
+@structure_app.command("select")
+def structure_select_command(
+    structures: Annotated[
+        Path, typer.Option("--structures", exists=True, file_okay=True, dir_okay=False)
+    ],
+    target_symbol: Annotated[str, typer.Option("--target-symbol")],
+    output: Annotated[Path, typer.Option("--output")] = Path("structure_selection.json"),
+    allow_user_supplied: Annotated[bool, typer.Option("--allow-user-supplied")] = False,
+    strict: Annotated[bool, typer.Option("--strict")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Select a conservative structure for optional structure-aware workflows."""
+    try:
+        output_path = _safe_structure_artifact_path(output)
+        structure_records = [
+            StructureRecord.model_validate(item)
+            for item in _read_structure_cli_records(structures, "structures")
+        ]
+        selection = select_structure(
+            structure_records,
+            target_symbol=target_symbol,
+            allow_user_supplied=allow_user_supplied,
+            strict_structure_selection=strict,
+        )
+        payload = _structure_cli_payload(
+            "structure_selection",
+            [selection.model_dump(mode="json")],
+            selection.warnings,
+            extra={"structures": [record.model_dump(mode="json") for record in structure_records]},
+        )
+        _write_structure_cli_json(output_path, payload)
+        _structure_cli_echo(payload, json_output, f"Wrote structure selection to {output_path}.")
+    except Exception as exc:
+        _structure_cli_fail(exc)
+
+
+@structure_app.command("prepare-receptor")
+def structure_prepare_receptor(
+    structure_id: Annotated[str, typer.Option("--structure-id")],
+    structure_file: Annotated[
+        Path, typer.Option("--structure-file", exists=True, file_okay=True, dir_okay=False)
+    ],
+    method: Annotated[str, typer.Option("--method")] = "metadata_only",
+    output: Annotated[Path, typer.Option("--output")] = Path("receptor_preparation.json"),
+    strict: Annotated[bool, typer.Option("--strict")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Prepare a receptor artifact or metadata-only receptor record."""
+    try:
+        output_path = _safe_structure_artifact_path(output)
+        structure = _structure_record_from_file(
+            structure_id=structure_id,
+            structure_file=structure_file,
+            target_symbol="UNKNOWN",
+        )
+        prep = prepare_receptor(
+            structure,
+            config=ReceptorPrepConfig(
+                receptor_prep_method=method,  # type: ignore[arg-type]
+                strict_receptor_prep=strict,
+                receptor_artifact_dir=output_path.parent / "receptor_artifacts",
+            ),
+        )
+        payload = _structure_cli_payload(
+            "receptor_preparation",
+            [prep.model_dump(mode="json")],
+            prep.warnings,
+        )
+        _write_structure_cli_json(output_path, payload)
+        _structure_cli_echo(payload, json_output, f"Wrote receptor preparation to {output_path}.")
+    except Exception as exc:
+        _structure_cli_fail(exc)
+
+
+@structure_app.command("prepare-ligands")
+def structure_prepare_ligands(
+    from_run: Annotated[
+        Path, typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True)
+    ],
+    include_generated: Annotated[bool, typer.Option("--include-generated")] = False,
+    max_ligands: Annotated[int, typer.Option("--max-ligands", min=1)] = 100,
+    output: Annotated[Path, typer.Option("--output")] = Path("ligand_preparation.json"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Prepare ligand 3D artifacts from a run directory."""
+    try:
+        output_path = _safe_structure_artifact_path(output)
+        candidates = _load_structure_cli_ligand_candidates(
+            from_run, include_generated=include_generated
+        )
+        ligands: list[Ligand3DPreparation] = []
+        warnings: list[str] = []
+        for candidate in candidates[:max_ligands]:
+            try:
+                ligands.append(
+                    prepare_ligand_3d(
+                        molecule_id=str(candidate["molecule_id"]),
+                        molecule_name=str(candidate["molecule_name"]),
+                        origin=candidate["origin"],  # type: ignore[arg-type]
+                        canonical_smiles=str(candidate["canonical_smiles"]),
+                        config=LigandPrepConfig(
+                            ligand_conformer_count=1,
+                            max_ligands_for_docking=max_ligands,
+                            ligand_artifact_dir=output_path.parent / "ligand_artifacts",
+                        ),
+                    )
+                )
+            except Exception as exc:
+                warnings.append(f"Ligand preparation skipped for {candidate['molecule_id']}: {exc}")
+        payload = _structure_cli_payload(
+            "ligand_preparation",
+            [ligand.model_dump(mode="json") for ligand in ligands],
+            warnings,
+        )
+        _write_structure_cli_json(output_path, payload)
+        _structure_cli_echo(
+            payload,
+            json_output,
+            f"Wrote {len(ligands)} ligand preparation record(s) to {output_path}.",
+        )
+    except Exception as exc:
+        _structure_cli_fail(exc)
+
+
+@structure_app.command("define-site")
+def structure_define_site(
+    structure_selection: Annotated[
+        Path, typer.Option("--structure-selection", exists=True, file_okay=True, dir_okay=False)
+    ],
+    method: Annotated[str, typer.Option("--method")] = "co_crystal_ligand",
+    output: Annotated[Path, typer.Option("--output")] = Path("binding_sites.json"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Define a binding site from selected structure metadata."""
+    try:
+        output_path = _safe_structure_artifact_path(output)
+        selection_payload = json.loads(structure_selection.read_text())
+        selection_records = _records_from_payload(selection_payload, "structure_selection")
+        if not selection_records:
+            raise ValueError("structure_selection artifact contains no selection records.")
+        selection = StructureSelection.model_validate(selection_records[0])
+        structure = _selected_structure_for_cli(selection, selection_payload, structure_selection)
+        site = define_binding_site(
+            structure,
+            config=BindingSiteConfig(method=method),  # type: ignore[arg-type]
+        )
+        payload = _structure_cli_payload(
+            "binding_sites", [site.model_dump(mode="json")], site.warnings
+        )
+        _write_structure_cli_json(output_path, payload)
+        _structure_cli_echo(
+            payload, json_output, f"Wrote binding site definition to {output_path}."
+        )
+    except Exception as exc:
+        _structure_cli_fail(exc)
+
+
+@structure_app.command("dock")
+def structure_dock(
+    receptor: Annotated[
+        Path, typer.Option("--receptor", exists=True, file_okay=True, dir_okay=False)
+    ],
+    ligands: Annotated[
+        Path, typer.Option("--ligands", exists=True, file_okay=True, dir_okay=False)
+    ],
+    binding_site: Annotated[
+        Path, typer.Option("--binding-site", exists=True, file_okay=True, dir_okay=False)
+    ],
+    engine: Annotated[str, typer.Option("--engine")] = "null",
+    max_ligands: Annotated[int, typer.Option("--max-ligands", min=1)] = 100,
+    output: Annotated[Path, typer.Option("--output")] = Path("docking_runs.json"),
+    enable_docking: Annotated[bool, typer.Option("--enable-docking")] = False,
+    write_pose_files: Annotated[bool, typer.Option("--write-pose-files")] = False,
+    strict: Annotated[bool, typer.Option("--strict")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run optional docking; disabled unless --enable-docking is supplied."""
+    try:
+        output_path = _safe_structure_artifact_path(output)
+        receptor_record = ReceptorPreparation.model_validate(
+            _read_structure_cli_records(receptor, "receptor_preparation")[0]
+        )
+        ligand_records = [
+            Ligand3DPreparation.model_validate(item)
+            for item in _read_structure_cli_records(ligands, "ligand_preparation")
+        ][:max_ligands]
+        site = BindingSiteDefinition.model_validate(
+            _read_structure_cli_records(binding_site, "binding_sites")[0]
+        )
+        run = run_docking(
+            receptor_record,
+            ligand_records,
+            site,
+            DockingConfig(
+                enable_structure_docking=enable_docking,
+                docking_engine=engine,  # type: ignore[arg-type]
+                max_docked_ligands=max_ligands,
+                write_pose_files=write_pose_files,
+                strict_docking=strict,
+                docking_artifact_dir=output_path.parent / "docking_artifacts",
+            ),
+        )
+        payload = _structure_cli_payload(
+            "docking_runs", [run.model_dump(mode="json")], run.warnings
+        )
+        _write_structure_cli_json(output_path, payload)
+        _structure_cli_echo(payload, json_output, f"Wrote docking run record to {output_path}.")
+    except Exception as exc:
+        _structure_cli_fail(exc)
+
+
+@structure_app.command("assess")
+def structure_assess(
+    docking_runs: Annotated[
+        Path, typer.Option("--docking-runs", exists=True, file_okay=True, dir_okay=False)
+    ],
+    poses: Annotated[Path, typer.Option("--poses", exists=True, file_okay=True, dir_okay=False)],
+    output: Annotated[Path, typer.Option("--output")] = Path("structure_aware_assessments.json"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create conservative structure-aware assessment artifacts."""
+    try:
+        output_path = _safe_structure_artifact_path(output)
+        runs = [
+            DockingRun.model_validate(item)
+            for item in _read_structure_cli_records(docking_runs, "docking_runs")
+        ]
+        pose_records = [
+            DockingPose.model_validate(item)
+            for item in _read_structure_cli_records(poses, "docking_poses")
+        ]
+        assessments = _structure_cli_assessments(runs, pose_records)
+        payload = _structure_cli_payload(
+            "structure_aware_assessments",
+            [assessment.model_dump(mode="json") for assessment in assessments],
+            ["Structure-aware assessments are computational prioritization only."],
+        )
+        _write_structure_cli_json(output_path, payload)
+        _structure_cli_echo(
+            payload,
+            json_output,
+            f"Wrote {len(assessments)} structure-aware assessment record(s) to {output_path}.",
+        )
+    except Exception as exc:
+        _structure_cli_fail(exc)
+
+
+@structure_app.command("report")
+def structure_report(
+    from_run: Annotated[
+        Path, typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True)
+    ],
+    output: Annotated[Path, typer.Option("--output")] = Path("structure_report.md"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Render a standalone structure workflow report from a run directory."""
+    try:
+        output_path = _safe_structure_artifact_path(output)
+        report = _render_structure_cli_report(from_run)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(report)
+        payload = {"success": True, "output": str(output_path)}
+        _structure_cli_echo(payload, json_output, f"Wrote structure report to {output_path}.")
+    except Exception as exc:
+        _structure_cli_fail(exc)
+
+
+@structure_app.command("benchmark")
+def structure_benchmark(
+    from_run: Annotated[
+        Path, typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True)
+    ],
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Compute structure workflow benchmark metrics from a run directory."""
+    try:
+        artifact = _structure_cli_run_artifact(from_run)
+        report = StructureBenchmarkHarness().benchmark_artifact(artifact, output_dir=from_run)
+        payload = report.model_dump(mode="json")
+        _structure_cli_echo(payload, json_output, "Structure benchmark summary")
+        if not json_output:
+            generated_count = (
+                report.metrics.generated_molecules_with_structure_assessment
+            )
+            docking_success_rate = report.metrics.docking_success_rate
+            typer.echo(f"Generated assessments: {generated_count}")
+            typer.echo(
+                f"Docking success rate: {docking_success_rate:.3f}"
+            )
+    except Exception as exc:
+        _structure_cli_fail(exc)
+
+
 @app.command("assess-developability")
 def assess_developability(
     input_path: Annotated[
@@ -7049,8 +7449,7 @@ def assess_developability(
         typer.Option(
             "--enable-docking",
             help=(
-                "Enable optional docking plugin path when explicit structure inputs are "
-                "available."
+                "Enable optional docking plugin path when explicit structure inputs are available."
             ),
         ),
     ] = False,
@@ -7459,6 +7858,337 @@ def _load_experiment_run_candidates(
     return candidates, generated
 
 
+def _safe_structure_artifact_path(path: Path) -> Path:
+    if ".." in path.parts:
+        raise ValueError(f"Unsafe artifact path: {path}")
+    return path
+
+
+def _structure_cli_target(target_symbol: str, target_id: str | None) -> Target:
+    identifiers: dict[str, str] = {}
+    metadata: dict[str, Any] = {}
+    if target_id:
+        if ":" in target_id:
+            key, value = target_id.split(":", 1)
+            identifiers[key.strip().lower()] = value.strip()
+        else:
+            identifiers["uniprot"] = target_id
+        metadata["cli_target_id"] = target_id
+    return Target(
+        symbol=target_symbol,
+        name=target_symbol,
+        identifiers={key: value for key, value in identifiers.items() if value},
+        organism="human",
+        disease_relevance_score=0.5,
+        metadata=metadata,
+    )
+
+
+def _structure_cli_payload(
+    key: str,
+    records: list[dict[str, Any]],
+    warnings: list[str] | None = None,
+    *,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "success": True,
+        key: records,
+        "count": len(records),
+        "warnings": sorted(set(warnings or [])),
+        "limitations": [
+            "Docking scores do not prove binding.",
+            "Poses are computational hypotheses.",
+            "Generated molecules remain computational hypotheses.",
+            "No synthesis instructions.",
+            "No lab protocols.",
+            "No clinical claims.",
+        ],
+        **dict(extra or {}),
+    }
+
+
+def _write_structure_cli_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, default=_json_default, indent=2, sort_keys=True) + "\n")
+
+
+def _json_default(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _structure_cli_echo(payload: dict[str, Any], json_output: bool, message: str) -> None:
+    if json_output:
+        typer.echo(json.dumps(payload, default=_json_default, indent=2, sort_keys=True))
+    else:
+        typer.echo(message)
+
+
+def _structure_cli_fail(exc: Exception) -> None:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(code=1) from exc
+
+
+def _read_structure_cli_records(path: Path, key: str) -> list[dict[str, Any]]:
+    return _records_from_payload(json.loads(path.read_text()), key)
+
+
+def _records_from_payload(payload: Any, key: str) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [dict(item) for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    value = payload.get(key)
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    singular = payload.get(key.rstrip("s"))
+    if isinstance(singular, dict):
+        return [dict(singular)]
+    return []
+
+
+def _structure_record_from_file(
+    *,
+    structure_id: str,
+    structure_file: Path,
+    target_symbol: str,
+) -> StructureRecord:
+    resolved = structure_file.resolve()
+    return StructureRecord(
+        structure_id=structure_id,
+        source="user_supplied",
+        external_id=str(resolved),
+        target_symbol=target_symbol,
+        target_identifiers={"user_supplied": str(resolved)},
+        structure_type="user_supplied",
+        experimental_method=None,
+        resolution_angstrom=None,
+        coverage={"overall": 0.65},
+        chains=["A"],
+        ligands=[],
+        mutations=[],
+        organism=None,
+        release_date=None,
+        quality_metrics={"file_size_bytes": resolved.stat().st_size},
+        url=None,
+        retrieved_at=datetime.now(UTC),
+        metadata={
+            "path": str(resolved),
+            "input_structure_path": str(resolved),
+            "requires_metadata_review": True,
+        },
+    )
+
+
+def _load_structure_cli_ligand_candidates(
+    run_dir: Path,
+    *,
+    include_generated: bool,
+) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+    if include_generated:
+        for filename in ("generated_candidates.json", "generated_molecules.json"):
+            path = run_dir / filename
+            if not path.exists():
+                continue
+            payload = json.loads(path.read_text())
+            for key in ("retained_generated_molecules", "generated"):
+                for item in _records_from_payload(payload, key):
+                    molecule_id = str(item.get("generated_id") or item.get("name") or "")
+                    smiles = str(item.get("canonical_smiles") or item.get("smiles") or "")
+                    if molecule_id and smiles:
+                        candidates.append(
+                            {
+                                "molecule_id": molecule_id,
+                                "molecule_name": str(item.get("name") or molecule_id),
+                                "canonical_smiles": smiles,
+                                "origin": "generated",
+                            }
+                        )
+            if candidates:
+                break
+    if not candidates:
+        candidates_path = run_dir / "candidates.json"
+        if candidates_path.exists():
+            payload = json.loads(candidates_path.read_text())
+            for item in _records_from_payload(payload, "candidates"):
+                metadata = item.get("chemical_metadata")
+                smiles = ""
+                if isinstance(metadata, dict):
+                    smiles = str(metadata.get("canonical_smiles") or "")
+                if item.get("name") and smiles:
+                    candidates.append(
+                        {
+                            "molecule_id": str(item["name"]),
+                            "molecule_name": str(item["name"]),
+                            "canonical_smiles": smiles,
+                            "origin": "existing",
+                        }
+                    )
+    return candidates
+
+
+def _selected_structure_for_cli(
+    selection: StructureSelection,
+    selection_payload: dict[str, Any],
+    selection_path: Path,
+) -> StructureRecord:
+    structure_records = [
+        StructureRecord.model_validate(item)
+        for item in _records_from_payload(selection_payload, "structures")
+    ]
+    if not structure_records:
+        sibling = selection_path.parent / "structures.json"
+        if sibling.exists():
+            structure_records = [
+                StructureRecord.model_validate(item)
+                for item in _read_structure_cli_records(sibling, "structures")
+            ]
+    for record in structure_records:
+        if record.structure_id == selection.selected_structure_id:
+            return record
+    raise ValueError(f"Selected structure not found: {selection.selected_structure_id}")
+
+
+def _structure_cli_assessments(
+    runs: list[DockingRun],
+    poses: list[DockingPose],
+) -> list[StructureAwareAssessment]:
+    poses_by_run: dict[str, list[DockingPose]] = {}
+    for pose in poses:
+        poses_by_run.setdefault(pose.docking_run_id, []).append(pose)
+    assessments: list[StructureAwareAssessment] = []
+    for run in runs:
+        run_poses = poses_by_run.get(run.docking_run_id, [])
+        if run_poses:
+            first = run_poses[0]
+            assessments.append(
+                score_structure_aware_assessment(
+                    molecule_id=first.molecule_id,
+                    molecule_name=first.molecule_name,
+                    target_symbol=run.target_symbol,
+                    ligand_origin="generated",
+                    structure_id=run.structure_id,
+                    applicability_domain="weak_or_unknown_structure",
+                    poses=run_poses,
+                )
+            )
+        else:
+            assessments.append(
+                StructureAwareAssessment(
+                    assessment_id=f"structure-aware-assessment-{run.docking_run_id}",
+                    molecule_id=run.docking_run_id,
+                    molecule_name=run.docking_run_id,
+                    target_symbol=run.target_symbol,
+                    structure_id=run.structure_id,
+                    docking_pose_ids=[],
+                    structure_score=0.0,
+                    pose_confidence=0.0,
+                    interaction_score=0.0,
+                    consensus_score=0.0,
+                    applicability_domain="unavailable",
+                    recommendation="needs_structure_review",
+                    warnings=[
+                        (
+                            "Structure-aware assessment unavailable because no "
+                            "docking poses were provided."
+                        ),
+                        "Docking scores do not prove binding.",
+                    ],
+                    explanation="No pose-derived structure-aware score was available.",
+                    metadata={"not_experimental_evidence": True},
+                )
+            )
+    return assessments
+
+
+def _structure_cli_run_artifact(run_dir: Path) -> dict[str, Any]:
+    mapping = {
+        "structures": "structures.json",
+        "selections": "structure_selection.json",
+        "receptor_preparations": "receptor_preparation.json",
+        "ligand_preparations": "ligand_preparation.json",
+        "docking_runs": "docking_runs.json",
+        "structure_assessments": "structure_aware_assessments.json",
+    }
+    artifact: dict[str, Any] = {}
+    for key, filename in mapping.items():
+        path = run_dir / filename
+        if path.exists():
+            payload = json.loads(path.read_text())
+            source_key = {
+                "selections": "structure_selection",
+                "receptor_preparations": "receptor_preparation",
+                "ligand_preparations": "ligand_preparation",
+                "structure_assessments": "structure_aware_assessments",
+            }.get(key, key)
+            artifact[key] = _records_from_payload(payload, source_key)
+    return artifact
+
+
+def _render_structure_cli_report(run_dir: Path) -> str:
+    artifact = _structure_cli_run_artifact(run_dir)
+    structures = artifact.get("structures", [])
+    selections = artifact.get("selections", [])
+    receptors = artifact.get("receptor_preparations", [])
+    ligands = artifact.get("ligand_preparations", [])
+    docking_runs = artifact.get("docking_runs", [])
+    assessments = artifact.get("structure_assessments", [])
+    binding_sites = _records_from_run_file(
+        run_dir, "binding_sites.json", "binding_sites"
+    )
+    docking_poses = _records_from_run_file(
+        run_dir, "docking_poses.json", "docking_poses"
+    )
+    interaction_profiles = _records_from_run_file(
+        run_dir, "interaction_profiles.json", "interaction_profiles"
+    )
+    return "\n".join(
+        [
+            "# Structure Workflow Report",
+            "",
+            "## Structure Data Summary",
+            f"- Structures: {len(structures)}",
+            "## Structure Selection",
+            f"- Selections: {len(selections)}",
+            "## Receptor Preparation",
+            f"- Receptor preparations: {len(receptors)}",
+            "## Binding Site Definition",
+            f"- Binding sites: {len(binding_sites)}",
+            "## Ligand Preparation",
+            f"- Ligand preparations: {len(ligands)}",
+            "## Docking Summary",
+            f"- Docking runs: {len(docking_runs)}",
+            "## Pose QC Summary",
+            f"- Docking poses: {len(docking_poses)}",
+            "## Protein-Ligand Interaction Profiles",
+            f"- Interaction profiles: {len(interaction_profiles)}",
+            "## Structure-Aware Assessments",
+            f"- Assessments: {len(assessments)}",
+            "## Structure Workflow Limitations",
+            "- Docking scores do not prove binding.",
+            "- Poses are computational hypotheses.",
+            "- Predicted structures are lower-confidence than suitable experimental structures.",
+            "- Generated molecules remain computational hypotheses.",
+            "- No synthesis instructions.",
+            "- No lab protocols.",
+            "- No clinical claims.",
+            "",
+        ]
+    )
+
+
+def _records_from_run_file(run_dir: Path, filename: str, key: str) -> list[dict[str, Any]]:
+    path = run_dir / filename
+    if not path.exists():
+        return []
+    return _records_from_payload(json.loads(path.read_text()), key)
+
+
 def _render_experiment_cli_report(
     results: list[AssayResult],
     candidates: list[MoleculeCandidate],
@@ -7651,9 +8381,7 @@ def _design_validation_inputs(
                         symbol=objective.target_symbol,
                         name=objective.target_name,
                         identifiers=objective.target_identifiers,
-                        disease_relevance_score=float(
-                            relevance
-                        )
+                        disease_relevance_score=float(relevance)
                         if isinstance(relevance, (int, float))
                         else 0.5,
                     )
@@ -8008,21 +8736,24 @@ def _design_loop_markdown(
     readiness_candidates: list[Any],
     benchmark: Any,
 ) -> str:
-    return "\n".join(
-        [
-            "# Design Loop Report",
-            "",
-            f"- Design plan: {plan.design_plan_id}",
-            f"- Generated candidates: {len(run.generated)}",
-            f"- Retained candidates: {len(run.retained)}",
-            f"- Readiness candidates: {len(readiness_candidates)}",
-            f"- Validity rate: {benchmark.metrics.validity_rate:.3f}",
-            "",
-            "Generated molecules are computational hypotheses.",
-            "Experiment-readiness means worth expert triage, not proven activity.",
-            "No synthesis instructions or lab protocols are provided.",
-        ]
-    ) + "\n"
+    return (
+        "\n".join(
+            [
+                "# Design Loop Report",
+                "",
+                f"- Design plan: {plan.design_plan_id}",
+                f"- Generated candidates: {len(run.generated)}",
+                f"- Retained candidates: {len(run.retained)}",
+                f"- Readiness candidates: {len(readiness_candidates)}",
+                f"- Validity rate: {benchmark.metrics.validity_rate:.3f}",
+                "",
+                "Generated molecules are computational hypotheses.",
+                "Experiment-readiness means worth expert triage, not proven activity.",
+                "No synthesis instructions or lab protocols are provided.",
+            ]
+        )
+        + "\n"
+    )
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
@@ -8180,9 +8911,7 @@ def _write_review_queue_json(path: Path, workspace: ReviewWorkspace) -> None:
                 "run_id": workspace.run_id,
                 "disease_name": workspace.disease_name,
                 "created_at": workspace.created_at.isoformat(),
-                "review_items": [
-                    item.model_dump(mode="json") for item in workspace.review_items
-                ],
+                "review_items": [item.model_dump(mode="json") for item in workspace.review_items],
             },
             indent=2,
             sort_keys=True,

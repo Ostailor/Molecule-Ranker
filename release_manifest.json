@@ -1,13 +1,16 @@
 {
   "api_contract_version": "api.v1",
   "artifact_contract_version": "1.0",
-  "build_timestamp": "2026-05-28T02:47:30Z",
-  "dependency_lock_hash": "b3f221a87872c3b0cfe8c70280814fd1c5eaf6fd1ddc20a0567d320d720de9f2",
-  "git_commit": "275786e02e4feec32fd0e73383f8035c453a3144",
+  "build_timestamp": "2026-05-30T01:29:18Z",
+  "dependency_lock_hash": "448e5dd1dbc1cb39ab07886dbc3599b64714012c747293a84e08f88ff0384cae",
+  "git_commit": "0fa14a41d04edc7a31b7b330b0a1af0c7b518948",
   "known_limitations": [
-    "V1.1 is for internal research use only and is not a clinical product.",
+    "V1.3 is for internal research use only and is not a clinical product.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules are computational hypotheses and require independent validation.",
+    "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
+    "Docking scores, poses, and structure-derived interactions are computational heuristics, not proof of binding or activity.",
+    "Predicted structures are lower-confidence than suitable experimental structures.",
     "Default validation uses mocked services; live API and connector validation are opt-in.",
     "Codex outputs are assistant artifacts and must not be promoted to biomedical evidence."
   ],
@@ -25,5 +28,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "1.1.0"
+  "version": "1.3.0"
 }

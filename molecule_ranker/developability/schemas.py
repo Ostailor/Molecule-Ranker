@@ -31,6 +31,15 @@ DevelopabilityRecommendation = Literal[
     "expert_review_required",
 ]
 MoleculeOrigin = Literal["existing", "generated"]
+PreparationArtifactType = Literal[
+    "retrieved_structure",
+    "prepared_receptor",
+    "prepared_ligand",
+    "docking_pose",
+    "interaction_profile",
+    "structure_report_card",
+]
+PoseQCStatus = Literal["pass", "warning", "fail", "not_assessed"]
 
 _FORBIDDEN_SYNTHESIS_METADATA_KEYS = {
     "route",
@@ -133,6 +142,90 @@ class SynthesizabilityAssessment(BaseModel):
         return self
 
 
+class StructurePreparationArtifact(BaseModel):
+    artifact_id: str
+    artifact_type: PreparationArtifactType
+    source_structure_id: str
+    artifact_uri: str
+    preparation_method: str
+    preparation_tool: str | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    checksum: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_protocol_content(self) -> StructurePreparationArtifact:
+        _reject_synthesis_metadata(self.parameters)
+        _reject_synthesis_metadata(self.metadata)
+        _reject_actionable_text([self.preparation_method, *self.warnings])
+        return self
+
+
+class Ligand3DPreparationArtifact(BaseModel):
+    artifact_id: str
+    ligand_id: str
+    canonical_smiles: str
+    artifact_uri: str
+    preparation_method: str
+    conformer_count: int = Field(ge=0)
+    selected_conformer_id: str | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    checksum: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_protocol_content(self) -> Ligand3DPreparationArtifact:
+        _reject_synthesis_metadata(self.parameters)
+        _reject_synthesis_metadata(self.metadata)
+        _reject_actionable_text([self.preparation_method, *self.warnings])
+        return self
+
+
+class PoseQualityControl(BaseModel):
+    status: PoseQCStatus
+    checks: dict[str, bool] = Field(default_factory=dict)
+    failure_reasons: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_pose_evidence_claims(self) -> PoseQualityControl:
+        _reject_structure_claim_metadata(self.metadata)
+        return self
+
+
+class ConsensusRescoring(BaseModel):
+    methods: list[str] = Field(default_factory=list)
+    normalized_scores: dict[str, float] = Field(default_factory=dict)
+    consensus_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_score_evidence_claims(self) -> ConsensusRescoring:
+        _reject_structure_claim_metadata(self.metadata)
+        return self
+
+
+class ProteinLigandInteractionProfile(BaseModel):
+    method: str
+    interactions: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_sourced_interactions_and_reject_claims(
+        self,
+    ) -> ProteinLigandInteractionProfile:
+        for interaction in self.interactions:
+            if not str(interaction.get("source") or "").strip():
+                raise ValueError("Protein-ligand interactions must include a source.")
+        _reject_structure_claim_metadata(self.metadata)
+        return self
+
+
 class DockingAssessment(BaseModel):
     enabled: bool
     target_symbol: str
@@ -145,8 +238,29 @@ class DockingAssessment(BaseModel):
     binding_site_method: str | None = None
     pose_file: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
+    receptor_preparation: StructurePreparationArtifact | None = None
+    ligand_preparation: Ligand3DPreparationArtifact | None = None
+    pose_quality_control: PoseQualityControl | None = None
+    consensus_rescoring: ConsensusRescoring | None = None
+    interaction_profile: ProteinLigandInteractionProfile | None = None
     warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def enforce_structure_integrity_boundaries(self) -> DockingAssessment:
+        _reject_structure_claim_metadata(self.metadata)
+        if self.enabled:
+            warning_text = " ".join(self.warnings).lower()
+            if "does not prove binding" not in warning_text:
+                raise ValueError(
+                    "Enabled docking assessments must state that docking does not prove binding."
+                )
+        if self.structure_source == "AlphaFold DB" and self.confidence > 0.55:
+            raise ValueError(
+                "Predicted structures must remain lower-confidence than suitable "
+                "experimental structures."
+            )
+        return self
 
 
 class DevelopabilityAssessment(BaseModel):
@@ -192,3 +306,42 @@ def _reject_actionable_text(values: list[str]) -> None:
         lowered = value.lower()
         if any(term in lowered for term in _FORBIDDEN_SYNTHESIS_TEXT):
             raise ValueError("Synthesizability assessment must not include synthesis instructions")
+
+
+def _reject_structure_claim_metadata(metadata: dict[str, Any]) -> None:
+    for text in _metadata_strings(metadata):
+        lowered = text.lower()
+        if any(phrase in lowered for phrase in _FORBIDDEN_STRUCTURE_CLAIM_TEXT):
+            raise ValueError("Structure workflow metadata must not contain binding/activity claims")
+
+
+def _metadata_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        strings: list[str] = []
+        for key, item in value.items():
+            strings.extend(_metadata_strings(str(key)))
+            strings.extend(_metadata_strings(item))
+        return strings
+    if isinstance(value, list):
+        strings = []
+        for item in value:
+            strings.extend(_metadata_strings(item))
+        return strings
+    return []
+
+
+_FORBIDDEN_STRUCTURE_CLAIM_TEXT = (
+    "proves binding",
+    "proof of binding",
+    "confirmed binding",
+    "demonstrates binding",
+    "is active",
+    "is safe",
+    "is efficacious",
+    "treats ",
+    "cures ",
+    "inhibits ",
+    "activates ",
+)

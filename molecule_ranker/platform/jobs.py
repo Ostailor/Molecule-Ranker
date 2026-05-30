@@ -38,6 +38,22 @@ QUEUE_JOB_TYPES = {
     "model_evaluate",
     "model_predict",
     "model_calibrate",
+    "structure_find",
+    "structure_select",
+    "receptor_prepare",
+    "ligand_prepare",
+    "binding_site_define",
+    "structure_dock",
+    "pose_qc",
+    "structure_assess",
+    "structure_benchmark",
+    "structure_design_loop",
+    "structure_retrieval",
+    "structure_selection",
+    "receptor_preparation",
+    "ligand_preparation",
+    "structure_docking",
+    "structure_report_card",
     "review_export",
     "dashboard_build",
     "codex_task",
@@ -68,6 +84,22 @@ JOB_PERMISSION: dict[str, str] = {
     "model_evaluate": "model:read",
     "model_predict": "model:predict",
     "model_calibrate": "model:train",
+    "structure_find": "structure:run",
+    "structure_select": "structure:run",
+    "receptor_prepare": "structure:run",
+    "ligand_prepare": "structure:run",
+    "binding_site_define": "structure:run",
+    "structure_dock": "structure:dock",
+    "pose_qc": "structure:run",
+    "structure_assess": "structure:run",
+    "structure_benchmark": "structure:run",
+    "structure_design_loop": "structure:run",
+    "structure_retrieval": "run:create",
+    "structure_selection": "run:create",
+    "receptor_preparation": "run:create",
+    "ligand_preparation": "run:create",
+    "structure_docking": "run:create",
+    "structure_report_card": "run:create",
     "review_export": "artifact:export",
     "dashboard_build": "project:read",
     "codex_task": "codex:run",
@@ -82,6 +114,8 @@ PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
 LOGGER = logging.getLogger("molecule_ranker.jobs")
 DESIGN_LARGE_GENERATION_THRESHOLD = 100
 DESIGN_MAX_GENERATION_BUDGET = 1000
+STRUCTURE_LARGE_DOCKING_THRESHOLD = 100
+STRUCTURE_MAX_DOCKING_BUDGET = 1000
 
 
 @dataclass(frozen=True)
@@ -137,6 +171,13 @@ class PlatformJobQueue:
             config_snapshot=config,
         )
         _enforce_hosted_model_policy(job_type=job_type, config_snapshot=config)
+        _enforce_hosted_structure_policy(
+            database=self.database,
+            requested_by=requested_by,
+            job_type=job_type,
+            project_id=project_id,
+            config_snapshot=config,
+        )
         now = _now()
         job = PlatformJob(
             job_id=f"job-{uuid.uuid4().hex[:16]}",
@@ -574,7 +615,129 @@ def _enforce_hosted_model_policy(
     } and not str(
         config_snapshot.get("model_id") or ""
     ).strip():
-        raise PlatformDatabaseError(f"{job_type} requires model_id.")
+            raise PlatformDatabaseError(f"{job_type} requires model_id.")
+
+
+def _enforce_hosted_structure_policy(
+    *,
+    database: PlatformDatabase,
+    requested_by: UserAccount,
+    job_type: str,
+    project_id: str | None,
+    config_snapshot: dict[str, Any],
+) -> None:
+    structure_job_types = {
+        "structure_find",
+        "structure_select",
+        "receptor_prepare",
+        "ligand_prepare",
+        "binding_site_define",
+        "structure_dock",
+        "pose_qc",
+        "structure_assess",
+        "structure_benchmark",
+        "structure_design_loop",
+        "structure_retrieval",
+        "structure_selection",
+        "receptor_preparation",
+        "ligand_preparation",
+        "structure_docking",
+        "structure_report_card",
+    }
+    if job_type not in structure_job_types:
+        return
+    if bool(config_snapshot.get("use_patient_data")) or bool(
+        config_snapshot.get("use_dosing_data")
+    ):
+        raise PermissionError("Structure jobs must not use patient or dosing data.")
+    if _codex_structure_plan_requires_approval(config_snapshot):
+        raise PermissionError("Codex-planned structure jobs require approval before execution.")
+    if _has_codex_structure_approval(config_snapshot) and not requested_by.is_admin:
+        if not has_permission(
+            requested_by,
+            "structure:approve",
+            project_id=project_id,
+            database=database,
+        ):
+            raise PermissionError("Missing permission structure:approve.")
+    if job_type in {
+        "structure_find",
+        "structure_select",
+        "structure_benchmark",
+        "structure_design_loop",
+        "structure_retrieval",
+        "structure_selection",
+        "structure_report_card",
+    }:
+        target_symbol = str(config_snapshot.get("target_symbol") or "").strip()
+        if not target_symbol:
+            raise PlatformDatabaseError(f"{job_type} requires target_symbol.")
+    if job_type in {"structure_dock", "structure_docking"}:
+        if not bool(config_snapshot.get("enable_docking")):
+            raise PlatformDatabaseError(f"{job_type} requires enable_docking=true.")
+        if not (
+            bool(config_snapshot.get("structure_warning_acknowledged"))
+            and bool(config_snapshot.get("docking_limitations_acknowledged"))
+        ):
+            raise PermissionError(
+                "Docking jobs require acknowledgement that scores, poses, and "
+                "structure-derived interactions are computational heuristics only."
+            )
+        docking_budget = _structure_docking_budget(config_snapshot)
+        budget_limit = _structure_budget_limit(config_snapshot)
+        if docking_budget > STRUCTURE_MAX_DOCKING_BUDGET:
+            raise PlatformDatabaseError(
+                f"Docking budget exceeds hosted limit {STRUCTURE_MAX_DOCKING_BUDGET}."
+            )
+        if docking_budget > STRUCTURE_LARGE_DOCKING_THRESHOLD and budget_limit is None:
+            raise PlatformDatabaseError("Large docking jobs require an explicit budget_limit.")
+        if budget_limit is not None and docking_budget > budget_limit:
+            raise PlatformDatabaseError("Docking budget exceeds budget_limit.")
+    if bool(config_snapshot.get("codex_may_create_pose")) or bool(
+        config_snapshot.get("codex_may_invent_interactions")
+    ):
+        raise PermissionError(
+            "Codex may plan or summarize structure workflows but must not invent poses, "
+            "scores, binding sites, or interactions."
+        )
+
+
+def _structure_docking_budget(config_snapshot: dict[str, Any]) -> int:
+    for key in ("docking_budget", "max_ligands", "ligand_count", "max_docked_ligands"):
+        if config_snapshot.get(key) is not None:
+            try:
+                return max(int(config_snapshot[key]), 0)
+            except (TypeError, ValueError):
+                raise PlatformDatabaseError("Docking budget must be an integer.") from None
+    return 0
+
+
+def _structure_budget_limit(config_snapshot: dict[str, Any]) -> int | None:
+    value = config_snapshot.get("budget_limit", config_snapshot.get("docking_budget_limit"))
+    if value is None:
+        return None
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        raise PlatformDatabaseError("Docking budget_limit must be an integer.") from None
+
+
+def _codex_structure_plan_requires_approval(config_snapshot: dict[str, Any]) -> bool:
+    codex_planned = bool(
+        config_snapshot.get("use_codex_planner")
+        or config_snapshot.get("codex_task_result_id")
+        or str(config_snapshot.get("structure_plan_source", "")).lower() == "codex"
+    )
+    return codex_planned and not _has_codex_structure_approval(config_snapshot)
+
+
+def _has_codex_structure_approval(config_snapshot: dict[str, Any]) -> bool:
+    return bool(
+        config_snapshot.get("structure_plan_approved")
+        or config_snapshot.get("plan_approved")
+        or config_snapshot.get("codex_plan_approved")
+        or config_snapshot.get("approval_id")
+    )
 
 
 def _design_generation_budget(config_snapshot: dict[str, Any]) -> int:

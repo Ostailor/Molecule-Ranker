@@ -187,6 +187,77 @@ def test_docking_disabled_by_default() -> None:
     assert "docking_disabled" in docking.risk_flags
 
 
+def _structure_context(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "applicability_domain": "suitable_experimental_structure",
+        "structure_selection_confidence": 0.82,
+        "receptor_preparation_confidence": 0.72,
+        "pose_qc_status": "pass",
+        "pose_confidence": 0.52,
+        "interaction_score": 0.58,
+        "interaction_counts": {"hydrogen_bond_like": 1, "hydrophobic_contact": 1},
+        "consensus_score": 0.68,
+        "not_experimental_evidence": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_structure_oracle_improves_ranking_only_modestly() -> None:
+    stack = MultiObjectiveOracleStack()
+    without_structure = stack.score(
+        candidate=_generated("no-structure"),
+        objective=_objective(),
+        seeds=[_seed()],
+        retained_generated=[],
+        enable_structure_oracle=True,
+    )
+    with_structure = stack.score(
+        candidate=_generated(
+            "with-structure",
+            metadata={"structure_oracle": _structure_context(consensus_score=0.95)},
+        ),
+        objective=_objective(),
+        seeds=[_seed()],
+        retained_generated=[],
+        enable_structure_oracle=True,
+    )
+
+    assert (
+        with_structure.experiment_worthiness_score
+        > without_structure.experiment_worthiness_score
+    )
+    assert (
+        with_structure.experiment_worthiness_score
+        - without_structure.experiment_worthiness_score
+        <= 0.08
+    )
+    assert with_structure.oracle_by_name("consensus_structure_oracle").confidence <= 0.45
+    assert with_structure.metadata["structure_oracle_enabled"] is True
+
+
+def test_unavailable_structure_oracle_is_unknown_not_harsh_penalty() -> None:
+    result = MultiObjectiveOracleStack().score(
+        candidate=_generated(
+            metadata={
+                "structure_oracle": {
+                    "applicability_domain": "unavailable",
+                    "not_experimental_evidence": True,
+                }
+            }
+        ),
+        objective=_objective(),
+        seeds=[_seed()],
+        retained_generated=[],
+        enable_structure_oracle=True,
+    )
+
+    consensus = result.oracle_by_name("consensus_structure_oracle")
+    assert consensus.score == 0.5
+    assert "structure_context_unknown" in consensus.risk_flags
+    assert result.experiment_worthiness_score >= 0.45
+
+
 def _prediction(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "prediction_id": "pred-1",

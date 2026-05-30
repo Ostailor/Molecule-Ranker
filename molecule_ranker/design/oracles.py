@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -9,6 +10,11 @@ from molecule_ranker.generation.schemas import (
     GeneratedMolecule,
     GenerationObjective,
     SeedMolecule,
+)
+from molecule_ranker.structure.structure_oracles import (
+    structure_oracle_context_from_metadata,
+    structure_oracle_domain_multiplier,
+    structure_oracle_metadata,
 )
 
 
@@ -57,6 +63,8 @@ class MultiObjectiveOracleStack:
         min_prediction_confidence: float = 0.5,
         out_of_domain_penalty: float = 0.08,
         surrogate_endpoint_id: str | None = None,
+        enable_structure_oracle: bool = False,
+        structure_oracle_weight: float = 0.05,
     ) -> OracleStackResult:
         surrogate_enabled = (
             enable_surrogate
@@ -85,6 +93,8 @@ class MultiObjectiveOracleStack:
             ),
             self._synthetic_accessibility_heuristic_oracle(candidate),
         ]
+        if enable_structure_oracle:
+            oracles.extend(self._structure_oracles(candidate))
         by_name = {oracle.oracle_name: oracle for oracle in oracles}
         target_context_score = self._target_context_score(objective, seeds)
         seed_evidence_score = self._seed_evidence_score(seeds)
@@ -100,7 +110,12 @@ class MultiObjectiveOracleStack:
         risk_penalty = self._clamp(1.0 - by_name["alert_toxicity_risk_oracle"].score)
         uncertainty_value = self._uncertainty_value(oracles)
         experimental_gap_value = by_name["experimental_gap_oracle"].score
-        structure_score = by_name["docking_oracle"].score if enable_docking else None
+        legacy_docking_score = by_name["docking_oracle"].score if enable_docking else None
+        structure_score = (
+            by_name["consensus_structure_oracle"].score
+            if enable_structure_oracle
+            else legacy_docking_score
+        )
         surrogate_score = (
             by_name["calibrated_surrogate_oracle"].score if surrogate_enabled else None
         )
@@ -121,6 +136,7 @@ class MultiObjectiveOracleStack:
             structure_score=structure_score,
             surrogate_score=surrogate_score,
             surrogate_weight=self._clamp(surrogate_oracle_weight),
+            structure_weight=self._clamp(structure_oracle_weight),
             surrogate_penalty=self._clamp(surrogate_penalty),
         )
         risk_flags = sorted({flag for oracle in oracles for flag in oracle.risk_flags})
@@ -141,6 +157,22 @@ class MultiObjectiveOracleStack:
         }
         if structure_score is not None:
             component_scores["structure_score"] = round(structure_score, 3)
+        if enable_structure_oracle:
+            component_scores.update(
+                {
+                    "structure_selection_score": by_name[
+                        "structure_selection_oracle"
+                    ].score,
+                    "receptor_prep_score": by_name["receptor_prep_oracle"].score,
+                    "docking_pose_score": by_name["docking_pose_oracle"].score,
+                    "interaction_profile_score": by_name[
+                        "interaction_profile_oracle"
+                    ].score,
+                    "consensus_structure_score": by_name[
+                        "consensus_structure_oracle"
+                    ].score,
+                }
+            )
         if surrogate_score is not None:
             component_scores["calibrated_surrogate_score"] = round(surrogate_score, 3)
             if surrogate_penalty:
@@ -157,6 +189,8 @@ class MultiObjectiveOracleStack:
                 "score_name": "experiment_worthiness_score",
                 "claim_boundary": "computational triage only",
                 "docking_enabled": enable_docking,
+                "structure_oracle_enabled": enable_structure_oracle,
+                "structure_oracle_weight": self._clamp(structure_oracle_weight),
                 "surrogate_enabled": surrogate_enabled,
                 "surrogate_oracle_weight": self._clamp(surrogate_oracle_weight),
             },
@@ -510,6 +544,154 @@ class MultiObjectiveOracleStack:
             },
         )
 
+    def _structure_oracles(self, candidate: GeneratedMolecule) -> list[OracleResult]:
+        context = self._structure_context(candidate)
+        if not context:
+            unknown = self._oracle(
+                "consensus_structure_oracle",
+                0.5,
+                0.1,
+                ["structure_context_unknown"],
+                "Structure oracle optional and unavailable; neutral unknown signal used.",
+                {
+                    "available": False,
+                    "not_experimental_evidence": True,
+                    "does_not_validate_generated_molecule": True,
+                },
+            )
+            return [
+                self._unknown_structure_oracle("structure_selection_oracle"),
+                self._unknown_structure_oracle("receptor_prep_oracle"),
+                self._unknown_structure_oracle("docking_pose_oracle"),
+                self._unknown_structure_oracle("interaction_profile_oracle"),
+                unknown,
+            ]
+        applicability = str(context.get("applicability_domain") or "unavailable")
+        domain_multiplier = structure_oracle_domain_multiplier(applicability)
+        selection_score = self._structure_signal(
+            context,
+            "structure_selection_confidence",
+            "structure_score",
+            default=0.5,
+        )
+        receptor_score = self._structure_signal(
+            context,
+            "receptor_preparation_confidence",
+            "receptor_prep_confidence",
+            default=0.5,
+        )
+        pose_score = self._pose_structure_score(context)
+        interaction_score = self._structure_signal(
+            context,
+            "interaction_score",
+            "interaction_profile_score",
+            default=0.5,
+        )
+        consensus_score = self._structure_signal(
+            context,
+            "consensus_score",
+            "consensus_structure_score",
+            default=0.5,
+        )
+        if applicability == "unavailable":
+            risk = ["structure_context_unknown"]
+            explanation = "Structure context unavailable; neutral unknown signal used."
+            confidence = 0.1
+            score = 0.5
+        else:
+            risk = ["weak_structure_signal"]
+            if applicability == "lower_confidence_predicted_structure":
+                risk.append("predicted_structure_lower_confidence")
+            if str(context.get("pose_qc_status") or "").lower() == "reject":
+                risk.append("poor_structure_pose_qc")
+            explanation = (
+                "Structure oracle is a weak prioritization signal only; it is not "
+                "evidence, binding validation, or activity validation."
+            )
+            confidence = 0.35 if applicability != "suitable_experimental_structure" else 0.45
+            score = self._clamp(consensus_score * domain_multiplier)
+        return [
+            self._oracle(
+                "structure_selection_oracle",
+                self._clamp(selection_score * domain_multiplier),
+                min(confidence, 0.45),
+                risk,
+                explanation,
+                structure_oracle_metadata(context, "structure_selection"),
+            ),
+            self._oracle(
+                "receptor_prep_oracle",
+                self._clamp(receptor_score * domain_multiplier),
+                min(confidence, 0.4),
+                risk,
+                explanation,
+                structure_oracle_metadata(context, "receptor_preparation"),
+            ),
+            self._oracle(
+                "docking_pose_oracle",
+                self._clamp(pose_score * domain_multiplier),
+                min(confidence, 0.35),
+                risk,
+                explanation,
+                structure_oracle_metadata(context, "docking_pose"),
+            ),
+            self._oracle(
+                "interaction_profile_oracle",
+                self._clamp(interaction_score * domain_multiplier),
+                min(confidence, 0.35),
+                risk,
+                explanation,
+                structure_oracle_metadata(context, "interaction_profile"),
+            ),
+            self._oracle(
+                "consensus_structure_oracle",
+                score,
+                min(confidence, 0.45),
+                risk,
+                explanation,
+                structure_oracle_metadata(context, "consensus_structure"),
+            ),
+        ]
+
+    def _unknown_structure_oracle(self, name: str) -> OracleResult:
+        return self._oracle(
+            name,
+            0.5,
+            0.1,
+            ["structure_context_unknown"],
+            "Structure oracle optional and unavailable; neutral unknown signal used.",
+            {
+                "available": False,
+                "not_experimental_evidence": True,
+                "does_not_validate_generated_molecule": True,
+            },
+        )
+
+    def _structure_context(self, candidate: GeneratedMolecule) -> dict[str, Any]:
+        return structure_oracle_context_from_metadata(candidate.metadata)
+
+    def _structure_signal(
+        self,
+        context: Mapping[str, Any],
+        *keys: str,
+        default: float,
+    ) -> float:
+        for key in keys:
+            value = context.get(key)
+            if isinstance(value, (int, float)):
+                return self._clamp(float(value))
+        return self._clamp(default)
+
+    def _pose_structure_score(self, context: Mapping[str, Any]) -> float:
+        status = str(context.get("pose_qc_status") or "").lower()
+        if status == "reject":
+            return 0.05
+        if status == "deprioritize":
+            return 0.3
+        if status == "pass":
+            return self._structure_signal(context, "pose_confidence", default=0.65)
+        return self._structure_signal(context, "pose_confidence", "docking_score", default=0.5)
+
     def _calibrated_surrogate_prediction_signal(
         self,
         candidate: GeneratedMolecule,
@@ -696,6 +878,7 @@ class MultiObjectiveOracleStack:
         structure_score: float | None,
         surrogate_score: float | None,
         surrogate_weight: float,
+        structure_weight: float,
         surrogate_penalty: float,
     ) -> float:
         score = (
@@ -709,7 +892,7 @@ class MultiObjectiveOracleStack:
             - 0.20 * risk_penalty
         )
         if structure_score is not None:
-            score += 0.03 * structure_score
+            score += min(0.05, structure_weight) * (structure_score - 0.5)
         if surrogate_score is not None:
             score += surrogate_weight * (surrogate_score - 0.5)
             score -= surrogate_penalty

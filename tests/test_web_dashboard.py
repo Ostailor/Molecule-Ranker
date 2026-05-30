@@ -38,6 +38,15 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/projects/workspace-a/runs/run-a/developability",
         "/dashboard/projects/workspace-a/runs/run-a/experiments",
         "/dashboard/projects/workspace-a/runs/run-a/active-learning",
+        "/dashboard/projects/workspace-a/structure/target-structures",
+        "/dashboard/projects/workspace-a/structure/selection",
+        "/dashboard/projects/workspace-a/structure/receptor-preparation",
+        "/dashboard/projects/workspace-a/structure/binding-sites",
+        "/dashboard/projects/workspace-a/structure/docking-runs",
+        "/dashboard/projects/workspace-a/structure/docking-poses",
+        "/dashboard/projects/workspace-a/structure/interaction-profiles",
+        "/dashboard/projects/workspace-a/structure/assessments",
+        "/dashboard/projects/workspace-a/structure/benchmarks",
         "/dashboard/projects/workspace-a/design/plans",
         "/dashboard/projects/workspace-a/design/generator-runs",
         "/dashboard/projects/workspace-a/design/oracle-scores",
@@ -137,6 +146,45 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
         "/dashboard/projects/workspace-a/design/active-loop": [
             "Active design loop history",
             "design_loop_report.md",
+        ],
+        "/dashboard/projects/workspace-a/structure/target-structures": [
+            "Target structures",
+            "RCSB_PDB:1ABC",
+            "Structure reports cannot be interpreted as binding evidence",
+        ],
+        "/dashboard/projects/workspace-a/structure/selection": [
+            "Structure selection",
+            "selection-1",
+        ],
+        "/dashboard/projects/workspace-a/structure/receptor-preparation": [
+            "Receptor preparation",
+            "metadata_only",
+        ],
+        "/dashboard/projects/workspace-a/structure/binding-sites": [
+            "Binding sites",
+            "co_crystal_ligand",
+        ],
+        "/dashboard/projects/workspace-a/structure/docking-runs": [
+            "Docking runs",
+            "computational workflow",
+            "Docking scores do not prove binding",
+        ],
+        "/dashboard/projects/workspace-a/structure/docking-poses": [
+            "Docking poses",
+            "computational hypotheses",
+            "pose-1",
+        ],
+        "/dashboard/projects/workspace-a/structure/interaction-profiles": [
+            "Interaction profiles",
+            "computational pose annotations",
+        ],
+        "/dashboard/projects/workspace-a/structure/assessments": [
+            "Structure-aware assessments",
+            "not binding evidence",
+        ],
+        "/dashboard/projects/workspace-a/structure/benchmarks": [
+            "Structure benchmark reports",
+            "pose_qc_pass_rate",
         ],
         "/dashboard/projects/workspace-a/review": ["Review queue", "Rasagiline"],
     }
@@ -241,6 +289,46 @@ def test_design_dashboard_labels_generated_molecules_as_hypotheses(tmp_path: Pat
     assert "Computational hypothesis" in response.text
     assert "not proven activity" in response.text
     assert "No synthesis instructions" in response.text
+
+
+def test_pose_file_artifact_download_requires_structure_export(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    _create_project_with_run(client, tmp_path, admin_headers, project_id="workspace-a")
+    pose_path = tmp_path / "pose-file.pdb"
+    pose_path.write_text("POSE\n")
+    _append_workspace_artifact(
+        tmp_path,
+        pose_path,
+        artifact_id="pose-file",
+        artifact_type="docking_pose",
+    )
+    created = client.post(
+        "/admin/users",
+        json={"email": "viewer@example.com", "password": "Viewer-password-1"},
+        headers=admin_headers,
+    )
+    viewer_id = created.json()["user"]["user_id"]
+    client.post(
+        "/projects/workspace-a/share",
+        json={"role": "viewer", "user_id": viewer_id},
+        headers=admin_headers,
+    )
+    viewer_headers = _api_login(client, "viewer@example.com", "Viewer-password-1")
+
+    blocked = client.get(
+        "/projects/workspace-a/artifacts/pose-file/download",
+        headers=viewer_headers,
+    )
+    allowed = client.get(
+        "/projects/workspace-a/artifacts/pose-file/download",
+        headers=admin_headers,
+    )
+
+    assert blocked.status_code == 403
+    assert "structure:export" in blocked.text
+    assert allowed.status_code == 200
+    assert allowed.text == "POSE\n"
 
 
 def test_first_run_dashboard_explains_setup_defaults_and_project_creation(
@@ -842,6 +930,113 @@ def _write_run(run_dir: Path, *, candidate_name: str, assay_file_name: str) -> N
         )
     )
     (run_dir / "design_loop_report.md").write_text("# design_loop_report.md\n")
+    (run_dir / "structures.json").write_text(
+        json.dumps(
+            {
+                "structures": [
+                    {
+                        "structure_id": "RCSB_PDB:1ABC",
+                        "source": "RCSB_PDB",
+                        "target_symbol": "MAOB",
+                        "structure_type": "experimental",
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "structure_selection.json").write_text(
+        json.dumps(
+            {
+                "structure_selection": [
+                    {
+                        "selection_id": "selection-1",
+                        "selected_structure_id": "RCSB_PDB:1ABC",
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "receptor_preparation.json").write_text(
+        json.dumps(
+            {
+                "receptor_preparation": [
+                    {
+                        "receptor_prep_id": "receptor-1",
+                        "structure_id": "RCSB_PDB:1ABC",
+                        "preparation_method": "metadata_only",
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "binding_sites.json").write_text(
+        json.dumps(
+            {
+                "binding_sites": [
+                    {
+                        "binding_site_id": "site-1",
+                        "method": "co_crystal_ligand",
+                        "confidence": 0.7,
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "docking_runs.json").write_text(
+        json.dumps(
+            {
+                "docking_runs": [
+                    {
+                        "docking_run_id": "dock-1",
+                        "docking_engine": "null",
+                        "status": "skipped",
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "docking_poses.json").write_text(
+        json.dumps(
+            {
+                "docking_poses": [
+                    {
+                        "pose_id": "pose-1",
+                        "docking_score": -7.0,
+                        "confidence": 0.4,
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "interaction_profiles.json").write_text(
+        json.dumps(
+            {
+                "interaction_profiles": [
+                    {
+                        "profile_id": "profile-1",
+                        "interaction_counts": {"hydrophobic": 2},
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "structure_aware_assessments.json").write_text(
+        json.dumps(
+            {
+                "structure_aware_assessments": [
+                    {
+                        "assessment_id": "assessment-1",
+                        "recommendation": "needs_structure_review",
+                        "consensus_score": 0.42,
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "structure_benchmark_report.json").write_text(
+        json.dumps({"metrics": {"pose_qc_pass_rate": 0.5}})
+    )
 
 
 def _seed_model_registry(tmp_path: Path) -> None:
@@ -976,7 +1171,13 @@ def _write_codex_output(
     store.save(workspace)
 
 
-def _append_workspace_artifact(tmp_path: Path, path: Path, *, artifact_id: str) -> None:
+def _append_workspace_artifact(
+    tmp_path: Path,
+    path: Path,
+    *,
+    artifact_id: str,
+    artifact_type: str = "report",
+) -> None:
     store = ProjectWorkspaceStore(tmp_path)
     workspace = store.load()
     data = path.read_bytes()
@@ -985,7 +1186,7 @@ def _append_workspace_artifact(tmp_path: Path, path: Path, *, artifact_id: str) 
             artifact_id=artifact_id,
             workspace_id=workspace.workspace_id,
             path=str(path.resolve()),
-            artifact_type="report",
+            artifact_type=artifact_type,
             sha256=hashlib.sha256(data).hexdigest(),
             size_bytes=len(data),
         )

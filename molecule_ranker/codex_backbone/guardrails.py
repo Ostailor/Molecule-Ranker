@@ -7,6 +7,42 @@ from typing import Any
 
 from molecule_ranker.codex_backbone.schemas import CodexBackboneConfig, CodexTask, CodexTaskResult
 
+STRUCTURE_CODEX_TASK_TYPES = {
+    "suggest_structure_selection_review_questions",
+    "summarize_structure_assessment",
+    "explain_pose_qc_failure",
+    "draft_structure_report_summary",
+    "plan_followup_structure_workflow",
+}
+STRUCTURE_REQUIRED_REF_PREFIXES = {
+    "structure_id": "structure_id",
+    "selection_id": "selection_id",
+    "receptor_prep_id": "receptor_prep_id",
+    "docking_run_id": "docking_run_id",
+    "pose_id": "pose_id",
+    "interaction_profile_id": "interaction_profile_id",
+    "artifact_id": "artifact IDs",
+}
+STRUCTURE_SCORE_PATTERN = re.compile(
+    r"\b(?:docking_score|docking score|score)\s*(?:=|:|of|is)?\s*(-?\d+(?:\.\d+)?)\b",
+    re.I,
+)
+STRUCTURE_RESIDUE_PATTERN = re.compile(r"\b[A-Za-z0-9]+:[A-Z]{3}\d+[A-Za-z]?\b")
+STRUCTURE_OVERCLAIM_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\b(?:docking|pose|structure[- ]?based).{0,80}\bproves?\s+binding\b", re.I),
+        "docking or pose proves binding",
+    ),
+    (
+        re.compile(r"\b(?:docking|pose|structure[- ]?based).{0,80}\bconfirms?\s+activity\b", re.I),
+        "docking or pose confirms activity",
+    ),
+    (
+        re.compile(r"\b(?:validated|active|binder)\s+from\s+(?:docking|pose|structure)\b", re.I),
+        "validated activity or binding from structure workflow",
+    ),
+)
+
 SECRET_FILE_MARKERS = (
     ".env",
     "id_rsa",
@@ -307,6 +343,7 @@ def check_output(
         *_detect_unbacked_molecules(text, allowed_artifact_refs),
         *detect_fake_external_ids(text, allowed_artifact_refs),
         *detect_model_artifact_violations(result, allowed_artifact_refs),
+        *detect_structure_artifact_violations(result, allowed_artifact_refs),
     ]
     if not warnings:
         return result
@@ -373,6 +410,25 @@ def detect_model_artifact_violations(
     return _dedupe(warnings)
 
 
+def detect_structure_artifact_violations(
+    result: CodexTaskResult,
+    allowed_artifact_refs: set[str],
+) -> list[str]:
+    if str(result.task_type) not in STRUCTURE_CODEX_TASK_TYPES:
+        return []
+    text = result.output_text or result.stdout
+    if result.output_json is not None:
+        text = text + "\n" + json.dumps(result.output_json, sort_keys=True)
+    allowed_lower = {ref.lower() for ref in allowed_artifact_refs}
+    warnings = [
+        *_detect_missing_structure_citations(text, allowed_lower),
+        *_detect_fake_structure_scores(text, allowed_lower),
+        *_detect_fake_structure_residue_contacts(text, allowed_lower),
+        *_detect_structure_overclaims(text),
+    ]
+    return _dedupe(warnings)
+
+
 def is_secret_path(path: Path) -> bool:
     parts = [part.lower() for part in path.parts]
     for part in parts:
@@ -420,6 +476,7 @@ def output_guardrail_warnings(
             *detect_protocol_or_synthesis_text(text),
             *_detect_unbacked_assay_results(text, set()),
             *detect_model_artifact_violations(result, allowed_artifact_refs or set()),
+            *detect_structure_artifact_violations(result, allowed_artifact_refs or set()),
         ]
     )
 
@@ -534,6 +591,56 @@ def _detect_forbidden_model_summary_actions(text: str) -> list[str]:
     return warnings
 
 
+def _detect_missing_structure_citations(text: str, allowed_lower: set[str]) -> list[str]:
+    lowered_text = text.lower()
+    warnings: list[str] = []
+    for prefix, label in STRUCTURE_REQUIRED_REF_PREFIXES.items():
+        values = _prefixed_allowed_values(allowed_lower, prefix)
+        if not values:
+            warnings.append(f"Structure Codex summary missing source artifact field: {label}.")
+            continue
+        if not any(value in lowered_text for value in values):
+            warnings.append(f"Structure Codex summary did not cite required {label}.")
+    return warnings
+
+
+def _detect_fake_structure_scores(text: str, allowed_lower: set[str]) -> list[str]:
+    warnings: list[str] = []
+    for match in STRUCTURE_SCORE_PATTERN.finditer(text):
+        raw_value = _normalize_numeric_string(match.group(1))
+        candidates = {
+            f"structure_score:docking_score:{raw_value}",
+            f"docking_score:{raw_value}",
+            f"docking_score={raw_value}",
+        }
+        if candidates.isdisjoint(allowed_lower):
+            warnings.append(f"Unbacked structure docking score: {raw_value}.")
+    return warnings
+
+
+def _detect_fake_structure_residue_contacts(text: str, allowed_lower: set[str]) -> list[str]:
+    warnings: list[str] = []
+    allowed_contacts = _prefixed_allowed_values(allowed_lower, "structure_residue")
+    for match in STRUCTURE_RESIDUE_PATTERN.finditer(text):
+        residue = match.group(0)
+        if residue.lower() not in allowed_contacts:
+            warnings.append(f"Unbacked structure residue contact: {residue}.")
+    return warnings
+
+
+def _detect_structure_overclaims(text: str) -> list[str]:
+    warnings: list[str] = []
+    for pattern, label in STRUCTURE_OVERCLAIM_PATTERNS:
+        match = pattern.search(text)
+        if (
+            match
+            and "do not" not in match.group(0).lower()
+            and not _is_negated_safety_constraint(text, match.start())
+        ):
+            warnings.append(f"Forbidden structure Codex claim: {label}.")
+    return warnings
+
+
 def _prefixed_allowed_values(allowed_lower: set[str], prefix: str) -> set[str]:
     marker = f"{prefix}:"
     return {
@@ -601,6 +708,13 @@ def _collect_json_refs(value: Any, refs: set[str]) -> None:
                 "prediction_id",
                 "batch_id",
                 "prediction_batch_artifact_id",
+                "artifact_id",
+                "structure_id",
+                "selection_id",
+                "receptor_prep_id",
+                "docking_run_id",
+                "pose_id",
+                "interaction_profile_id",
                 "endpoint_id",
                 "candidate_id",
                 "prediction_label",
@@ -611,6 +725,25 @@ def _collect_json_refs(value: Any, refs: set[str]) -> None:
                 refs.add(normalized)
                 refs.add(str(raw))
                 refs.add(f"{_model_ref_prefix(lowered)}:{str(raw)}")
+                refs.add(f"{_structure_ref_prefix(lowered)}:{str(raw)}")
+            if lowered == "artifact_ids" and isinstance(raw, list):
+                for item in raw:
+                    if item not in (None, ""):
+                        refs.add(str(item))
+                        refs.add(f"artifact_id:{str(item)}")
+            if lowered in {"key_residue_contacts", "residues"} and isinstance(raw, list):
+                for item in raw:
+                    if item not in (None, ""):
+                        refs.add(str(item))
+                        refs.add(f"structure_residue:{str(item)}")
+            if lowered in {"residue", "contact_residue"} and raw not in (None, ""):
+                refs.add(str(raw))
+                refs.add(f"structure_residue:{str(raw)}")
+            if lowered in {"docking_score", "structure_score"} and raw is not None:
+                normalized_value = _normalize_numeric_string(str(raw))
+                refs.add(f"structure_score:{lowered}:{normalized_value}")
+                refs.add(f"{lowered}:{normalized_value}")
+                refs.add(f"{lowered}={normalized_value}")
             if lowered in MODEL_METRIC_KEYS and raw is not None:
                 normalized_key = _normalize_model_key(lowered)
                 normalized_value = _normalize_numeric_string(str(raw))
@@ -675,6 +808,12 @@ def _model_ref_prefix(key: str) -> str:
         return "dataset_id"
     if key == "batch_id":
         return "prediction_batch_artifact_id"
+    return key
+
+
+def _structure_ref_prefix(key: str) -> str:
+    if key == "artifact_id":
+        return "artifact_id"
     return key
 
 

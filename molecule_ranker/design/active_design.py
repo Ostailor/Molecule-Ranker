@@ -181,6 +181,8 @@ class ActiveLearningDesignPlanner:
             - 0.22 * min(negative_count, 2)
             - 0.28 * min(safety_count, 1)
         )
+        if negative_count and self._structure_oracle_present(candidate):
+            exploit_score = min(exploit_score, 0.38)
         explore_score = self._clamp(
             0.42 * novelty_score
             + 0.28 * diversity_score
@@ -243,6 +245,7 @@ class ActiveLearningDesignPlanner:
             warnings=sorted(
                 {
                     *self._candidate_warnings(candidate, exact_results, safety_count),
+                    *self._structure_feedback_warnings(candidate, negative_count),
                     *model_influence["warnings"],
                 }
             ),
@@ -492,6 +495,35 @@ class ActiveLearningDesignPlanner:
             else None,
             default=0.5,
         )
+
+    def _structure_oracle_present(self, candidate: GeneratedMolecule) -> bool:
+        oracle = self._mapping(candidate.metadata.get("oracle_scoring"))
+        components = self._mapping(oracle.get("component_scores"))
+        return any(
+            key in components
+            for key in (
+                "structure_score",
+                "consensus_structure_score",
+                "docking_pose_score",
+                "interaction_profile_score",
+            )
+        ) or any(
+            key in candidate.metadata
+            for key in (
+                "structure_oracle",
+                "structure_aware_assessment",
+                "structure_assessment",
+            )
+        )
+
+    def _structure_feedback_warnings(
+        self,
+        candidate: GeneratedMolecule,
+        negative_count: int,
+    ) -> list[str]:
+        if negative_count and self._structure_oracle_present(candidate):
+            return ["negative_experimental_feedback_overrides_structure_oracle"]
+        return []
 
     def _novelty_score(self, candidate: GeneratedMolecule) -> float:
         breakdown = candidate.score_breakdown

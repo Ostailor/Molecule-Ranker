@@ -121,7 +121,13 @@
               "summarize_external_record",
               "suggest_mapping_review_questions",
               "draft_export_summary",
-              "compare_internal_external_record"
+              "compare_internal_external_record",
+              "summarize_model_card",
+              "explain_model_metrics",
+              "explain_prediction_batch",
+              "suggest_feature_debugging",
+              "draft_model_limitations",
+              "explain_active_design_model_influence"
             ],
             "title": "Task Type",
             "type": "string"
@@ -397,6 +403,127 @@
           "version"
         ],
         "title": "DataContract",
+        "type": "object"
+      },
+      "DesignJobRequest": {
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget"
+          },
+          "budget_limit": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Limit"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "generator": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Generator",
+            "type": "array"
+          },
+          "job_type": {
+            "title": "Job Type",
+            "type": "string"
+          },
+          "plan_approved": {
+            "default": false,
+            "title": "Plan Approved",
+            "type": "boolean"
+          },
+          "random_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Random Seed"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "use_codex_planner": {
+            "default": false,
+            "title": "Use Codex Planner",
+            "type": "boolean"
+          },
+          "warning_acknowledged": {
+            "default": false,
+            "title": "Warning Acknowledged",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "job_type"
+        ],
+        "title": "DesignJobRequest",
+        "type": "object"
+      },
+      "DesignPlanApprovalRequest": {
+        "properties": {
+          "approval_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Note"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "title": "DesignPlanApprovalRequest",
         "type": "object"
       },
       "ExplainRunRequest": {
@@ -1021,6 +1148,68 @@
           "role"
         ],
         "title": "MembershipCreateRequest",
+        "type": "object"
+      },
+      "ModelJobRequest": {
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "endpoint_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Name"
+          },
+          "job_type": {
+            "title": "Job Type",
+            "type": "string"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "job_type"
+        ],
+        "title": "ModelJobRequest",
         "type": "object"
       },
       "OrganizationCreateRequest": {
@@ -1781,7 +1970,7 @@
   "info": {
     "description": "Local API by default. Hosted mode adds users, teams, RBAC, jobs, audit logs, guarded Codex worker orchestration, and V1.0 integrations.",
     "title": "molecule-ranker API",
-    "version": "1.0.0"
+    "version": "1.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -6629,6 +6818,168 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/design/jobs": {
+      "post": {
+        "operationId": "enqueue_design_job_api_v1_projects__project_id__design_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesignJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Design Job Api V1 Projects  Project Id  Design Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Design Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/design/plans/approve": {
+      "post": {
+        "operationId": "approve_design_plan_api_v1_projects__project_id__design_plans_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesignPlanApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Design Plan Api V1 Projects  Project Id  Design Plans Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Design Plan",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/model/jobs": {
+      "post": {
+        "operationId": "enqueue_model_job_api_v1_projects__project_id__model_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Model Job Api V1 Projects  Project Id  Model Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Model Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/permissions": {
       "get": {
         "operationId": "project_permissions_api_v1_projects__project_id__permissions_get",
@@ -8207,6 +8558,612 @@
           }
         },
         "summary": "Codex Assistant Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/design/active-loop": {
+      "get": {
+        "operationId": "design_active_loop_page_dashboard_projects__project_id__design_active_loop_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Design Active Loop Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/design/benchmarks": {
+      "get": {
+        "operationId": "design_benchmarks_page_dashboard_projects__project_id__design_benchmarks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Design Benchmarks Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/design/generator-runs": {
+      "get": {
+        "operationId": "design_generator_runs_page_dashboard_projects__project_id__design_generator_runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Design Generator Runs Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/design/oracle-scores": {
+      "get": {
+        "operationId": "design_oracle_scores_page_dashboard_projects__project_id__design_oracle_scores_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Design Oracle Scores Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/design/plans": {
+      "get": {
+        "operationId": "design_plans_page_dashboard_projects__project_id__design_plans_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Design Plans Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/design/readiness": {
+      "get": {
+        "operationId": "design_readiness_page_dashboard_projects__project_id__design_readiness_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Design Readiness Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/models": {
+      "get": {
+        "operationId": "model_registry_page_dashboard_projects__project_id__models_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Registry Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/models/active-design-influence": {
+      "get": {
+        "operationId": "model_active_design_influence_page_dashboard_projects__project_id__models_active_design_influence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Active Design Influence Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/models/calibration": {
+      "get": {
+        "operationId": "model_calibration_page_dashboard_projects__project_id__models_calibration_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Calibration Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/models/evaluation-reports": {
+      "get": {
+        "operationId": "model_evaluation_reports_page_dashboard_projects__project_id__models_evaluation_reports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Evaluation Reports Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/models/prediction-batches": {
+      "get": {
+        "operationId": "model_prediction_batches_page_dashboard_projects__project_id__models_prediction_batches_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Prediction Batches Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/models/predictions/{candidate_name}": {
+      "get": {
+        "operationId": "model_prediction_detail_page_dashboard_projects__project_id__models_predictions__candidate_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_name",
+            "required": true,
+            "schema": {
+              "title": "Candidate Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Prediction Detail Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/models/training-runs": {
+      "get": {
+        "operationId": "model_training_runs_page_dashboard_projects__project_id__models_training_runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Training Runs Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/models/{model_id}": {
+      "get": {
+        "operationId": "model_card_detail_page_dashboard_projects__project_id__models__model_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Card Detail Page",
         "tags": [
           "web"
         ]
@@ -11607,6 +12564,168 @@
           }
         },
         "summary": "Add Project Comment",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/design/jobs": {
+      "post": {
+        "operationId": "enqueue_design_job_projects__project_id__design_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesignJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Design Job Projects  Project Id  Design Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Design Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/design/plans/approve": {
+      "post": {
+        "operationId": "approve_design_plan_projects__project_id__design_plans_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesignPlanApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Design Plan Projects  Project Id  Design Plans Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Design Plan",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/model/jobs": {
+      "post": {
+        "operationId": "enqueue_model_job_projects__project_id__model_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Model Job Projects  Project Id  Model Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Model Job",
         "tags": [
           "platform"
         ]

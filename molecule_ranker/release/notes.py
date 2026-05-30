@@ -15,12 +15,11 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V1.2 upgrades the V1.1 validated internal research platform with a "
-            "formal predictive model plugin system and calibrated assay-specific "
-            "surrogate model artifacts. "
+            "V1.3 upgrades the V1.2 validated internal research platform with "
+            "advanced structure-based design and protein-ligand workflow hardening. "
             "The validated internal research platform MVP boundary remains intact: "
-            "model predictions and generated molecules are computational prioritization "
-            "signals, not biomedical claims.",
+            "structure workflows, docking scores, model predictions, and generated "
+            "molecules are computational prioritization signals, not biomedical claims.",
             "",
             "## Included",
             "",
@@ -30,6 +29,13 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- Formal model plugin interface for local and future external providers.",
             "- Assay-specific surrogate model cards, manifests, metrics, and prediction "
             "artifacts kept separate from evidence and assay results.",
+            "- Conservative target structure selection that prefers suitable experimental "
+            "structures over predicted models.",
+            "- Receptor, ligand 3D, pose QC, consensus rescoring, and interaction-profile "
+            "artifact schemas with provenance and guardrails.",
+            "- Structure-based report cards that keep docking and pose outputs separate "
+            "from experimental evidence and activity claims.",
+            "- Hosted structure job types with explicit docking limitation acknowledgements.",
             "- Generated report cards with objective alignment, uncertainty, diversity, "
             "critique, readiness, and active-learning triage fields.",
             "- Generator benchmark metrics for readiness, uncertainty, and generator coverage.",
@@ -46,6 +52,10 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- no synthesis instructions",
             "- no dosing",
             "- generated molecules require validation",
+            "- docking scores are not proof of binding",
+            "- poses are not experimental evidence",
+            "- structure-based scores are not activity evidence",
+            "- predicted structures are lower-confidence than suitable experimental structures",
             "- Codex outputs are assistant artifacts, not biomedical evidence",
             "",
             "## Contracts",

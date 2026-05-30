@@ -32,13 +32,14 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
         {
             "name": "molecule-ranker",
             "stage": RELEASE_STAGE,
-            "scope": "assay_specific_model_plugin_and_surrogate_prediction_upgrade",
+            "scope": "structure_based_design_and_protein_ligand_workflow_hardening",
             "non_goals": [
                 "unvalidated model-provider execution",
                 "new external integration families",
                 "biomedical truth claims from Codex",
                 "generated activity, safety, or synthesizability claims without direct evidence",
                 "model predictions promoted to evidence or assay results",
+                "docking scores, poses, or interaction profiles promoted to evidence",
                 "synthesis instructions, lab protocols, dosing, or patient guidance",
             ],
             "scientific_integrity_constraints": list(SCIENTIFIC_INTEGRITY_CONSTRAINTS),
@@ -145,10 +146,13 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V1.0 is for internal research use only and is not a clinical product.",
+        "V1.3 is for internal research use only and is not a clinical product.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
         "Generated molecules are computational hypotheses and require independent validation.",
         "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
+        "Docking scores, poses, and structure-derived interactions are computational "
+        "heuristics, not proof of binding or activity.",
+        "Predicted structures are lower-confidence than suitable experimental structures.",
         "Default validation uses mocked services; live API and connector validation are opt-in.",
         "Codex outputs are assistant artifacts and must not be promoted to biomedical evidence.",
     ]

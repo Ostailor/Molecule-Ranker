@@ -36,6 +36,11 @@ CodexTaskType = Literal[
     "suggest_feature_debugging",
     "draft_model_limitations",
     "explain_active_design_model_influence",
+    "suggest_structure_selection_review_questions",
+    "summarize_structure_assessment",
+    "explain_pose_qc_failure",
+    "draft_structure_report_summary",
+    "plan_followup_structure_workflow",
 ]
 CodexOutputFormat = Literal["json", "markdown", "text"]
 CodexResultStatus = Literal[

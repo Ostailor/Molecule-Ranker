@@ -26,6 +26,15 @@ Literature evidence can be incomplete or contradictory. Assay results must be
 imported from files and checked for QC and identity. Generated molecules do not
 have direct evidence unless exact imported results exist.
 
+## Structure Limits
+
+Structure workflows are optional computational triage. Docking scores are not
+proof of binding, poses are not experimental evidence, structure-based scores
+are not activity evidence, and predicted structures are lower-confidence than
+suitable experimental structures. Codex can plan and summarize structure
+workflows, but it cannot invent structures, poses, binding sites, docking
+scores, or interactions.
+
 ## Codex And Dashboard Limits
 
 Codex can summarize artifacts but cannot create evidence. Dashboards can make

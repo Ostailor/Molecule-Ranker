@@ -44,6 +44,7 @@ from molecule_ranker.schemas import (
     MoleculeCandidate,
     Target,
 )
+from molecule_ranker.structure.benchmarks import StructureBenchmarkHarness
 from molecule_ranker.utils import slugify
 
 DEFAULT_LIMITATIONS = [
@@ -77,6 +78,16 @@ DEVELOPABILITY_DISCLAIMER_LINES = [
         "expert review."
     ),
     "- No synthesis instructions are provided.",
+]
+
+STRUCTURE_WORKFLOW_DISCLAIMER_LINES = [
+    "- Docking scores do not prove binding.",
+    "- Poses are computational hypotheses.",
+    "- Predicted structures are lower-confidence than suitable experimental structures.",
+    "- Generated molecules remain computational hypotheses.",
+    "- No synthesis instructions.",
+    "- No lab protocols.",
+    "- No clinical claims.",
 ]
 
 
@@ -267,6 +278,7 @@ class ReportWriterAgent(BaseAgent):
         lines.extend(self._active_design_recommendation_lines(context))
         lines.extend(["", "## Benchmark Summary"])
         lines.extend(self._benchmark_summary_lines(context))
+        lines.extend(["", *self._structure_report_lines(context)])
 
         lines.extend(["", "## Targets Considered"])
         for target in context.targets:
@@ -370,6 +382,7 @@ class ReportWriterAgent(BaseAgent):
         (output_dir / "developability_report.md").write_text(
             self._render_developability_report(context)
         )
+        self._write_structure_outputs(context, output_dir)
         self._write_experimental_outputs(context, output_dir)
         (output_dir / "trace.json").write_text(
             _json_dumps(
@@ -1411,8 +1424,6 @@ class ReportWriterAgent(BaseAgent):
         uncertainty = metadata.get("uncertainty")
         critique = metadata.get("medicinal_chemistry_critique")
         active_learning = metadata.get("active_learning")
-        oracle = metadata.get("oracle_scoring")
-        oracle_scores = metadata.get("oracle_scores")
         transformation = self._transformation_metadata(candidate)
         blocking_risks = (
             readiness_v1_1.get("blocking_risks", [])
@@ -1438,7 +1449,7 @@ class ReportWriterAgent(BaseAgent):
             if isinstance(active_learning, dict)
             else 0.0
         )
-        oracle_display = oracle_scores if isinstance(oracle_scores, dict) else oracle
+        oracle_display = self._oracle_display_payload(candidate)
         return [
             "| Card field | Value |",
             "| --- | --- |",
@@ -3111,6 +3122,36 @@ class ReportWriterAgent(BaseAgent):
             )
             if item.enabled:
                 lines.append("  - Docking score does not prove binding.")
+            if item.receptor_preparation is not None:
+                lines.extend(
+                    [
+                        "  - Receptor preparation artifact:",
+                        f"    - ID: {item.receptor_preparation.artifact_id}",
+                        f"    - Method: {item.receptor_preparation.preparation_method}",
+                    ]
+                )
+            if item.ligand_preparation is not None:
+                lines.extend(
+                    [
+                        "  - Ligand 3D preparation artifact:",
+                        f"    - ID: {item.ligand_preparation.artifact_id}",
+                        f"    - Conformers: {item.ligand_preparation.conformer_count}",
+                    ]
+                )
+            if item.pose_quality_control is not None:
+                lines.append(f"  - Pose QC: {item.pose_quality_control.status}")
+                for reason in item.pose_quality_control.failure_reasons:
+                    lines.append(f"    - QC failure: {reason}")
+            if item.consensus_rescoring is not None:
+                lines.append(
+                    "  - Consensus rescoring: "
+                    f"{self._format_value(item.consensus_rescoring.consensus_score)}"
+                )
+            if item.interaction_profile is not None:
+                lines.append(f"  - Interaction profile: {item.interaction_profile.method}")
+                lines.append(
+                    f"    - Interaction annotations: {len(item.interaction_profile.interactions)}"
+                )
             for warning in item.warnings:
                 lines.append(f"  - Warning: {warning}")
         return lines
@@ -3358,14 +3399,15 @@ class ReportWriterAgent(BaseAgent):
         self,
         candidate: GeneratedMolecule,
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "version": "1.1",
             "generated_id": candidate.generated_id,
             "hypothesis_boundary": {
                 "hypothesis_only": True,
                 "no_direct_experimental_evidence": True,
             },
-            "oracle_scores": candidate.metadata.get("oracle_scores", {}),
+            "oracle_scores": self._oracle_display_payload(candidate),
+            "oracle_scoring": candidate.metadata.get("oracle_scoring", {}),
             "medicinal_chemistry_critique": candidate.metadata.get(
                 "medicinal_chemistry_critique",
                 {},
@@ -3377,6 +3419,46 @@ class ReportWriterAgent(BaseAgent):
                 "objective_id": candidate.objective_id,
                 "parent_seed_ids": list(candidate.parent_seed_ids),
             },
+        }
+        structure_oracle = self._structure_oracle_report_payload(candidate)
+        if structure_oracle:
+            payload["structure_oracle"] = structure_oracle
+        return payload
+
+    def _structure_oracle_report_payload(
+        self,
+        candidate: GeneratedMolecule,
+    ) -> dict[str, Any]:
+        metadata = candidate.metadata
+        oracle = self._jsonable_mapping(metadata.get("oracle_scoring"))
+        component_scores = self._jsonable_mapping(oracle.get("component_scores"))
+        structure_scores = {
+            key: value
+            for key, value in component_scores.items()
+            if key in {
+                "structure_score",
+                "structure_selection_score",
+                "receptor_prep_score",
+                "docking_pose_score",
+                "interaction_profile_score",
+                "consensus_structure_score",
+            }
+        }
+        context = self._jsonable_mapping(
+            metadata.get("structure_oracle")
+            or metadata.get("structure_aware_assessment")
+            or metadata.get("structure_assessment")
+            or metadata.get("structure_report_card")
+        )
+        if not structure_scores and not context:
+            return {}
+        return {
+            "applicability_domain": context.get("applicability_domain", "unknown"),
+            "component_scores": structure_scores,
+            "not_experimental_evidence": True,
+            "not_activity_evidence": True,
+            "does_not_validate_generated_molecule": True,
+            "cannot_override_experimental_negative_or_safety_results": True,
         }
 
     def _candidate_developability_summary(
@@ -3502,6 +3584,325 @@ class ReportWriterAgent(BaseAgent):
         if not payload:
             return "None recorded"
         return ", ".join(f"{key}: {value}" for key, value in sorted(payload.items()))
+
+    def _write_structure_outputs(self, context: PipelineContext, output_dir: Path) -> None:
+        payloads = self._structure_artifact_payloads(context)
+        for filename, payload in payloads.items():
+            (output_dir / filename).write_text(_json_dumps(payload))
+        (output_dir / "structure_report.md").write_text(
+            "\n".join(self._structure_report_lines(context)) + "\n"
+        )
+
+    def _structure_artifact_payloads(
+        self,
+        context: PipelineContext,
+    ) -> dict[str, dict[str, Any]]:
+        structures = self._structure_items(context, "structures", "structure_records")
+        selections = self._structure_items(
+            context,
+            "structure_selection",
+            "structure_selections",
+        )
+        receptor_preps = self._structure_items(
+            context,
+            "receptor_preparation",
+            "receptor_preparations",
+        )
+        ligand_preps = self._structure_items(
+            context,
+            "ligand_preparation",
+            "ligand_preparations",
+        )
+        binding_sites = self._structure_items(context, "binding_sites")
+        docking_runs = self._structure_items(context, "docking_runs")
+        docking_poses = self._structure_items(context, "docking_poses")
+        interaction_profiles = self._structure_items(context, "interaction_profiles")
+        assessments = self._structure_items(
+            context,
+            "structure_aware_assessments",
+            "structure_assessments",
+        )
+        benchmark_artifact = {
+            "target_symbols": [target.symbol for target in context.targets],
+            "structures": structures,
+            "selections": selections,
+            "receptor_preparations": receptor_preps,
+            "ligand_preparations": ligand_preps,
+            "docking_runs": docking_runs,
+            "structure_assessments": assessments,
+        }
+        benchmark = StructureBenchmarkHarness().benchmark_artifact(benchmark_artifact)
+        limitations = [line.removeprefix("- ") for line in STRUCTURE_WORKFLOW_DISCLAIMER_LINES]
+        return {
+            "structures.json": self._structure_payload("structures", structures, limitations),
+            "structure_selection.json": self._structure_payload(
+                "structure_selection",
+                selections,
+                limitations,
+            ),
+            "receptor_preparation.json": self._structure_payload(
+                "receptor_preparation",
+                receptor_preps,
+                limitations,
+            ),
+            "ligand_preparation.json": self._structure_payload(
+                "ligand_preparation",
+                ligand_preps,
+                limitations,
+            ),
+            "binding_sites.json": self._structure_payload(
+                "binding_sites",
+                binding_sites,
+                limitations,
+            ),
+            "docking_runs.json": self._structure_payload(
+                "docking_runs",
+                docking_runs,
+                limitations,
+            ),
+            "docking_poses.json": self._structure_payload(
+                "docking_poses",
+                docking_poses,
+                limitations,
+            ),
+            "interaction_profiles.json": self._structure_payload(
+                "interaction_profiles",
+                interaction_profiles,
+                limitations,
+            ),
+            "structure_aware_assessments.json": self._structure_payload(
+                "structure_aware_assessments",
+                assessments,
+                limitations,
+            ),
+            "structure_benchmark_report.json": benchmark.model_dump(mode="json"),
+        }
+
+    def _structure_payload(
+        self,
+        key: str,
+        records: list[dict[str, Any]],
+        limitations: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "success": True,
+            key: records,
+            "count": len(records),
+            "limitations": limitations,
+            "claim_boundary": {
+                "docking_scores_do_not_prove_binding": True,
+                "poses_are_computational_hypotheses": True,
+                "generated_molecules_remain_computational_hypotheses": True,
+                "no_synthesis_instructions": True,
+                "no_lab_protocols": True,
+                "no_clinical_claims": True,
+            },
+        }
+
+    def _structure_items(self, context: PipelineContext, *keys: str) -> list[dict[str, Any]]:
+        for key in keys:
+            value = context.config.get(key)
+            if isinstance(value, BaseModel):
+                return [value.model_dump(mode="json")]
+            if isinstance(value, Mapping):
+                return [dict(value)]
+            if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+                items: list[dict[str, Any]] = []
+                for item in value:
+                    if isinstance(item, BaseModel):
+                        items.append(item.model_dump(mode="json"))
+                    elif isinstance(item, Mapping):
+                        items.append(dict(item))
+                return items
+        return []
+
+    def _structure_report_lines(self, context: PipelineContext) -> list[str]:
+        structures = self._structure_items(context, "structures", "structure_records")
+        selections = self._structure_items(
+            context,
+            "structure_selection",
+            "structure_selections",
+        )
+        receptor_preps = self._structure_items(
+            context,
+            "receptor_preparation",
+            "receptor_preparations",
+        )
+        ligand_preps = self._structure_items(
+            context,
+            "ligand_preparation",
+            "ligand_preparations",
+        )
+        binding_sites = self._structure_items(context, "binding_sites")
+        docking_runs = self._structure_items(context, "docking_runs")
+        docking_poses = self._structure_items(context, "docking_poses")
+        interaction_profiles = self._structure_items(context, "interaction_profiles")
+        assessments = self._structure_items(
+            context,
+            "structure_aware_assessments",
+            "structure_assessments",
+        )
+        generated_ligands = [
+            item for item in ligand_preps if str(item.get("origin", "")).lower() == "generated"
+        ]
+        return [
+            "## Structure Data Summary",
+            "",
+            f"- Structures retrieved: {len(structures)}",
+            f"- Experimental structures: {self._structure_type_count(structures, 'experimental')}",
+            f"- Predicted structures: {self._structure_type_count(structures, 'predicted')}",
+            "- Structure workflows are optional computational prioritization workflows.",
+            "",
+            "## Structure Selection",
+            "",
+            f"- Selection records: {len(selections)}",
+            *self._structure_selection_lines(selections),
+            "",
+            "## Receptor Preparation",
+            "",
+            f"- Receptor preparation records: {len(receptor_preps)}",
+            *self._structure_receptor_lines(receptor_preps),
+            "",
+            "## Binding Site Definition",
+            "",
+            f"- Binding site records: {len(binding_sites)}",
+            *self._structure_binding_site_lines(binding_sites),
+            "",
+            "## Ligand Preparation",
+            "",
+            f"- Ligand preparation records: {len(ligand_preps)}",
+            *self._structure_ligand_lines(ligand_preps),
+            *(
+                ["- Generated molecule warning: generated ligands remain computational hypotheses."]
+                if generated_ligands
+                else []
+            ),
+            "",
+            "## Docking Summary",
+            "",
+            f"- Docking runs: {len(docking_runs)}",
+            *self._structure_docking_lines(docking_runs),
+            "",
+            "## Pose QC Summary",
+            "",
+            f"- Docking poses: {len(docking_poses)}",
+            *self._structure_pose_lines(docking_poses),
+            "",
+            "## Protein-Ligand Interaction Profiles",
+            "",
+            f"- Interaction profiles: {len(interaction_profiles)}",
+            *self._structure_interaction_lines(interaction_profiles),
+            "",
+            "## Structure-Aware Assessments",
+            "",
+            f"- Structure-aware assessment records: {len(assessments)}",
+            *self._structure_assessment_lines(assessments),
+            "",
+            "## Structure Workflow Limitations",
+            "",
+            *STRUCTURE_WORKFLOW_DISCLAIMER_LINES,
+        ]
+
+    def _structure_type_count(self, structures: list[dict[str, Any]], structure_type: str) -> int:
+        return sum(1 for item in structures if item.get("structure_type") == structure_type)
+
+    def _structure_selection_lines(self, selections: list[dict[str, Any]]) -> list[str]:
+        if not selections:
+            return ["- No structure selection record available."]
+        return [
+            (
+                f"- {item.get('target_symbol', 'unknown')}: "
+                f"{item.get('selected_structure_id', 'unavailable')} "
+                f"(confidence {self._optional_score(item.get('confidence'))})"
+            )
+            for item in selections
+        ]
+
+    def _structure_receptor_lines(self, receptor_preps: list[dict[str, Any]]) -> list[str]:
+        if not receptor_preps:
+            return ["- No receptor preparation record available."]
+        return [
+            (
+                f"- {item.get('receptor_prep_id', 'unknown')}: "
+                f"{item.get('preparation_method', 'unknown')} "
+                f"(confidence {self._optional_score(item.get('confidence'))})"
+            )
+            for item in receptor_preps
+        ]
+
+    def _structure_binding_site_lines(self, binding_sites: list[dict[str, Any]]) -> list[str]:
+        if not binding_sites:
+            return ["- No binding site definition available."]
+        return [
+            (
+                f"- {item.get('binding_site_id', 'unknown')}: "
+                f"{item.get('method', 'unknown')} "
+                f"(confidence {self._optional_score(item.get('confidence'))})"
+            )
+            for item in binding_sites
+        ]
+
+    def _structure_ligand_lines(self, ligand_preps: list[dict[str, Any]]) -> list[str]:
+        if not ligand_preps:
+            return ["- No ligand preparation record available."]
+        return [
+            (
+                f"- {item.get('molecule_id', 'unknown')}: "
+                f"{item.get('conformer_count', 0)} conformer(s); origin "
+                f"{item.get('origin', 'unknown')}"
+            )
+            for item in ligand_preps
+        ]
+
+    def _structure_docking_lines(self, docking_runs: list[dict[str, Any]]) -> list[str]:
+        if not docking_runs:
+            return ["- No docking run record available."]
+        return [
+            (
+                f"- {item.get('docking_run_id', 'unknown')}: "
+                f"{item.get('status', 'unknown')} with "
+                f"{item.get('ligand_count', 0)} ligand(s) and {item.get('pose_count', 0)} pose(s)"
+            )
+            for item in docking_runs
+        ]
+
+    def _structure_pose_lines(self, docking_poses: list[dict[str, Any]]) -> list[str]:
+        if not docking_poses:
+            return ["- No docking pose record available."]
+        lines: list[str] = []
+        for item in docking_poses:
+            quality = self._jsonable_mapping(item.get("pose_quality"))
+            status = quality.get("status") or quality.get("clash_check") or "unknown"
+            lines.append(
+                f"- {item.get('pose_id', 'unknown')}: QC {status}; pose is computational only."
+            )
+        return lines
+
+    def _structure_interaction_lines(
+        self,
+        interaction_profiles: list[dict[str, Any]],
+    ) -> list[str]:
+        if not interaction_profiles:
+            return ["- No interaction profile available."]
+        return [
+            (
+                f"- {item.get('profile_id', 'unknown')}: "
+                f"{self._display_mapping(item.get('interaction_counts'))}"
+            )
+            for item in interaction_profiles
+        ]
+
+    def _structure_assessment_lines(self, assessments: list[dict[str, Any]]) -> list[str]:
+        if not assessments:
+            return ["- No structure-aware assessment available."]
+        return [
+            (
+                f"- {item.get('molecule_id', 'unknown')}: "
+                f"recommendation {item.get('recommendation', 'unknown')}; "
+                f"consensus {self._optional_score(item.get('consensus_score'))}"
+            )
+            for item in assessments
+        ]
 
     def _write_experimental_outputs(self, context: PipelineContext, output_dir: Path) -> None:
         payload = self._experimental_report_payload(context)
@@ -3853,6 +4254,21 @@ class ReportWriterAgent(BaseAgent):
             "developability_assessments_json": str(output_dir / "developability_assessments.json"),
             "developability_json": str(output_dir / "developability.json"),
             "developability_report_md": str(output_dir / "developability_report.md"),
+            "structures_json": str(output_dir / "structures.json"),
+            "structure_selection_json": str(output_dir / "structure_selection.json"),
+            "receptor_preparation_json": str(output_dir / "receptor_preparation.json"),
+            "ligand_preparation_json": str(output_dir / "ligand_preparation.json"),
+            "binding_sites_json": str(output_dir / "binding_sites.json"),
+            "docking_runs_json": str(output_dir / "docking_runs.json"),
+            "docking_poses_json": str(output_dir / "docking_poses.json"),
+            "interaction_profiles_json": str(output_dir / "interaction_profiles.json"),
+            "structure_aware_assessments_json": str(
+                output_dir / "structure_aware_assessments.json"
+            ),
+            "structure_benchmark_report_json": str(
+                output_dir / "structure_benchmark_report.json"
+            ),
+            "structure_report_md": str(output_dir / "structure_report.md"),
             "report_md": str(output_dir / "report.md"),
             "trace_json": str(output_dir / "trace.json"),
             "experimental_results_json": str(output_dir / "experimental_results.json"),
