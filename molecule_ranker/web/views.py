@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, quote
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from starlette import status
 
 from molecule_ranker.integrations.connectors import create_connector
@@ -21,6 +22,7 @@ from molecule_ranker.platform.auth import (
     SessionTokenManager,
     generate_opaque_token,
 )
+from molecule_ranker.platform.database import artifact_records
 from molecule_ranker.platform.db import PlatformDatabase
 from molecule_ranker.platform.jobs import PlatformJobQueue
 from molecule_ranker.platform.rbac import (
@@ -1214,6 +1216,43 @@ def review_queue_page(
     )
 
 
+@router.get("/dashboard/projects/{project_id}/portfolio", response_class=HTMLResponse)
+def portfolio_overview_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _project_or_404(store=store, project_id=project_id)
+    _require_portfolio_read(database, user, project_id=project_id)
+    return _portfolio_dashboard_html(
+        "Program overview",
+        workspace,
+        _portfolio_section_body(workspace=workspace, database=database, section="overview"),
+    )
+
+
+@router.get("/dashboard/projects/{project_id}/portfolio/{section}", response_class=HTMLResponse)
+def portfolio_section_page(
+    project_id: str,
+    section: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _project_or_404(store=store, project_id=project_id)
+    _require_portfolio_read(database, user, project_id=project_id)
+    normalized = _portfolio_section_slug(section)
+    title = _portfolio_section_title(normalized)
+    if title is None:
+        raise HTTPException(status_code=404, detail="Portfolio dashboard page not found.")
+    return _portfolio_dashboard_html(
+        title,
+        workspace,
+        _portfolio_section_body(workspace=workspace, database=database, section=normalized),
+    )
+
+
 @router.get(
     "/dashboard/projects/{project_id}/candidates/{candidate_name}",
     response_class=HTMLResponse,
@@ -1272,21 +1311,33 @@ def dashboard_artifact_download(
     workspace = _project_or_404(store=store, project_id=project_id)
     require_project_access(database, user, project_id=project_id, action="read")
     artifact = next((item for item in workspace.artifacts if item.artifact_id == artifact_id), None)
-    if artifact is None:
+    platform_artifact = (
+        _platform_artifact_by_id(database, project_id=project_id, artifact_id=artifact_id)
+        if artifact is None
+        else None
+    )
+    if artifact is None and platform_artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found.")
-    if _is_pose_artifact(artifact.artifact_type) and not has_permission(
+    if artifact is not None:
+        artifact_type = artifact.artifact_type
+        artifact_path = artifact.path
+    else:
+        assert platform_artifact is not None
+        artifact_type = platform_artifact["type"]
+        artifact_path = platform_artifact["path"]
+    if _is_pose_artifact(artifact_type) and not has_permission(
         user,
         "structure:export",
         project_id=project_id,
         database=database,
     ):
         raise HTTPException(status_code=403, detail="Missing permission structure:export.")
-    path = safe_artifact_path(Path(artifact.path), root_dir=store.root_dir)
+    path = safe_artifact_path(Path(artifact_path), root_dir=store.root_dir)
     return FileResponse(
         path,
         filename=path.name,
         media_type="application/octet-stream",
-        headers={"X-Artifact-ID": artifact.artifact_id},
+        headers={"X-Artifact-ID": artifact_id},
     )
 
 
@@ -1715,9 +1766,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.3.0-structure-ui3\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.4.0-structure-ui3\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.3</div>"
+        "<div class=\"brand\">molecule-ranker V1.4</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -1860,9 +1911,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.3.0-structure-ui3\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.4.0-structure-ui3\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.3</div>"
+        "<div class=\"brand\">molecule-ranker V1.4</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -1878,6 +1929,347 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         f"{body}</main></div></body></html>\n"
     )
     return HTMLResponse(html)
+
+
+def _portfolio_dashboard_html(
+    title: str,
+    workspace: ProjectWorkspace,
+    body: str,
+) -> HTMLResponse:
+    project_id = quote(workspace.workspace_id)
+    nav = " ".join(
+        _link(f"/dashboard/projects/{project_id}/portfolio/{slug}", label)
+        for slug, label in _portfolio_dashboard_nav().items()
+        if slug != "overview"
+    )
+    html = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.4.0-portfolio-ui\">"
+        "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
+        "<div class=\"brand\">molecule-ranker V1.4</div>"
+        "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        f"{_link('/dashboard', 'Projects')}"
+        f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
+        f"{_link(f'/dashboard/projects/{project_id}/portfolio', 'Portfolio')}"
+        "</nav></div></header><main class=\"content\">"
+        f"<header class=\"page-heading\"><h1>{_h(title)}</h1>"
+        f"<p class=\"muted\">Project: {_h(workspace.name)}</p></header>"
+        "<nav class=\"section\">"
+        f"{_link(f'/dashboard/projects/{project_id}/portfolio', 'Program overview')} "
+        f"{nav}</nav>"
+        "<aside class=\"research-disclaimer\">Portfolio optimization output is advisory until "
+        "approved. Codex decision memos are assistant output and not final decisions. External "
+        "exports of selected portfolios require explicit permission.</aside>"
+        f"{body}</main></div></body></html>\n"
+    )
+    return HTMLResponse(html)
+
+
+def _portfolio_dashboard_nav() -> dict[str, str]:
+    return {
+        "overview": "Program overview",
+        "candidates": "Portfolio candidates",
+        "optimization-runs": "Optimization runs",
+        "scenarios": "Scenario analysis",
+        "selected": "Selected portfolio",
+        "rejected-deferred": "Rejected/deferred candidates",
+        "stage-gates": "Stage gates",
+        "batches": "Portfolio batches",
+        "memos": "Decision memos",
+        "audit": "Portfolio audit log",
+    }
+
+
+def _portfolio_section_slug(section: str) -> str:
+    aliases = {
+        "program-overview": "overview",
+        "scenario-analysis": "scenarios",
+        "selected-portfolio": "selected",
+        "rejected-deferred-candidates": "rejected-deferred",
+        "portfolio-batches": "batches",
+        "decision-memos": "memos",
+        "audit-log": "audit",
+        "portfolio-audit-log": "audit",
+    }
+    return aliases.get(section, section)
+
+
+def _portfolio_section_title(section: str) -> str | None:
+    return _portfolio_dashboard_nav().get(section)
+
+
+def _portfolio_section_body(
+    *,
+    workspace: ProjectWorkspace,
+    database: PlatformDatabase,
+    section: str,
+) -> str:
+    project_id = workspace.workspace_id
+    snapshots = _portfolio_run_snapshots(workspace)
+    summary = _table(
+        ["Metric", "Value"],
+        [
+            ["Runs", len(workspace.runs)],
+            ["Candidate artifacts", sum(int(item.get("candidate_count", 0)) for item in snapshots)],
+            [
+                "Generated hypotheses",
+                sum(int(item.get("generated_candidate_count", 0)) for item in snapshots),
+            ],
+        ],
+    )
+    if section == "overview":
+        return (
+            "<h2>Program overview</h2>"
+            "<p>Program-level decision analytics summarize candidates, scenarios, "
+            "stage gates, batches, memos, and audit events.</p>"
+            f"{summary}"
+        )
+    if section == "candidates":
+        return "<h2>Portfolio candidates</h2>" + _table(
+            ["Run", "Disease", "Candidate count", "Generated count"],
+            [
+                [
+                    item.get("run_id", "unknown"),
+                    item.get("disease", "unknown"),
+                    item.get("candidate_count", 0),
+                    item.get("generated_candidate_count", 0),
+                ]
+                for item in snapshots
+            ],
+        )
+    if section == "optimization-runs":
+        return (
+            "<h2>Optimization runs</h2><p>Optimization selections are deterministic "
+            "research prioritization aids and remain advisory until approved.</p>"
+            + _portfolio_artifact_table(workspace, database, "portfolio_optimization")
+        )
+    if section == "scenarios":
+        return (
+            "<h2>Scenario analysis</h2><p>Scenario comparisons test whether portfolio "
+            "choices are robust under uncertainty, budget limits, and risk settings.</p>"
+            + _portfolio_artifact_table(workspace, database, "scenario")
+        )
+    if section == "selected":
+        return (
+            "<h2>Selected portfolio</h2><p>Selected candidates are prioritized for "
+            "review workflows only; no safety, activity, efficacy, or synthesizability "
+            "claim is made.</p>"
+            + _portfolio_artifact_table(workspace, database, "selection")
+        )
+    if section == "rejected-deferred":
+        return (
+            "<h2>Rejected/deferred candidates</h2><p>Rejected and deferred candidates "
+            "retain rationale for auditability and future reassessment.</p>"
+            + _portfolio_artifact_table(workspace, database, "deferred")
+        )
+    if section == "stage-gates":
+        return (
+            "<h2>Stage gates</h2><p>Stage-gate approval requires portfolio:approve_stage_gate "
+            "permission and is recorded as an audit event.</p>"
+            + _portfolio_audit_table(database, project_id, "portfolio_stage_gate")
+        )
+    if section == "batches":
+        return (
+            "<h2>Portfolio batches</h2><p>Batches are high-level planning artifacts, "
+            "not lab protocols.</p>"
+            + _portfolio_artifact_table(workspace, database, "portfolio_batch")
+        )
+    if section == "memos":
+        return (
+            "<h2>Decision memos</h2><p>Codex decision memos are assistant output and not "
+            "final decisions.</p>"
+            + _portfolio_artifact_table(workspace, database, "program_decision_memo")
+        )
+    if section == "audit":
+        return (
+            "<h2>Portfolio audit log</h2>"
+            + _portfolio_audit_table(database, project_id, "portfolio")
+        )
+    return "<p>Portfolio dashboard page not found.</p>"
+
+
+def _portfolio_run_snapshots(workspace: ProjectWorkspace) -> list[dict[str, Any]]:
+    snapshots: list[dict[str, Any]] = []
+    for run in workspace.runs:
+        dashboard_run = load_dashboard_run(workspace, run.run_id)
+        if dashboard_run is None:
+            continue
+        disease_name = getattr(getattr(dashboard_run, "disease", None), "canonical_name", None)
+        snapshots.append(
+            {
+                "run_id": run.run_id,
+                "disease": disease_name or "unknown",
+                "candidate_count": len(dashboard_run.candidates),
+                "generated_candidate_count": len(dashboard_run.generated_molecules),
+            }
+        )
+    return snapshots
+
+
+def _portfolio_artifact_table(
+    workspace: ProjectWorkspace,
+    database: PlatformDatabase,
+    artifact_hint: str,
+) -> str:
+    rows: list[list[Any]] = [
+        [
+            artifact.artifact_id,
+            artifact.artifact_type,
+            artifact.run_id or "",
+            _link(
+                f"/dashboard/projects/{quote(workspace.workspace_id)}/artifacts/"
+                f"{quote(artifact.artifact_id)}/download",
+                "Download",
+            ),
+        ]
+        for artifact in workspace.artifacts
+        if _portfolio_artifact_matches(
+            artifact_id=artifact.artifact_id,
+            artifact_type=artifact.artifact_type,
+            artifact_hint=artifact_hint,
+        )
+    ]
+    rows.extend(
+        [
+            artifact["artifact_id"],
+            artifact["artifact_type"],
+            artifact["run_id"],
+            _link(
+                f"/dashboard/projects/{quote(workspace.workspace_id)}/artifacts/"
+                f"{quote(artifact['artifact_id'])}/download",
+                "Download",
+            ),
+        ]
+        for artifact in _platform_portfolio_artifacts(
+            database,
+            project_id=workspace.workspace_id,
+            artifact_hint=artifact_hint,
+        )
+    )
+    if not rows:
+        return "<p>No matching portfolio artifacts are available yet.</p>"
+    return _table(["Artifact", "Type", "Run", "Action"], rows)
+
+
+def _platform_portfolio_artifacts(
+    database: PlatformDatabase,
+    *,
+    project_id: str,
+    artifact_hint: str,
+) -> list[dict[str, str]]:
+    with database.engine.connect() as connection:
+        rows = (
+            connection.execute(
+                select(artifact_records)
+                .where(artifact_records.c.project_id == project_id)
+                .order_by(artifact_records.c.created_at.desc())
+            )
+            .mappings()
+            .all()
+        )
+    artifacts: list[dict[str, str]] = []
+    for row in rows:
+        artifact_id = str(row["artifact_id"])
+        artifact_type = str(row["artifact_type"])
+        path = str(row["path"])
+        if not _portfolio_artifact_matches(
+            artifact_id=artifact_id,
+            artifact_type=artifact_type,
+            artifact_hint=artifact_hint,
+        ):
+            continue
+        artifacts.append(
+            {
+                "artifact_id": artifact_id,
+                "artifact_type": artifact_type,
+                "run_id": str(row["run_id"] or ""),
+                "path": path,
+            }
+        )
+    return artifacts
+
+
+def _portfolio_artifact_matches(
+    *,
+    artifact_id: str,
+    artifact_type: str,
+    artifact_hint: str,
+) -> bool:
+    aliases = {
+        "portfolio_optimization": {"portfolio_optimize", "optimization"},
+        "scenario": {"portfolio_scenario_analysis"},
+        "selection": {"portfolio_optimize", "portfolio_optimization"},
+        "portfolio_batch": {"portfolio_batch_build"},
+        "program_decision_memo": {"portfolio_memo"},
+    }
+    tokens = {artifact_hint, *aliases.get(artifact_hint, set())}
+    return any(token in artifact_type or token in artifact_id for token in tokens)
+
+
+def _platform_artifact_by_id(
+    database: PlatformDatabase,
+    *,
+    project_id: str,
+    artifact_id: str,
+) -> dict[str, str] | None:
+    with database.engine.connect() as connection:
+        row = (
+            connection.execute(
+                select(artifact_records).where(
+                    artifact_records.c.project_id == project_id,
+                    artifact_records.c.artifact_id == artifact_id,
+                )
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        return None
+    return {
+        "artifact_id": str(row["artifact_id"]),
+        "type": str(row["artifact_type"]),
+        "path": str(row["path"]),
+    }
+
+
+def _portfolio_audit_table(
+    database: PlatformDatabase,
+    project_id: str,
+    event_hint: str,
+) -> str:
+    events = [
+        event
+        for event in database.list_audit_events(project_id=project_id, limit=100)
+        if event_hint in event.event_type
+    ]
+    if not events:
+        return "<p>No matching portfolio audit events are available yet.</p>"
+    return _table(
+        ["Event", "Actor", "Summary", "Created"],
+        [
+            [
+                event.event_type,
+                event.actor_user_id or "",
+                event.summary,
+                event.created_at.isoformat(),
+            ]
+            for event in events
+        ],
+    )
+
+
+def _require_portfolio_read(
+    database: PlatformDatabase,
+    user: UserAccount,
+    *,
+    project_id: str,
+) -> None:
+    if user.is_admin:
+        return
+    if not has_permission(user, "portfolio:read", project_id=project_id, database=database):
+        raise HTTPException(status_code=403, detail="Portfolio permission denied.")
 
 
 def _model_nav(project_id: str) -> str:
@@ -2050,7 +2442,7 @@ def _mode_badge(mode: Any) -> str:
 
 
 def _h(value: Any) -> str:
-    return escape(str(value or ""), quote=True)
+    return escape("" if value is None else str(value), quote=True)
 
 
 def _redacted_secret_ref(secret_ref: str) -> str:

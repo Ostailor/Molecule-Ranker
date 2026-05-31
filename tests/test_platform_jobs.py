@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from sqlalchemy import select
@@ -427,6 +428,105 @@ def test_codex_planned_structure_jobs_require_structure_approval(
         },
     )
     assert approved.status == "queued"
+
+
+def test_portfolio_optimize_job_requires_permission_and_runs(tmp_path: Path) -> None:
+    database = PlatformDatabase(tmp_path, db_path=tmp_path / "platform.sqlite")
+    viewer = database.create_user(email="viewer@example.com", password="Viewer-password-1")
+    editor = database.create_user(email="editor@example.com", password="Editor-password-1")
+    database.grant_project_permission(
+        project_id="project-1",
+        role="viewer",
+        actor_user_id=viewer.user_id,
+        user_id=viewer.user_id,
+    )
+    database.grant_project_permission(
+        project_id="project-1",
+        role="editor",
+        actor_user_id=editor.user_id,
+        user_id=editor.user_id,
+    )
+
+    try:
+        PlatformJobQueue(database).enqueue(
+            job_type="portfolio_optimize",
+            requested_by=viewer,
+            project_id="project-1",
+        )
+    except PermissionError as exc:
+        assert "portfolio:run" in str(exc)
+    else:
+        raise AssertionError("Expected portfolio run permission denial.")
+
+    job = PlatformJobQueue(database).enqueue(
+        job_type="portfolio_optimize",
+        requested_by=editor,
+        project_id="project-1",
+        config_snapshot={
+            "algorithm": "greedy",
+            "candidates": [
+                {
+                    "portfolio_candidate_id": "pc-1",
+                    "candidate_name": "Candidate 1",
+                    "origin": "existing",
+                    "target_symbols": ["MAOB"],
+                    "evidence_score": 0.8,
+                    "developability_score": 0.7,
+                },
+                {
+                    "portfolio_candidate_id": "pc-2",
+                    "candidate_name": "Candidate 2",
+                    "origin": "generated",
+                    "target_symbols": ["LRRK2"],
+                    "generation_score": 0.8,
+                    "uncertainty_score": 0.6,
+                },
+            ],
+        },
+    )
+    finished = PipelineWorker(database=database).run_once()
+
+    assert finished is not None
+    assert finished.job_id == job.job_id
+    assert finished.status == "succeeded"
+    assert finished.result_artifact_ids
+    with database.engine.connect() as connection:
+        artifact = connection.execute(select(artifact_records)).mappings().first()
+    assert artifact is not None
+    payload = json.loads(Path(artifact["path"]).read_text())
+    assert payload["portfolio_boundary"] == "advisory_until_approved"
+    assert payload["approved"] is False
+    assert payload["deterministic_validation"] is True
+    assert payload["optimization_run"]["input_candidate_count"] == 2
+
+
+def test_portfolio_external_export_requires_explicit_permission(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+
+    try:
+        PlatformJobQueue(database).enqueue(
+            job_type="portfolio_memo",
+            requested_by=user,
+            project_id="project-1",
+            config_snapshot={"external_export": True},
+        )
+    except PermissionError as exc:
+        assert "portfolio:export" in str(exc)
+        assert "explicit permission" in str(exc)
+    else:
+        raise AssertionError("Expected explicit portfolio export permission denial.")
+
+    job = PlatformJobQueue(database).enqueue(
+        job_type="portfolio_memo",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={
+            "external_export": True,
+            "explicit_export_permission": True,
+        },
+    )
+
+    assert job.status == "queued"
 
 
 def test_design_generation_budget_limit_enforced(tmp_path: Path) -> None:

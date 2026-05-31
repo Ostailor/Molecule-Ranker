@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Deploy molecule-ranker V1.3 as an internal research platform MVP with hosted
+Deploy molecule-ranker V1.4 as an internal research platform MVP with hosted
 auth, RBAC, jobs, audit logs, and artifact storage enabled.
 
 ## Prerequisites
 
-- A reviewed V1.3 release package.
+- A reviewed V1.4 release package.
 - A platform database URL or SQLite path for the target environment.
 - Artifact storage and backup directories owned by the service account.
 - Secret values supplied by the approved secret manager, not pasted into files.
@@ -26,7 +26,7 @@ molecule-ranker serve --hosted --host 127.0.0.1 --port 8765
 - `db migrate` reports the current schema migration.
 - `platform readiness` returns `"status": "pass"`.
 - `/health`, `/ready`, `/version`, and `/metrics` return HTTP 200.
-- `/version` reports `1.3.0` and V1 contract identifiers.
+- `/version` reports `1.4.0` and V1 contract identifiers.
 
 ## Failure Modes
 

@@ -50,6 +50,53 @@ def test_reviewer_can_review_but_not_update_project(tmp_path: Path) -> None:
     assert not has_permission(reviewer, "project:update", project_id="project-1", database=database)
 
 
+def test_portfolio_permissions_follow_stage_gate_boundaries(tmp_path: Path) -> None:
+    database, admin, viewer = _database_with_users(tmp_path)
+    editor = database.create_user(email="editor@example.com", password="Editor-password-1")
+    reviewer = database.create_user(email="reviewer@example.com", password="Reviewer-password-1")
+    database.grant_project_permission(
+        project_id="project-1",
+        role="viewer",
+        actor_user_id=admin.user_id,
+        user_id=viewer.user_id,
+    )
+    database.grant_project_permission(
+        project_id="project-1",
+        role="editor",
+        actor_user_id=admin.user_id,
+        user_id=editor.user_id,
+    )
+    database.grant_project_permission(
+        project_id="project-1",
+        role="reviewer",
+        actor_user_id=admin.user_id,
+        user_id=reviewer.user_id,
+    )
+
+    assert has_permission(viewer, "portfolio:read", project_id="project-1", database=database)
+    assert not has_permission(viewer, "portfolio:run", project_id="project-1", database=database)
+    assert not has_permission(
+        viewer,
+        "portfolio:approve_stage_gate",
+        project_id="project-1",
+        database=database,
+    )
+    assert has_permission(editor, "portfolio:run", project_id="project-1", database=database)
+    assert has_permission(editor, "portfolio:export", project_id="project-1", database=database)
+    assert not has_permission(
+        editor,
+        "portfolio:approve_stage_gate",
+        project_id="project-1",
+        database=database,
+    )
+    assert has_permission(
+        reviewer,
+        "portfolio:approve_stage_gate",
+        project_id="project-1",
+        database=database,
+    )
+
+
 def test_scientist_org_member_and_project_editor_can_run_ranking(tmp_path: Path) -> None:
     database, admin, scientist = _database_with_users(tmp_path)
     org = database.create_organization(name="Discovery", created_by_user_id=admin.user_id)
@@ -179,6 +226,103 @@ def test_codex_task_blocked_without_codex_permission(tmp_path: Path) -> None:
     response = client.post("/projects/project-1/codex/summarize", headers=editor_headers)
 
     assert response.status_code == 403
+
+
+def test_portfolio_optimize_api_enqueues_advisory_job(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    created_project = client.post(
+        "/projects",
+        json={"workspace_id": "project-1", "name": "Project"},
+        headers=admin_headers,
+    )
+    assert created_project.status_code == 200, created_project.text
+
+    response = client.post(
+        "/projects/project-1/portfolio/jobs",
+        json={"job_type": "portfolio_optimize", "config": {"algorithm": "greedy"}},
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["job"]["job_type"] == "portfolio_optimize"
+    assert payload["portfolio_boundary"] == "advisory_until_approved"
+
+
+def test_portfolio_stage_gate_approval_requires_permission_and_is_audited(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    created_project = client.post(
+        "/projects",
+        json={"workspace_id": "project-1", "name": "Project"},
+        headers=admin_headers,
+    )
+    assert created_project.status_code == 200, created_project.text
+    viewer_response = client.post(
+        "/admin/users",
+        json={"email": "viewer@example.com", "password": "Viewer-password-1"},
+        headers=admin_headers,
+    )
+    reviewer_response = client.post(
+        "/admin/users",
+        json={"email": "reviewer@example.com", "password": "Reviewer-password-1"},
+        headers=admin_headers,
+    )
+    viewer_id = viewer_response.json()["user"]["user_id"]
+    reviewer_id = reviewer_response.json()["user"]["user_id"]
+    client.post(
+        "/projects/project-1/share",
+        json={"role": "viewer", "user_id": viewer_id},
+        headers=admin_headers,
+    )
+    client.post(
+        "/projects/project-1/share",
+        json={"role": "reviewer", "user_id": reviewer_id},
+        headers=admin_headers,
+    )
+    viewer_headers = _login(client, "viewer@example.com", "Viewer-password-1")
+    reviewer_headers = _login(client, "reviewer@example.com", "Reviewer-password-1")
+
+    denied = client.post(
+        "/projects/project-1/portfolio/stage-gates/approve",
+        json={"candidate_id": "candidate-1", "stage_gate_id": "gate-1"},
+        headers=viewer_headers,
+    )
+    approved = client.post(
+        "/projects/project-1/portfolio/stage-gates/approve",
+        json={
+            "candidate_id": "candidate-1",
+            "stage_gate_id": "gate-1",
+            "decision": "advance",
+        },
+        headers=reviewer_headers,
+    )
+    audit = client.get("/audit/events?project_id=project-1", headers=admin_headers)
+
+    assert denied.status_code == 403
+    assert approved.status_code == 200, approved.text
+    event_types = [event["event_type"] for event in audit.json()["events"]]
+    assert "portfolio_stage_gate_approval_denied" in event_types
+    assert "portfolio_stage_gate_approved" in event_types
 
 
 def _database_with_users(tmp_path: Path) -> tuple[PlatformDatabase, UserAccount, UserAccount]:

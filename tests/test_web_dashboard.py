@@ -20,6 +20,7 @@ from molecule_ranker.models.schemas import (
     ModelTrainingRun,
 )
 from molecule_ranker.server import create_app
+from molecule_ranker.workers import PipelineWorker
 from molecule_ranker.workspace.schemas import ArtifactRecord
 from molecule_ranker.workspace.store import ProjectWorkspaceStore
 
@@ -63,6 +64,16 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/projects/workspace-a/models/active-design-influence",
         "/dashboard/projects/workspace-a/activity",
         "/dashboard/projects/workspace-a/review",
+        "/dashboard/projects/workspace-a/portfolio",
+        "/dashboard/projects/workspace-a/portfolio/candidates",
+        "/dashboard/projects/workspace-a/portfolio/optimization-runs",
+        "/dashboard/projects/workspace-a/portfolio/scenarios",
+        "/dashboard/projects/workspace-a/portfolio/selected",
+        "/dashboard/projects/workspace-a/portfolio/rejected-deferred",
+        "/dashboard/projects/workspace-a/portfolio/stage-gates",
+        "/dashboard/projects/workspace-a/portfolio/batches",
+        "/dashboard/projects/workspace-a/portfolio/memos",
+        "/dashboard/projects/workspace-a/portfolio/audit",
         "/dashboard/projects/workspace-a/candidates/Rasagiline",
         "/dashboard/projects/workspace-a/codex",
         "/dashboard/notifications",
@@ -105,7 +116,12 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
     expectations = {
         "/dashboard": ["Projects", "Research"],
         "/dashboard/projects": ["Projects", "workspace-a"],
-        "/dashboard/projects/workspace-a": ["Research boundaries", "Runs"],
+        "/dashboard/projects/workspace-a": [
+            "Research boundaries",
+            "Portfolio analytics",
+            "Program overview",
+            "Runs",
+        ],
         "/dashboard/projects/workspace-a/runs": ["Runs", "Parkinson disease"],
         "/dashboard/projects/workspace-a/runs/run-a": ["Run views", "Experimental results"],
         "/dashboard/projects/workspace-a/runs/run-a/candidates": [
@@ -187,6 +203,22 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
             "pose_qc_pass_rate",
         ],
         "/dashboard/projects/workspace-a/review": ["Review queue", "Rasagiline"],
+        "/dashboard/projects/workspace-a/portfolio": [
+            "Program overview",
+            "advisory until approved",
+        ],
+        "/dashboard/projects/workspace-a/portfolio/candidates": [
+            "Portfolio candidates",
+            "Generated count",
+        ],
+        "/dashboard/projects/workspace-a/portfolio/scenarios": [
+            "Scenario analysis",
+            "robust under uncertainty",
+        ],
+        "/dashboard/projects/workspace-a/portfolio/stage-gates": [
+            "Stage gates",
+            "portfolio:approve_stage_gate",
+        ],
     }
     for path, snippets in expectations.items():
         response = client.get(path)
@@ -366,11 +398,70 @@ def test_dashboard_project_creation_form_creates_owned_project(tmp_path: Path) -
         follow_redirects=False,
     )
     detail = client.get("/dashboard/projects/workspace-created")
+    portfolio = client.get("/dashboard/projects/workspace-created/portfolio")
 
     assert created.status_code == 303
     assert created.headers["location"] == "/dashboard/projects/workspace-created"
     assert detail.status_code == 200
     assert "Created project" in detail.text
+    assert portfolio.status_code == 200
+    assert "<td>Runs</td><td>0</td>" in portfolio.text
+    assert "<td>Candidate artifacts</td><td>0</td>" in portfolio.text
+    assert "<td>Generated hypotheses</td><td>0</td>" in portfolio.text
+
+
+def test_portfolio_dashboard_lists_hosted_job_artifacts(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    created = client.post(
+        "/projects",
+        json={"workspace_id": "workspace-created", "name": "Created project"},
+        headers=admin_headers,
+    )
+    assert created.status_code == 200, created.text
+    queued = client.post(
+        "/projects/workspace-created/portfolio/jobs",
+        json={
+            "job_type": "portfolio_optimize",
+            "config": {
+                "algorithm": "greedy",
+                "max_candidates": 1,
+                "candidates": [
+                    {
+                        "portfolio_candidate_id": "pc-live",
+                        "candidate_name": "PC Live",
+                        "origin": "existing",
+                        "target_symbols": ["TGT1"],
+                        "evidence_score": 0.8,
+                        "developability_score": 0.7,
+                    }
+                ],
+            },
+        },
+        headers=admin_headers,
+    )
+    assert queued.status_code == 200, queued.text
+    app = cast(Any, client.app)
+    finished = PipelineWorker(
+        database=app.state.platform_database,
+        root_dir=tmp_path,
+    ).run_once()
+    assert finished is not None
+    artifact_id = finished.result_artifact_ids[0]
+
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+    page = client.get("/dashboard/projects/workspace-created/portfolio/optimization-runs")
+    download = client.get(
+        f"/dashboard/projects/workspace-created/artifacts/{artifact_id}/download"
+    )
+
+    assert page.status_code == 200
+    assert artifact_id in page.text
+    assert "portfolio_optimize" in page.text
+    assert download.status_code == 200
+    assert download.headers["x-artifact-id"] == artifact_id
+    assert download.json()["portfolio_boundary"] == "advisory_until_approved"
 
 
 def test_admin_dashboard_pages_render_for_admin(tmp_path: Path) -> None:

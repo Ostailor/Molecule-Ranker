@@ -62,6 +62,12 @@ QUEUE_JOB_TYPES = {
     "design_score",
     "design_loop",
     "design_benchmark",
+    "portfolio_build_candidates",
+    "portfolio_optimize",
+    "portfolio_scenario_analysis",
+    "portfolio_stage_gate",
+    "portfolio_batch_build",
+    "portfolio_memo",
 }
 
 JOB_PERMISSION: dict[str, str] = {
@@ -108,6 +114,12 @@ JOB_PERMISSION: dict[str, str] = {
     "design_score": "design:run",
     "design_loop": "design:run",
     "design_benchmark": "design:run",
+    "portfolio_build_candidates": "portfolio:run",
+    "portfolio_optimize": "portfolio:run",
+    "portfolio_scenario_analysis": "portfolio:run",
+    "portfolio_stage_gate": "portfolio:run",
+    "portfolio_batch_build": "portfolio:run",
+    "portfolio_memo": "portfolio:run",
 }
 
 PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
@@ -116,6 +128,14 @@ DESIGN_LARGE_GENERATION_THRESHOLD = 100
 DESIGN_MAX_GENERATION_BUDGET = 1000
 STRUCTURE_LARGE_DOCKING_THRESHOLD = 100
 STRUCTURE_MAX_DOCKING_BUDGET = 1000
+PORTFOLIO_JOB_TYPES = {
+    "portfolio_build_candidates",
+    "portfolio_optimize",
+    "portfolio_scenario_analysis",
+    "portfolio_stage_gate",
+    "portfolio_batch_build",
+    "portfolio_memo",
+}
 
 
 @dataclass(frozen=True)
@@ -172,6 +192,13 @@ class PlatformJobQueue:
         )
         _enforce_hosted_model_policy(job_type=job_type, config_snapshot=config)
         _enforce_hosted_structure_policy(
+            database=self.database,
+            requested_by=requested_by,
+            job_type=job_type,
+            project_id=project_id,
+            config_snapshot=config,
+        )
+        _enforce_hosted_portfolio_policy(
             database=self.database,
             requested_by=requested_by,
             job_type=job_type,
@@ -700,6 +727,53 @@ def _enforce_hosted_structure_policy(
             "Codex may plan or summarize structure workflows but must not invent poses, "
             "scores, binding sites, or interactions."
         )
+
+
+def _enforce_hosted_portfolio_policy(
+    *,
+    database: PlatformDatabase,
+    requested_by: UserAccount,
+    job_type: str,
+    project_id: str | None,
+    config_snapshot: dict[str, Any],
+) -> None:
+    if job_type not in PORTFOLIO_JOB_TYPES:
+        return
+    export_requested = any(
+        bool(config_snapshot.get(key))
+        for key in (
+            "external_export",
+            "external_write",
+            "export_selected_portfolio",
+            "selected_portfolio_export",
+        )
+    )
+    if not export_requested:
+        return
+    explicit_permission = bool(config_snapshot.get("explicit_export_permission"))
+    allowed = requested_by.is_admin or has_permission(
+        requested_by,
+        "portfolio:export",
+        project_id=project_id,
+        database=database,
+    )
+    if explicit_permission and allowed:
+        return
+    database.write_audit(
+        "portfolio_external_export_denied",
+        actor_user_id=requested_by.user_id,
+        project_id=project_id,
+        summary="Denied external export of selected portfolio.",
+        object_type="portfolio_job",
+        object_id=job_type,
+        metadata={
+            "job_type": job_type,
+            "explicit_export_permission": explicit_permission,
+        },
+    )
+    raise PermissionError(
+        "External portfolio exports require portfolio:export and explicit permission."
+    )
 
 
 def _structure_docking_budget(config_snapshot: dict[str, Any]) -> int:

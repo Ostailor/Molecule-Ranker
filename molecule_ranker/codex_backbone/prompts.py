@@ -58,6 +58,19 @@ MODEL_CODEX_SAFETY_CONSTRAINTS = [
     "prediction_batch_artifact_id from supplied artifacts.",
 ]
 
+PORTFOLIO_CODEX_SAFETY_CONSTRAINTS = [
+    "For portfolio tasks, Codex is limited to explanation, memo drafting, review questions, "
+    "and project-update text from deterministic portfolio artifacts.",
+    "Codex cannot select a portfolio without deterministic optimizer output.",
+    "Codex cannot invent candidate metrics, assay results, evidence, citations, molecules, "
+    "scores, scenarios, selections, or optimization outputs.",
+    "Codex cannot approve stage gates or mark portfolio recommendations final.",
+    "Portfolio optimization output is advisory until explicitly approved by a permitted human.",
+    "Codex decision memos are assistant output and not final decisions.",
+    "Every portfolio output must cite optimization_run_id, selection_id, candidate IDs, "
+    "artifact IDs, and scenario IDs where relevant from supplied artifacts.",
+]
+
 TEMPLATE_ALIASES = {
     "draft_dossier": "draft_dossier_summary",
 }
@@ -461,6 +474,123 @@ TASK_TEMPLATES: dict[str, dict[str, Any]] = {
             "evaluation_id": "string",
             "prediction_batch_artifact_id": "string",
             "artifact_refs": ["artifact IDs or file paths used"],
+        },
+    },
+    "summarize_portfolio_tradeoffs": {
+        "description": "Summarize deterministic portfolio tradeoffs for review.",
+        "required_inputs": ["portfolio optimization run JSON", "selected portfolio JSON"],
+        "optional_inputs": ["scenario analysis JSON", "portfolio candidate summaries"],
+        "instructions": [
+            *PORTFOLIO_CODEX_SAFETY_CONSTRAINTS,
+            "Explain tradeoffs only from optimizer outputs and candidate artifacts.",
+            "Do not change selected, rejected, or deferred candidate IDs.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "optimization_run_id": "string",
+            "selection_id": "string",
+            "candidate_ids": ["candidate IDs cited"],
+            "artifact_ids": ["artifact IDs cited"],
+            "scenario_ids": ["scenario IDs cited where relevant"],
+            "tradeoffs": ["artifact-backed tradeoff strings"],
+            "limitations": ["limitation strings"],
+        },
+    },
+    "draft_decision_memo": {
+        "description": "Draft assistant memo text from deterministic portfolio outputs.",
+        "required_inputs": ["portfolio optimization run JSON", "portfolio selection JSON"],
+        "optional_inputs": ["scenario analysis JSON", "risk summaries", "review decisions"],
+        "instructions": [
+            *PORTFOLIO_CODEX_SAFETY_CONSTRAINTS,
+            "Draft memo text only; do not make final decisions or approvals.",
+            "Do not add protocol, synthesis, dosing, clinical, safety, activity, "
+            "or efficacy claims.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "optimization_run_id": "string",
+            "selection_id": "string",
+            "candidate_ids": ["candidate IDs cited"],
+            "artifact_ids": ["artifact IDs cited"],
+            "scenario_ids": ["scenario IDs cited where relevant"],
+            "memo_sections": ["assistant memo section strings"],
+            "limitations": ["limitation strings"],
+        },
+    },
+    "explain_candidate_rejection": {
+        "description": "Explain why a candidate was rejected or deferred.",
+        "required_inputs": ["portfolio optimization run JSON", "selection rationale"],
+        "optional_inputs": ["candidate risk summary", "constraint violations"],
+        "instructions": [
+            *PORTFOLIO_CODEX_SAFETY_CONSTRAINTS,
+            "Explain rejection or deferral from deterministic rationale only.",
+            "Do not invent missing candidate metrics or evidence.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "optimization_run_id": "string",
+            "selection_id": "string",
+            "candidate_ids": ["candidate IDs cited"],
+            "artifact_ids": ["artifact IDs cited"],
+            "rejection_explanation": "string",
+            "limitations": ["limitation strings"],
+        },
+    },
+    "explain_scenario_differences": {
+        "description": "Explain deterministic scenario comparison differences.",
+        "required_inputs": ["scenario analysis JSON", "portfolio optimization run JSON"],
+        "optional_inputs": ["sensitivity analysis JSON"],
+        "instructions": [
+            *PORTFOLIO_CODEX_SAFETY_CONSTRAINTS,
+            "Explain differences only from scenario outputs and sensitivity summaries.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "optimization_run_id": "string",
+            "selection_id": "string",
+            "candidate_ids": ["candidate IDs cited"],
+            "artifact_ids": ["artifact IDs cited"],
+            "scenario_ids": ["scenario IDs cited"],
+            "scenario_differences": ["artifact-backed difference strings"],
+            "limitations": ["limitation strings"],
+        },
+    },
+    "generate_review_questions_for_portfolio": {
+        "description": "Generate high-level expert review questions for a portfolio.",
+        "required_inputs": ["portfolio optimization run JSON", "candidate summaries"],
+        "optional_inputs": ["risk summaries", "uncertainty summaries"],
+        "instructions": [
+            *PORTFOLIO_CODEX_SAFETY_CONSTRAINTS,
+            "Generate high-level questions only; do not include lab protocols or approvals.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "optimization_run_id": "string",
+            "selection_id": "string",
+            "candidate_ids": ["candidate IDs cited"],
+            "artifact_ids": ["artifact IDs cited"],
+            "scenario_ids": ["scenario IDs cited where relevant"],
+            "review_questions": ["high-level review question strings"],
+            "limitations": ["limitation strings"],
+        },
+    },
+    "draft_project_update_from_portfolio": {
+        "description": "Draft project update text from portfolio analytics.",
+        "required_inputs": ["portfolio optimization run JSON", "decision memo JSON"],
+        "optional_inputs": ["scenario analysis JSON", "batch planning JSON"],
+        "instructions": [
+            *PORTFOLIO_CODEX_SAFETY_CONSTRAINTS,
+            "Draft status-update text only; do not approve decisions or exports.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "optimization_run_id": "string",
+            "selection_id": "string",
+            "candidate_ids": ["candidate IDs cited"],
+            "artifact_ids": ["artifact IDs cited"],
+            "scenario_ids": ["scenario IDs cited where relevant"],
+            "project_update": "string",
+            "limitations": ["limitation strings"],
         },
     },
     "summarize_project": {

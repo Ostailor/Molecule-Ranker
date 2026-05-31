@@ -15,11 +15,12 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V1.3 upgrades the V1.2 validated internal research platform with "
-            "advanced structure-based design and protein-ligand workflow hardening. "
+            "V1.4 upgrades the V1.3 validated internal research platform with "
+            "multi-objective portfolio optimization and program-level decision analytics. "
             "The validated internal research platform MVP boundary remains intact: "
-            "structure workflows, docking scores, model predictions, and generated "
-            "molecules are computational prioritization signals, not biomedical claims.",
+            "portfolio recommendations, structure workflows, docking scores, model "
+            "predictions, and generated molecules are computational prioritization "
+            "signals, not biomedical claims.",
             "",
             "## Included",
             "",
@@ -35,6 +36,13 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "artifact schemas with provenance and guardrails.",
             "- Structure-based report cards that keep docking and pose outputs separate "
             "from experimental evidence and activity claims.",
+            "- Program, portfolio, candidate, objective, constraint, optimization-run, "
+            "selection, scenario, stage-gate, budget, sensitivity, and decision-memo "
+            "schemas for V1.4 portfolio analytics.",
+            "- Deterministic multi-objective portfolio selection with diversity, "
+            "learning-value, uncertainty, budget, and correlated-risk constraints.",
+            "- Expert-review, assay-triage, learning-batch, deprioritization, "
+            "human-approval, and scenario-robustness queues computed without Codex.",
             "- Hosted structure job types with explicit docking limitation acknowledgements.",
             "- Generated report cards with objective alignment, uncertainty, diversity, "
             "critique, readiness, and active-learning triage fields.",
@@ -55,6 +63,9 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- docking scores are not proof of binding",
             "- poses are not experimental evidence",
             "- structure-based scores are not activity evidence",
+            "- portfolio recommendations are prioritization aids only",
+            "- Codex must not create portfolio selections, scores, evidence, assay "
+            "results, citations, or molecules",
             "- predicted structures are lower-confidence than suitable experimental structures",
             "- Codex outputs are assistant artifacts, not biomedical evidence",
             "",

@@ -1,13 +1,15 @@
 {
   "api_contract_version": "api.v1",
   "artifact_contract_version": "1.0",
-  "build_timestamp": "2026-05-30T01:29:18Z",
-  "dependency_lock_hash": "448e5dd1dbc1cb39ab07886dbc3599b64714012c747293a84e08f88ff0384cae",
-  "git_commit": "0fa14a41d04edc7a31b7b330b0a1af0c7b518948",
+  "build_timestamp": "2026-05-30T19:27:08Z",
+  "dependency_lock_hash": "83275df4b459c247862e8343d9398d9e2884f91ec06c9a955c1713bb63ad2245",
+  "git_commit": "fff1e1bb30d975150663c2a497997b145df9aca2",
   "known_limitations": [
-    "V1.3 is for internal research use only and is not a clinical product.",
+    "V1.4 is for internal research use only and is not a clinical product.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules are computational hypotheses and require independent validation.",
+    "Portfolio recommendations are research prioritization aids, not clinical or experimental instructions.",
+    "Portfolio selections and scores must be computed by deterministic modules, not Codex.",
     "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
     "Docking scores, poses, and structure-derived interactions are computational heuristics, not proof of binding or activity.",
     "Predicted structures are lower-confidence than suitable experimental structures.",
@@ -16,7 +18,7 @@
   ],
   "name": "molecule-ranker",
   "readiness": {
-    "gate_count": 13,
+    "gate_count": 14,
     "missing_gates": [],
     "status": "pass"
   },
@@ -28,5 +30,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "1.3.0"
+  "version": "1.4.0"
 }

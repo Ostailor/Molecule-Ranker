@@ -101,10 +101,33 @@ class StructureJobRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class PortfolioJobRequest(BaseModel):
+    job_type: str
+    run_id: str | None = None
+    candidate_id: str | None = None
+    scenarios: list[str] = Field(default_factory=list)
+    scenario: list[str] = Field(default_factory=list)
+    batch_type: str | None = None
+    use_codex: bool = False
+    external_export: bool = False
+    explicit_export_permission: bool = False
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 class DesignPlanApprovalRequest(BaseModel):
     plan_id: str
     run_id: str | None = None
     approval_note: str | None = None
+
+
+class PortfolioStageGateApprovalRequest(BaseModel):
+    candidate_id: str
+    stage_gate_id: str | None = None
+    run_id: str | None = None
+    decision: str = "advance"
+    reviewer_id: str | None = None
+    approval_note: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PasswordResetRequest(BaseModel):
@@ -674,6 +697,116 @@ def enqueue_structure_job(
         "job": job.model_dump(mode="json"),
         "structure_report_boundary": "not_binding_evidence",
         "warning": "Structure reports are computational prioritization artifacts only.",
+    }
+
+
+@router.post("/projects/{project_id}/portfolio/jobs")
+def enqueue_portfolio_job(
+    project_id: str,
+    request: PortfolioJobRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    portfolio_job_types = {
+        "portfolio_build_candidates",
+        "portfolio_optimize",
+        "portfolio_scenario_analysis",
+        "portfolio_stage_gate",
+        "portfolio_batch_build",
+        "portfolio_memo",
+    }
+    if request.job_type not in portfolio_job_types:
+        raise HTTPException(status_code=400, detail="Unsupported portfolio job type.")
+    config = dict(request.config)
+    for key, value in {
+        "run_id": request.run_id,
+        "candidate_id": request.candidate_id,
+        "batch_type": request.batch_type,
+    }.items():
+        if value is not None:
+            config[key] = value
+    scenarios = request.scenarios or request.scenario
+    if scenarios:
+        config["scenarios"] = list(scenarios)
+    config["use_codex"] = request.use_codex
+    config["codex_memos_are_assistant_output"] = True
+    config["portfolio_output_advisory_until_approved"] = True
+    if request.external_export:
+        config["external_export"] = True
+    if request.explicit_export_permission:
+        config["explicit_export_permission"] = True
+    try:
+        job = PlatformJobQueue(database).enqueue(
+            job_type=request.job_type,
+            requested_by=user,
+            project_id=project_id,
+            config_snapshot=config,
+            metadata={
+                "portfolio_v1_4": True,
+                "advisory_until_approved": True,
+                "codex_memo_not_final_decision": True,
+            },
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": job.status,
+        "job": job.model_dump(mode="json"),
+        "portfolio_boundary": "advisory_until_approved",
+        "memo_boundary": "codex_memos_are_assistant_output_not_final_decisions",
+    }
+
+
+@router.post("/projects/{project_id}/portfolio/stage-gates/approve")
+def approve_portfolio_stage_gate(
+    project_id: str,
+    request: PortfolioStageGateApprovalRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    if not user.is_admin and not has_permission(
+        user,
+        "portfolio:approve_stage_gate",
+        project_id=project_id,
+        database=database,
+    ):
+        database.write_audit(
+            "portfolio_stage_gate_approval_denied",
+            actor_user_id=user.user_id,
+            project_id=project_id,
+            summary=f"Denied portfolio stage-gate approval for {request.candidate_id}.",
+            object_type="portfolio_stage_gate",
+            object_id=request.stage_gate_id or request.candidate_id,
+            metadata={"candidate_id": request.candidate_id, "decision": request.decision},
+        )
+        raise HTTPException(status_code=403, detail="Portfolio stage-gate approval denied.")
+    reviewer_id = request.reviewer_id or user.user_id
+    database.write_audit(
+        "portfolio_stage_gate_approved",
+        actor_user_id=user.user_id,
+        project_id=project_id,
+        summary=f"Approved portfolio stage gate for {request.candidate_id}.",
+        object_type="portfolio_stage_gate",
+        object_id=request.stage_gate_id or request.candidate_id,
+        metadata={
+            "candidate_id": request.candidate_id,
+            "stage_gate_id": request.stage_gate_id,
+            "run_id": request.run_id,
+            "decision": request.decision,
+            "reviewer_id": reviewer_id,
+            "approval_note": request.approval_note,
+            **request.metadata,
+        },
+    )
+    return {
+        "approved": True,
+        "candidate_id": request.candidate_id,
+        "project_id": project_id,
+        "decision": request.decision,
+        "reviewer_id": reviewer_id,
+        "advisory_boundary": "portfolio optimization output remains advisory until approved",
     }
 
 

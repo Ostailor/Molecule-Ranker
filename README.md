@@ -1,9 +1,10 @@
 # molecule-ranker
 
 `molecule-ranker` is a validated internal research platform MVP for
-source-backed molecule ranking and research operations. V1.3 builds on the
-validated V1.2 platform with conservative structure-based design and
-protein-ligand workflow hardening: auditable target structure selection,
+source-backed molecule ranking and research operations. V1.4 builds on the
+validated V1.3 platform with multi-objective portfolio optimization and
+program-level decision analytics. V1.3 already added conservative
+structure-based design and protein-ligand workflow hardening: auditable target structure selection,
 externally prepared receptor and ligand artifact tracking, docking
 reproducibility metadata, pose QC, consensus rescoring, interaction profiles,
 structure-aware generated molecule filtering, report cards, and hosted
@@ -17,18 +18,22 @@ hypotheses, developability triage, literature evidence, experimental feedback,
 review workflows, Codex-backed orchestration, hosted platform mode, and guarded
 external integrations.
 
-V1.3 is for internal research use only. It is not a regulated clinical product.
+V1.4 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
 treat, are safe, bind, inhibit, activate, or are active. Docking scores are not
 proof of binding, poses are not experimental evidence, structure-based scores
 are not activity evidence, and predicted structures are lower-confidence than
-suitable experimental structures. Codex is an orchestration and summarization
-layer, not scientific truth; it may not invent structures, poses, binding
-sites, docking scores, or interactions. Data provenance, audit logs, and
-guardrails are core design principles.
+suitable experimental structures. Portfolio recommendations are research
+prioritization aids, not clinical or experimental instructions, and selected
+molecules are not claimed safe, active, effective, or synthesizable. Codex is an
+orchestration and summarization layer, not scientific truth; it may not invent
+structures, poses, binding sites, docking scores, interactions, evidence, assay
+results, citations, molecules, scores, or portfolio optimization outputs. Data
+provenance, audit logs, deterministic validation, and guardrails are core design
+principles.
 
-Given a disease name, V1.3 resolves the disease through public biomedical data
+Given a disease name, V1.4 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -38,13 +43,17 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V1.3
+## Current Scope Through V1.4
 
-V1.3 implements existing-molecule ranking, opt-in generated hypotheses,
+V1.4 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V1.3 adds advanced structure workflow
+external integration primitives. V1.4 adds deterministic portfolio analytics for
+program-level decisions: balanced candidate selection, review versus assay
+triage queues, overrepresentation/underexploration summaries, learning-value
+batch selection, correlated-risk deprioritization, scenario robustness, and
+human-approval stage gates. V1.3 added advanced structure workflow
 hardening while keeping all structure work optional and conservative. V1.2 added
 a formal model plugin interface,
 assay-specific local surrogate training from QC-passed imported results,
@@ -117,6 +126,14 @@ benchmarking, and validation workflows.
 - Let oracle scoring and active design use calibrated surrogate prediction
   artifacts only as weak prioritization signals; generated molecules still need
   exact imported experimental results to gain direct evidence.
+- Optimize V1.4 research portfolios with deterministic multi-objective scoring,
+  budget limits, diversity constraints, correlated-risk penalties,
+  sensitivity-analysis scenarios, and program decision memos.
+- Separate candidates into balanced advance, expert review, assay triage,
+  learning batch, and deprioritization queues without using Codex to compute
+  selections or scores.
+- Surface overrepresented and underexplored targets, mechanisms, and chemical
+  series, plus stage gates for decisions that require human approval.
 - Register hosted model training, model validation, and model prediction jobs
   with guardrails that reject patient, clinical, and dosing data.
 - Register local runs in a `ProjectWorkspace`, track artifacts through an
@@ -159,7 +176,7 @@ benchmarking, and validation workflows.
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V1.3 does not:
+V1.4 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -192,8 +209,14 @@ V1.3 does not:
 - Treat Codex CLI as a biomedical source of truth.
 - Let Codex invent targets, molecules, assay results, citations, evidence, or
   scores.
+- Let Codex create portfolio selections, optimization outputs, stage gates, or
+  decision memos without deterministic validation.
 - Let Codex directly alter scores without calling molecule-ranker scoring
   modules.
+- Treat portfolio recommendations as clinical, lab, synthesis, dosing, or
+  experimental instructions.
+- Claim selected portfolio molecules are safe, active, effective, or
+  synthesizable.
 - Expose cache files, secrets, bearer tokens, API keys, or hidden environment
   files through the hosted API, dashboard, audit logs, artifacts, or Codex
   prompts.
@@ -215,7 +238,7 @@ uv sync --all-groups
 uv run molecule-ranker version
 ```
 
-Current release: `1.3.0`.
+Current release: `1.4.0`.
 
 Run a source-backed ranking workflow locally. Generation, docking, external
 writes, Codex, review workflows, and experimental evidence are disabled unless
@@ -488,6 +511,123 @@ endpoint-specific dataset, trains a baseline surrogate, evaluates leakage,
 calibrates when enough data exist, predicts on existing/generated candidates,
 integrates eligible predictions into oracle scoring, generates model reports,
 and verifies guardrails.
+
+## V1.4 Portfolio Optimization and Program Decision Analytics
+
+V1.4 adds a deterministic portfolio layer for program-level research
+prioritization, multi-objective portfolio optimization, and program-level
+decision analytics. The platform can build candidate portfolios from existing
+molecules, generated hypotheses, developability assessments, imported
+experimental results, predictive model artifacts, structure-aware assessments,
+and expert review decisions.
+
+Portfolio analytics can help compare:
+
+- balanced candidate portfolios under target, mechanism, chemical-series,
+  budget, and risk constraints
+- generated hypotheses worth expert review versus assay triage
+- overrepresented and underexplored targets, mechanisms, and chemical series
+- learning-value candidates under limited next-batch budgets
+- correlated-risk clusters that should reduce priority
+- scenario robustness under learning-heavy, risk-averse, and budget-expanded
+  assumptions
+- decisions requiring human approval before action
+
+Portfolio selection is advisory and requires human review before program action.
+Generated molecules remain computational hypotheses unless exact imported
+experimental evidence exists for the same structure. Portfolio recommendations
+do not prove activity, safety, efficacy, binding, or synthesizability.
+
+Codex can explain portfolio tradeoffs, draft guarded decision memos, explain
+candidate rejection, compare scenarios, and draft review questions from
+deterministic artifacts. Codex cannot select portfolios, invent candidate
+metrics, create optimization outputs, approve stage gates, or make final
+program decisions without deterministic optimizer outputs and human approval.
+
+V1.4 portfolio workflows provide no lab protocols, synthesis instructions,
+dosing, patient treatment guidance, or medical advice.
+
+Build portfolio candidates from a completed run:
+
+```bash
+uv run molecule-ranker portfolio build-candidates \
+  --from-run results/<disease-slug>/ \
+  --output results/<disease-slug>/portfolio_candidates.json
+```
+
+Run deterministic portfolio optimization:
+
+```bash
+uv run molecule-ranker portfolio optimize \
+  --candidates results/<disease-slug>/portfolio_candidates.json \
+  --algorithm greedy \
+  --max-candidates 8 \
+  --max-generated-fraction 0.4 \
+  --output results/<disease-slug>/portfolio_optimization.json
+```
+
+Run scenario analysis:
+
+```bash
+uv run molecule-ranker portfolio scenarios \
+  --candidates results/<disease-slug>/portfolio_candidates.json \
+  --scenario conservative \
+  --scenario exploration \
+  --scenario safety_first \
+  --output results/<disease-slug>/scenario_analysis.json
+```
+
+Build an expert review batch from the selected portfolio:
+
+```bash
+uv run molecule-ranker portfolio batch \
+  --optimization results/<disease-slug>/portfolio_optimization.json \
+  --batch-type expert_review_batch \
+  --output results/<disease-slug>/portfolio_batch.json
+```
+
+Run a stage gate for a candidate. Generated molecules cannot advance to assay
+candidate status by default without explicit review approval:
+
+```bash
+uv run molecule-ranker portfolio stage-gate \
+  --candidate-id portfolio-candidate-001 \
+  --from-run results/<disease-slug>/ \
+  --to-stage assay_candidate \
+  --reviewer-id reviewer-123 \
+  --output results/<disease-slug>/stage_gate_decision.json
+```
+
+Draft a guarded decision memo from deterministic optimization output:
+
+```bash
+uv run molecule-ranker portfolio memo \
+  --optimization results/<disease-slug>/portfolio_optimization.json \
+  --output results/<disease-slug>/program_decision_memo.md
+```
+
+Queue a hosted portfolio job. Hosted portfolio jobs require portfolio
+permissions, keep outputs advisory until approved, and require explicit export
+permission before selected portfolios can be written to external systems:
+
+```bash
+curl -X POST "$MOLECULE_RANKER_HOST/projects/project-1/portfolio/jobs" \
+  -H "Authorization: Bearer $MOLECULE_RANKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_type": "portfolio_optimize",
+    "run_id": "run-001",
+    "config": {
+      "algorithm": "greedy",
+      "max_candidates": 8,
+      "max_generated_fraction": 0.4,
+      "require_review_for_generated": true,
+      "exclude_critical_risk": true
+    },
+    "scenarios": ["conservative", "exploration", "safety_first"],
+    "use_codex": false
+  }'
+```
 
 ## V1.3 Structure-Based Design and Protein-Ligand Workflow Hardening
 
@@ -2314,6 +2454,7 @@ does not write a normal `report.md` that looks successful.
 - V1.3: advanced structure-based design and protein-ligand workflow hardening.
 - V1.4: multi-objective portfolio optimization and program-level decision
   analytics.
+- V1.5: cross-program knowledge graph and mechanism-level reasoning.
 - V2.0: validated enterprise discovery operating system.
 
 ## Development

@@ -12,6 +12,7 @@ from molecule_ranker.agents import (
     LiteratureEvidenceAgent,
     MoleculeRetrievalAgent,
     NovelMoleculeAgent,
+    PortfolioOptimizationAgent,
     PredictiveModelAgent,
     ReportWriterAgent,
     ReviewWorkspaceAgent,
@@ -132,6 +133,7 @@ class MoleculeRankerOrchestrator:
         self.codex_backbone = CodexBackboneAgent()
         self.experimental_evidence = ExperimentalEvidenceAgent()
         self.predictive_model = PredictiveModelAgent()
+        self.portfolio_optimization = PortfolioOptimizationAgent()
         self.developability_assessment = DevelopabilityAssessmentAgent()
         self.review_workspace = ReviewWorkspaceAgent()
         self.report_writer = ReportWriterAgent()
@@ -144,6 +146,7 @@ class MoleculeRankerOrchestrator:
             self.experimental_evidence,
             self.predictive_model,
             self.evidence_scoring,
+            self.portfolio_optimization,
             self.codex_backbone,
             self.review_workspace,
             self.report_writer,

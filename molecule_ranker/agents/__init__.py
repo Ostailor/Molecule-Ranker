@@ -9,6 +9,7 @@ from molecule_ranker.agents.medicinal_chemistry_critic import MedicinalChemistry
 from molecule_ranker.agents.molecule_retrieval import MoleculeRetrievalAgent
 from molecule_ranker.agents.novel_molecule import NovelMoleculeAgent
 from molecule_ranker.agents.oracle_scoring import OracleScoringAgent
+from molecule_ranker.agents.portfolio_optimization import PortfolioOptimizationAgent
 from molecule_ranker.agents.predictive_model import PredictiveModelAgent
 from molecule_ranker.agents.report_writer import ReportWriterAgent
 from molecule_ranker.agents.review_workspace import ReviewWorkspaceAgent
@@ -39,6 +40,7 @@ __all__ = [
     "GeneratorEnsembleAgent",
     "MedicinalChemistryCriticAgent",
     "OracleScoringAgent",
+    "PortfolioOptimizationAgent",
     "PredictiveModelAgent",
     "ScientificDesignPlannerAgent",
     "SeedAndScaffoldSelectionAgent",

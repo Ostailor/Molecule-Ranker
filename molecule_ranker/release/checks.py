@@ -29,6 +29,7 @@ ReleaseCategory = Literal[
     "contract",
     "backup_restore",
     "packaging",
+    "portfolio",
 ]
 ReleaseCheckStatus = Literal["pass", "warn", "fail"]
 
@@ -262,6 +263,17 @@ V1_RELEASE_GATES: tuple[ReleaseGate, ...] = (
             "tests/test_validation_golden_workflows.py",
         ),
     ),
+    ReleaseGate(
+        "v1-4-portfolio-optimization",
+        "portfolio",
+        "V1.4 portfolio optimization and program decision analytics are deterministic and guarded.",
+        (
+            "molecule_ranker/portfolio/schemas.py",
+            "molecule_ranker/portfolio/optimizer.py",
+            "tests/test_portfolio_optimization.py",
+            "README.md",
+        ),
+    ),
 )
 
 _CRITICAL_TODO_RE = re.compile(
@@ -351,13 +363,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "1.3.0":
-        return ReleaseCheck("version", "Version is 1.3.0", "pass", "Package version is 1.3.0.")
+    if __version__ == "1.4.0":
+        return ReleaseCheck("version", "Version is 1.4.0", "pass", "Package version is 1.4.0.")
     return ReleaseCheck(
         "version",
-        "Version is 1.3.0",
+        "Version is 1.4.0",
         "fail",
-        f"Package version is {__version__}, expected 1.3.0.",
+        f"Package version is {__version__}, expected 1.4.0.",
     )
 
 

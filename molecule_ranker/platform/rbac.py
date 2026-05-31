@@ -48,6 +48,11 @@ Permission = Literal[
     "structure:dock",
     "structure:export",
     "structure:approve",
+    "portfolio:read",
+    "portfolio:run",
+    "portfolio:approve_stage_gate",
+    "portfolio:export",
+    "portfolio:configure",
     "admin:manage_users",
     "admin:manage_org",
     "admin:view_audit",
@@ -101,6 +106,11 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "structure:dock",
         "structure:export",
         "structure:approve",
+        "portfolio:read",
+        "portfolio:run",
+        "portfolio:approve_stage_gate",
+        "portfolio:export",
+        "portfolio:configure",
         "admin:view_audit",
     },
     "editor": {
@@ -132,6 +142,10 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "structure:dock",
         "structure:export",
         "structure:approve",
+        "portfolio:read",
+        "portfolio:run",
+        "portfolio:export",
+        "portfolio:configure",
     },
     "reviewer": {
         "project:read",
@@ -147,6 +161,8 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "design:approve_plan",
         "model:read",
         "structure:read",
+        "portfolio:read",
+        "portfolio:approve_stage_gate",
     },
     "viewer": {
         "project:read",
@@ -159,6 +175,7 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "design:read",
         "model:read",
         "structure:read",
+        "portfolio:read",
     },
     "runner": {
         "project:read",
@@ -177,6 +194,8 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "model:predict",
         "structure:read",
         "structure:run",
+        "portfolio:read",
+        "portfolio:run",
     },
 }
 

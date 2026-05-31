@@ -23,7 +23,7 @@ class AlphaFoldStructureAdapter:
     default_base_url = "https://alphafold.ebi.ac.uk/api"
     request_headers = {
         "Accept": "application/json",
-        "User-Agent": "molecule-ranker/1.3",
+        "User-Agent": "molecule-ranker/1.4",
     }
 
     def __init__(

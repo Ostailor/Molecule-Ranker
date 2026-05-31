@@ -126,6 +126,15 @@ class RankerConfig(BaseModel):
     strict_experimental_linking: bool = True
     enable_codex_backbone: bool = False
     strict_codex_backbone: bool = False
+    enable_portfolio_optimization: bool = False
+    portfolio_algorithm: str = "greedy"
+    portfolio_max_candidates: int = Field(default=10, ge=0)
+    portfolio_max_generated_fraction: float = Field(default=0.4, ge=0.0, le=1.0)
+    portfolio_min_target_coverage: int | None = Field(default=None, ge=1)
+    portfolio_require_review_for_generated: bool = True
+    portfolio_exclude_critical_risk: bool = True
+    portfolio_scenarios: list[str] = Field(default_factory=list)
+    portfolio_random_seed: int | None = None
     codex_tasks: list[str] = Field(
         default_factory=lambda: [
             "summarize_run",
@@ -232,9 +241,7 @@ class RankerConfig(BaseModel):
             "allow_rule_based_admet_fallback": self.allow_rule_based_admet_fallback,
             "enable_synthesizability": self.enable_synthesizability,
             "enable_structure_retrieval": self.enable_structure_retrieval,
-            "require_developability_for_generated": (
-                self.require_developability_for_generated
-            ),
+            "require_developability_for_generated": (self.require_developability_for_generated),
             "enable_docking": self.enable_docking,
             "strict_structure_mode": self.strict_structure_mode,
             "write_docking_artifacts": self.write_docking_artifacts,
@@ -272,6 +279,15 @@ class RankerConfig(BaseModel):
             "strict_experimental_linking": self.strict_experimental_linking,
             "enable_codex_backbone": self.enable_codex_backbone,
             "strict_codex_backbone": self.strict_codex_backbone,
+            "enable_portfolio_optimization": self.enable_portfolio_optimization,
+            "portfolio_algorithm": self.portfolio_algorithm,
+            "portfolio_max_candidates": self.portfolio_max_candidates,
+            "portfolio_max_generated_fraction": self.portfolio_max_generated_fraction,
+            "portfolio_min_target_coverage": self.portfolio_min_target_coverage,
+            "portfolio_require_review_for_generated": (self.portfolio_require_review_for_generated),
+            "portfolio_exclude_critical_risk": self.portfolio_exclude_critical_risk,
+            "portfolio_scenarios": list(self.portfolio_scenarios),
+            "portfolio_random_seed": self.portfolio_random_seed,
             "codex_tasks": list(self.codex_tasks),
             "codex_store_transcripts": self.codex_store_transcripts,
             "codex_max_tasks_per_run": self.codex_max_tasks_per_run,

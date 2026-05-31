@@ -106,6 +106,15 @@ def test_ranker_config_defaults_are_sensible_for_first_real_run():
     assert config.feedback_weight == 0.05
     assert config.generate_review_dashboard is False
     assert config.review_dashboard_dir is None
+    assert config.enable_portfolio_optimization is False
+    assert config.portfolio_algorithm == "greedy"
+    assert config.portfolio_max_candidates == 10
+    assert config.portfolio_max_generated_fraction == 0.4
+    assert config.portfolio_min_target_coverage is None
+    assert config.portfolio_require_review_for_generated is True
+    assert config.portfolio_exclude_critical_risk is True
+    assert config.portfolio_scenarios == []
+    assert config.portfolio_random_seed is None
 
 
 def test_ranker_config_trace_metadata_is_json_serializable():
@@ -127,6 +136,9 @@ def test_ranker_config_trace_metadata_is_json_serializable():
     assert metadata["feedback_db_path"] == ".review/molecule-ranker-feedback.sqlite"
     assert metadata["generate_review_dashboard"] is False
     assert metadata["review_dashboard_dir"] is None
+    assert metadata["enable_portfolio_optimization"] is False
+    assert metadata["portfolio_algorithm"] == "greedy"
+    assert metadata["portfolio_scenarios"] == []
 
 
 def test_review_runtime_config_includes_dashboard_options(tmp_path):
@@ -144,6 +156,15 @@ def test_review_runtime_config_includes_dashboard_options(tmp_path):
         feedback_weight=0.1,
         generate_review_dashboard=True,
         review_dashboard_dir=tmp_path / "dashboard",
+        enable_portfolio_optimization=True,
+        portfolio_algorithm="weighted_sum",
+        portfolio_max_candidates=4,
+        portfolio_max_generated_fraction=0.25,
+        portfolio_min_target_coverage=2,
+        portfolio_require_review_for_generated=False,
+        portfolio_exclude_critical_risk=False,
+        portfolio_scenarios=["conservative"],
+        portfolio_random_seed=11,
     )
 
     runtime = config.runtime_agent_config(top=3, results_dir=tmp_path / "results")
@@ -161,3 +182,12 @@ def test_review_runtime_config_includes_dashboard_options(tmp_path):
     assert runtime["feedback_weight"] == 0.1
     assert runtime["generate_review_dashboard"] is True
     assert runtime["review_dashboard_dir"] == str(tmp_path / "dashboard")
+    assert runtime["enable_portfolio_optimization"] is True
+    assert runtime["portfolio_algorithm"] == "weighted_sum"
+    assert runtime["portfolio_max_candidates"] == 4
+    assert runtime["portfolio_max_generated_fraction"] == 0.25
+    assert runtime["portfolio_min_target_coverage"] == 2
+    assert runtime["portfolio_require_review_for_generated"] is False
+    assert runtime["portfolio_exclude_critical_risk"] is False
+    assert runtime["portfolio_scenarios"] == ["conservative"]
+    assert runtime["portfolio_random_seed"] == 11

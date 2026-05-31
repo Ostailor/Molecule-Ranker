@@ -127,7 +127,12 @@
               "explain_prediction_batch",
               "suggest_feature_debugging",
               "draft_model_limitations",
-              "explain_active_design_model_influence"
+              "explain_active_design_model_influence",
+              "suggest_structure_selection_review_questions",
+              "summarize_structure_assessment",
+              "explain_pose_qc_failure",
+              "draft_structure_report_summary",
+              "plan_followup_structure_workflow"
             ],
             "title": "Task Type",
             "type": "string"
@@ -1592,6 +1597,123 @@
         "title": "ServiceTokenRevokeRequest",
         "type": "object"
       },
+      "StructureJobRequest": {
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "binding_site_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Site Id"
+          },
+          "budget_limit": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Limit"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "enable_docking": {
+            "default": false,
+            "title": "Enable Docking",
+            "type": "boolean"
+          },
+          "job_type": {
+            "title": "Job Type",
+            "type": "string"
+          },
+          "max_ligands": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Ligands"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "structure_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Structure Id"
+          },
+          "structure_plan_approved": {
+            "default": false,
+            "title": "Structure Plan Approved",
+            "type": "boolean"
+          },
+          "target_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Symbol"
+          },
+          "use_codex_planner": {
+            "default": false,
+            "title": "Use Codex Planner",
+            "type": "boolean"
+          },
+          "warning_acknowledged": {
+            "default": false,
+            "title": "Warning Acknowledged",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "job_type"
+        ],
+        "title": "StructureJobRequest",
+        "type": "object"
+      },
       "SyncEnqueueRequest": {
         "properties": {
           "job_type": {
@@ -1970,7 +2092,7 @@
   "info": {
     "description": "Local API by default. Hosted mode adds users, teams, RBAC, jobs, audit logs, guarded Codex worker orchestration, and V1.0 integrations.",
     "title": "molecule-ranker API",
-    "version": "1.3.0"
+    "version": "1.4.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7078,6 +7200,60 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/structure/jobs": {
+      "post": {
+        "operationId": "enqueue_structure_job_api_v1_projects__project_id__structure_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StructureJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Structure Job Api V1 Projects  Project Id  Structure Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Structure Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/api/v1/ready": {
       "get": {
         "operationId": "v1_ready_api_v1_ready_get",
@@ -9554,6 +9730,57 @@
           }
         },
         "summary": "Generated Molecule Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/structure/{section}": {
+      "get": {
+        "operationId": "structure_dashboard_page_dashboard_projects__project_id__structure__section__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "section",
+            "required": true,
+            "schema": {
+              "title": "Section",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Structure Dashboard Page",
         "tags": [
           "web"
         ]
@@ -12824,6 +13051,60 @@
           }
         },
         "summary": "Share Project",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/structure/jobs": {
+      "post": {
+        "operationId": "enqueue_structure_job_projects__project_id__structure_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StructureJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Structure Job Projects  Project Id  Structure Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Structure Job",
         "tags": [
           "platform"
         ]

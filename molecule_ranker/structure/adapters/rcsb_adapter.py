@@ -24,7 +24,7 @@ class RCSBStructureAdapter:
     default_data_url = "https://data.rcsb.org/rest/v1/core"
     request_headers = {
         "Accept": "application/json",
-        "User-Agent": "molecule-ranker/1.3",
+        "User-Agent": "molecule-ranker/1.4",
     }
 
     def __init__(

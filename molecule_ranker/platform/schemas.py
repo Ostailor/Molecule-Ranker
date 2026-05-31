@@ -58,6 +58,12 @@ PlatformJobType = Literal[
     "design_score",
     "design_loop",
     "design_benchmark",
+    "portfolio_build_candidates",
+    "portfolio_optimize",
+    "portfolio_scenario_analysis",
+    "portfolio_stage_gate",
+    "portfolio_batch_build",
+    "portfolio_memo",
 ]
 PlatformJobStatus = Literal[
     "queued",

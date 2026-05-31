@@ -32,7 +32,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
         {
             "name": "molecule-ranker",
             "stage": RELEASE_STAGE,
-            "scope": "structure_based_design_and_protein_ligand_workflow_hardening",
+            "scope": "multi_objective_portfolio_optimization_and_program_decision_analytics",
             "non_goals": [
                 "unvalidated model-provider execution",
                 "new external integration families",
@@ -41,6 +41,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
                 "model predictions promoted to evidence or assay results",
                 "docking scores, poses, or interaction profiles promoted to evidence",
                 "synthesis instructions, lab protocols, dosing, or patient guidance",
+                "Codex-generated portfolio selections or optimization scores",
             ],
             "scientific_integrity_constraints": list(SCIENTIFIC_INTEGRITY_CONSTRAINTS),
             "contracts": {
@@ -146,9 +147,12 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V1.3 is for internal research use only and is not a clinical product.",
+        "V1.4 is for internal research use only and is not a clinical product.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
         "Generated molecules are computational hypotheses and require independent validation.",
+        "Portfolio recommendations are research prioritization aids, not clinical or "
+        "experimental instructions.",
+        "Portfolio selections and scores must be computed by deterministic modules, not Codex.",
         "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
         "Docking scores, poses, and structure-derived interactions are computational "
         "heuristics, not proof of binding or activity.",

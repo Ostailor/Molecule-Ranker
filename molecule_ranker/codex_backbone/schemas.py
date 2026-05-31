@@ -41,6 +41,12 @@ CodexTaskType = Literal[
     "explain_pose_qc_failure",
     "draft_structure_report_summary",
     "plan_followup_structure_workflow",
+    "summarize_portfolio_tradeoffs",
+    "draft_decision_memo",
+    "explain_candidate_rejection",
+    "explain_scenario_differences",
+    "generate_review_questions_for_portfolio",
+    "draft_project_update_from_portfolio",
 ]
 CodexOutputFormat = Literal["json", "markdown", "text"]
 CodexResultStatus = Literal[

@@ -286,6 +286,38 @@ MODEL_PREDICTION_KEYS = {
     "applicability_domain",
     "calibration_status",
 }
+PORTFOLIO_CODEX_TASK_TYPES = {
+    "summarize_portfolio_tradeoffs",
+    "draft_decision_memo",
+    "explain_candidate_rejection",
+    "explain_scenario_differences",
+    "generate_review_questions_for_portfolio",
+    "draft_project_update_from_portfolio",
+}
+PORTFOLIO_SCENARIO_TASK_TYPES = {
+    "explain_scenario_differences",
+}
+PORTFOLIO_REQUIRED_REF_PREFIXES = {
+    "optimization_run_id": "optimization_run_id",
+    "selection_id": "selection_id",
+    "candidate_id": "candidate IDs",
+    "artifact_id": "artifact IDs",
+}
+PORTFOLIO_METRIC_KEYS = {
+    "portfolio_score",
+    "evidence_score",
+    "generation_score",
+    "developability_score",
+    "experimental_support_score",
+    "predictive_model_score",
+    "structure_score",
+    "experiment_readiness_score",
+    "uncertainty_score",
+    "novelty_score",
+    "diversity_score",
+    "risk_score",
+    "objective_score",
+}
 METRIC_VALUE_PATTERN = re.compile(
     r"\b(accuracy|roc_auc|auc|rmse|mae|r2|brier|ece|expected calibration error|"
     r"precision|recall|f1)\b\s*(?:=|:|of|is)?\s*([0-9]+(?:\.[0-9]+)?)",
@@ -296,6 +328,32 @@ PREDICTION_VALUE_PATTERN = re.compile(
     r"prediction_label|confidence|uncertainty|applicability_domain|calibration_status)\b"
     r"\s*(?:=|:|is)?\s*([A-Za-z0-9_.:-]+)",
     re.I,
+)
+PORTFOLIO_METRIC_VALUE_PATTERN = re.compile(
+    r"\b(portfolio_score|portfolio score|evidence_score|evidence score|generation_score|"
+    r"generation score|developability_score|developability score|experimental_support_score|"
+    r"experimental support score|predictive_model_score|predictive model score|"
+    r"structure_score|structure score|experiment_readiness_score|experiment readiness score|"
+    r"uncertainty_score|uncertainty score|novelty_score|novelty score|diversity_score|"
+    r"diversity score|risk_score|risk score|objective_score|objective score)"
+    r"\s*(?:=|:|of|is)?\s*([0-9]+(?:\.[0-9]+)?)",
+    re.I,
+)
+PORTFOLIO_CANDIDATE_FIELD_PATTERN = re.compile(
+    r"\b(?:candidate_id|portfolio_candidate_id|candidate id)\b\s*(?:=|:|is)?\s*"
+    r"[`\"']?([A-Za-z0-9_.:-]+)",
+    re.I,
+)
+PORTFOLIO_APPROVAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\b(?:I\s+)?approve[sd]?\s+(?:the\s+)?(?:portfolio\s+)?stage[-_ ]gate\b", re.I),
+        "approve stage gate",
+    ),
+    (
+        re.compile(r"\bstage_gate_approved\b|\bstage[- ]gate approved\b", re.I),
+        "mark stage gate approved",
+    ),
+    (re.compile(r"[\"']approved[\"']\s*:\s*true", re.I), "set approved true"),
 )
 
 
@@ -344,6 +402,7 @@ def check_output(
         *detect_fake_external_ids(text, allowed_artifact_refs),
         *detect_model_artifact_violations(result, allowed_artifact_refs),
         *detect_structure_artifact_violations(result, allowed_artifact_refs),
+        *detect_portfolio_artifact_violations(result, allowed_artifact_refs),
     ]
     if not warnings:
         return result
@@ -429,6 +488,25 @@ def detect_structure_artifact_violations(
     return _dedupe(warnings)
 
 
+def detect_portfolio_artifact_violations(
+    result: CodexTaskResult,
+    allowed_artifact_refs: set[str],
+) -> list[str]:
+    if str(result.task_type) not in PORTFOLIO_CODEX_TASK_TYPES:
+        return []
+    text = result.output_text or result.stdout
+    if result.output_json is not None:
+        text = text + "\n" + json.dumps(result.output_json, sort_keys=True)
+    allowed_lower = {ref.lower() for ref in allowed_artifact_refs}
+    warnings = [
+        *_detect_missing_portfolio_citations(str(result.task_type), text, allowed_lower),
+        *_detect_fake_portfolio_metrics(text, allowed_lower),
+        *_detect_ungrounded_portfolio_candidates(text, result.output_json, allowed_lower),
+        *_detect_forbidden_portfolio_actions(text),
+    ]
+    return _dedupe(warnings)
+
+
 def is_secret_path(path: Path) -> bool:
     parts = [part.lower() for part in path.parts]
     for part in parts:
@@ -477,6 +555,7 @@ def output_guardrail_warnings(
             *_detect_unbacked_assay_results(text, set()),
             *detect_model_artifact_violations(result, allowed_artifact_refs or set()),
             *detect_structure_artifact_violations(result, allowed_artifact_refs or set()),
+            *detect_portfolio_artifact_violations(result, allowed_artifact_refs or set()),
         ]
     )
 
@@ -641,6 +720,93 @@ def _detect_structure_overclaims(text: str) -> list[str]:
     return warnings
 
 
+def _detect_missing_portfolio_citations(
+    task_type: str,
+    text: str,
+    allowed_lower: set[str],
+) -> list[str]:
+    lowered_text = text.lower()
+    required = dict(PORTFOLIO_REQUIRED_REF_PREFIXES)
+    if task_type in PORTFOLIO_SCENARIO_TASK_TYPES:
+        required["scenario_id"] = "scenario IDs"
+    warnings: list[str] = []
+    for prefix, label in required.items():
+        values = _prefixed_allowed_values(allowed_lower, prefix)
+        if not values:
+            warnings.append(f"Portfolio Codex summary missing source artifact field: {label}.")
+            continue
+        if not any(value in lowered_text for value in values):
+            warnings.append(f"Portfolio Codex summary did not cite required {label}.")
+    return warnings
+
+
+def _detect_fake_portfolio_metrics(text: str, allowed_lower: set[str]) -> list[str]:
+    warnings: list[str] = []
+    for match in PORTFOLIO_METRIC_VALUE_PATTERN.finditer(text):
+        key = _normalize_portfolio_key(match.group(1))
+        raw_value = _normalize_numeric_string(match.group(2))
+        candidates = {
+            f"portfolio_metric:{key}:{raw_value}",
+            f"{key}:{raw_value}",
+            f"{key}={raw_value}",
+        }
+        if candidates.isdisjoint(allowed_lower):
+            warnings.append(f"Unbacked portfolio metric: {key}={raw_value}.")
+    return warnings
+
+
+def _detect_ungrounded_portfolio_candidates(
+    text: str,
+    output_json: dict[str, Any] | None,
+    allowed_lower: set[str],
+) -> list[str]:
+    warnings: list[str] = []
+    observed: set[str] = set()
+    for match in PORTFOLIO_CANDIDATE_FIELD_PATTERN.finditer(text):
+        value = match.group(1).strip(" .,:;`\"'")
+        if value:
+            observed.add(value)
+    if output_json is not None:
+        _collect_portfolio_candidate_refs(output_json, observed)
+    allowed_candidates = _prefixed_allowed_values(allowed_lower, "candidate_id")
+    for candidate_id in sorted(observed):
+        lowered = candidate_id.lower()
+        if lowered not in allowed_candidates and lowered not in allowed_lower:
+            warnings.append(f"Ungrounded portfolio candidate ID: {candidate_id}.")
+    return warnings
+
+
+def _collect_portfolio_candidate_refs(value: Any, observed: set[str]) -> None:
+    if isinstance(value, dict):
+        for key, raw in value.items():
+            lowered = str(key).lower()
+            if lowered in {"candidate_id", "portfolio_candidate_id"} and raw not in (
+                None,
+                "",
+            ):
+                observed.add(str(raw))
+            elif lowered in {
+                "candidate_ids",
+                "selected_candidate_ids",
+                "rejected_candidate_ids",
+                "deferred_candidate_ids",
+            } and isinstance(raw, list):
+                observed.update(str(item) for item in raw if item not in (None, ""))
+            _collect_portfolio_candidate_refs(raw, observed)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_portfolio_candidate_refs(item, observed)
+
+
+def _detect_forbidden_portfolio_actions(text: str) -> list[str]:
+    warnings: list[str] = []
+    for pattern, label in PORTFOLIO_APPROVAL_PATTERNS:
+        match = pattern.search(text)
+        if match and not _is_negated_safety_constraint(text, match.start()):
+            warnings.append(f"Forbidden portfolio Codex action: {label}.")
+    return warnings
+
+
 def _prefixed_allowed_values(allowed_lower: set[str], prefix: str) -> set[str]:
     marker = f"{prefix}:"
     return {
@@ -709,8 +875,11 @@ def _collect_json_refs(value: Any, refs: set[str]) -> None:
                 "batch_id",
                 "prediction_batch_artifact_id",
                 "artifact_id",
-                "structure_id",
+                "optimization_run_id",
                 "selection_id",
+                "portfolio_candidate_id",
+                "scenario_id",
+                "structure_id",
                 "receptor_prep_id",
                 "docking_run_id",
                 "pose_id",
@@ -726,11 +895,27 @@ def _collect_json_refs(value: Any, refs: set[str]) -> None:
                 refs.add(str(raw))
                 refs.add(f"{_model_ref_prefix(lowered)}:{str(raw)}")
                 refs.add(f"{_structure_ref_prefix(lowered)}:{str(raw)}")
+                refs.add(f"{_portfolio_ref_prefix(lowered)}:{str(raw)}")
             if lowered == "artifact_ids" and isinstance(raw, list):
                 for item in raw:
                     if item not in (None, ""):
                         refs.add(str(item))
                         refs.add(f"artifact_id:{str(item)}")
+            if lowered in {
+                "candidate_ids",
+                "selected_candidate_ids",
+                "rejected_candidate_ids",
+                "deferred_candidate_ids",
+            } and isinstance(raw, list):
+                for item in raw:
+                    if item not in (None, ""):
+                        refs.add(str(item))
+                        refs.add(f"candidate_id:{str(item)}")
+            if lowered == "scenario_ids" and isinstance(raw, list):
+                for item in raw:
+                    if item not in (None, ""):
+                        refs.add(str(item))
+                        refs.add(f"scenario_id:{str(item)}")
             if lowered in {"key_residue_contacts", "residues"} and isinstance(raw, list):
                 for item in raw:
                     if item not in (None, ""):
@@ -757,6 +942,12 @@ def _collect_json_refs(value: Any, refs: set[str]) -> None:
                     normalized_value = _normalize_numeric_string(normalized_value)
                 refs.add(f"prediction:{normalized_key}:{normalized_value}")
                 refs.add(f"{normalized_key}:{normalized_value}")
+            if lowered in PORTFOLIO_METRIC_KEYS and raw is not None:
+                normalized_key = _normalize_portfolio_key(lowered)
+                normalized_value = _normalize_numeric_string(str(raw))
+                refs.add(f"portfolio_metric:{normalized_key}:{normalized_value}")
+                refs.add(f"{normalized_key}:{normalized_value}")
+                refs.add(f"{normalized_key}={normalized_value}")
             _collect_json_refs(raw, refs)
     elif isinstance(value, list):
         for item in value:
@@ -817,7 +1008,17 @@ def _structure_ref_prefix(key: str) -> str:
     return key
 
 
+def _portfolio_ref_prefix(key: str) -> str:
+    if key == "portfolio_candidate_id":
+        return "candidate_id"
+    return key
+
+
 def _normalize_model_key(key: str) -> str:
+    return key.lower().replace(" ", "_")
+
+
+def _normalize_portfolio_key(key: str) -> str:
     return key.lower().replace(" ", "_")
 
 

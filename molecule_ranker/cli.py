@@ -114,6 +114,28 @@ from molecule_ranker.models.schemas import (
 )
 from molecule_ranker.models.training import train_baseline_surrogate_model
 from molecule_ranker.orchestrator import MoleculeRankerOrchestrator
+from molecule_ranker.portfolio import (
+    DecisionScenario,
+    Portfolio,
+    PortfolioCandidate,
+    PortfolioConstraint,
+    PortfolioOptimizationRun,
+    PortfolioSelection,
+    Program,
+    ResourceBudget,
+    SensitivityAnalysis,
+    build_portfolio_batch,
+    build_portfolio_candidates,
+    build_portfolio_candidates_from_artifacts,
+    compare_decision_scenarios,
+    default_objectives,
+    default_scenarios,
+    generate_program_decision_memo,
+    render_decision_memo_markdown,
+    render_portfolio_report_markdown,
+)
+from molecule_ranker.portfolio.optimizer import PortfolioOptimizer
+from molecule_ranker.portfolio.stage_gates import build_stage_gate
 from molecule_ranker.project import (
     ProjectWorkspaceStore as LegacyProjectWorkspaceStore,
 )
@@ -218,6 +240,10 @@ experimental_app = typer.Typer(
 )
 experiment_app = typer.Typer(
     help="V0.6 experimental assay result import, storage, review, and active learning.",
+    no_args_is_help=True,
+)
+portfolio_app = typer.Typer(
+    help="V1.4 program-level portfolio optimization and decision analytics.",
     no_args_is_help=True,
 )
 project_app = typer.Typer(
@@ -347,6 +373,7 @@ structure_app = typer.Typer(
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
+app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(project_app, name="project")
 app.add_typer(codex_app, name="codex")
 app.add_typer(db_app, name="db")
@@ -695,6 +722,42 @@ def validate_structure_command(
         typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
         typer.echo(f"JSON: {output_dir / 'structure_guardrail_audit.json'}")
         typer.echo(f"Markdown: {output_dir / 'structure_guardrail_audit.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("portfolio")
+def validate_portfolio_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    fixture: Annotated[
+        Literal[
+            "golden",
+            "fake_evidence",
+            "generated_without_approval",
+            "protocol_text",
+        ],
+        typer.Option("--fixture", help="Synthetic portfolio-validation fixture to run."),
+    ] = "golden",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V1.4 portfolio workflow validation."""
+    from molecule_ranker.validation import run_portfolio_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "portfolio"
+    report = run_portfolio_validation(output_dir=output_dir, fixture=fixture)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Portfolio validation: {report.status}")
+        typer.echo(f"Fixture: {fixture}")
+        typer.echo(f"Artifacts: {len(report.artifacts)}")
+        typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
+        typer.echo(f"JSON: {output_dir / 'portfolio_guardrail_audit.json'}")
+        typer.echo(f"Markdown: {output_dir / 'portfolio_guardrail_audit.md'}")
     if report.status != "pass":
         raise typer.Exit(code=1)
 
@@ -3001,6 +3064,269 @@ def experiment_active_learning(
             f"- {suggestion.candidate_name}: {suggestion.acquisition_score:.3f} "
             f"({suggestion.acquisition_strategy})"
         )
+
+
+@portfolio_app.command("build-candidates")
+def portfolio_build_candidates(
+    from_run: Annotated[
+        Path,
+        typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", file_okay=True, dir_okay=False, help="Candidate JSON path."),
+    ] = Path("portfolio_candidates.json"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Build V1.4 portfolio candidates from a completed run directory."""
+    try:
+        candidates = _portfolio_candidates_from_run(from_run)
+        payload = {
+            "portfolio_candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+            "source_run": str(from_run),
+            "candidate_count": len(candidates),
+        }
+        _write_json_file(output, payload)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Portfolio candidates: {len(candidates)}")
+    typer.echo(f"Output: {output}")
+
+
+@portfolio_app.command("optimize")
+def portfolio_optimize(
+    candidates_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidates",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Portfolio candidate JSON from build-candidates.",
+        ),
+    ] = None,
+    from_run: Annotated[
+        Path | None,
+        typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ] = None,
+    algorithm: Annotated[
+        str,
+        typer.Option("--algorithm", help="greedy, weighted_sum, or pareto."),
+    ] = "greedy",
+    max_candidates: Annotated[int, typer.Option("--max-candidates", min=1)] = 8,
+    max_generated_fraction: Annotated[
+        float, typer.Option("--max-generated-fraction", min=0.0, max=1.0)
+    ] = 0.4,
+    scenario: Annotated[list[str] | None, typer.Option("--scenario")] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", file_okay=True, dir_okay=False, help="Optimization JSON path."),
+    ] = Path("portfolio_optimization.json"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run deterministic V1.4 portfolio optimization from portfolio candidates."""
+    try:
+        candidates = _portfolio_candidates_from_cli_inputs(candidates_path, from_run)
+        portfolio = _portfolio_from_cli_candidates(
+            candidates,
+            max_candidates=max_candidates,
+            max_generated_fraction=max_generated_fraction,
+            algorithm=algorithm,
+            source_path=candidates_path or from_run,
+        )
+        run = PortfolioOptimizer(algorithm=algorithm).optimize(portfolio)
+        payload = run.model_dump(mode="json")
+        selected_scenarios = _portfolio_cli_scenarios(scenario)
+        if selected_scenarios:
+            analysis = compare_decision_scenarios(
+                portfolio,
+                selected_scenarios,
+                algorithm=algorithm,
+            )
+            payload["scenario_analysis"] = analysis.model_dump(mode="json")
+        _write_json_file(output, payload)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _echo_json({**payload, "output_path": str(output)})
+        return
+    selection = run.selections[0] if run.selections else None
+    typer.echo(f"Portfolio optimization run: {run.optimization_run_id}")
+    typer.echo(f"Output: {output}")
+    typer.echo(
+        "Selected portfolio: "
+        f"{', '.join(selection.selected_candidate_ids) if selection else 'none'}"
+    )
+    typer.echo(
+        "Rejected candidates: "
+        f"{', '.join(selection.rejected_candidate_ids) if selection else 'none'}"
+    )
+
+
+@portfolio_app.command("scenarios")
+def portfolio_scenarios(
+    candidates_path: Annotated[
+        Path,
+        typer.Option("--candidates", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    scenario: Annotated[list[str] | None, typer.Option("--scenario")] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", file_okay=True, dir_okay=False),
+    ] = Path("scenario_analysis.json"),
+    max_candidates: Annotated[int, typer.Option("--max-candidates", min=1)] = 8,
+) -> None:
+    """Run deterministic scenario analysis for a portfolio candidate set."""
+    try:
+        candidates = _load_portfolio_candidates_json(candidates_path)
+        portfolio = _portfolio_from_cli_candidates(
+            candidates,
+            max_candidates=max_candidates,
+            max_generated_fraction=0.4,
+            algorithm="greedy",
+            source_path=candidates_path,
+        )
+        analysis = compare_decision_scenarios(
+            portfolio,
+            _portfolio_cli_scenarios(scenario) or default_scenarios(),
+        )
+        _write_json_file(output, analysis.model_dump(mode="json"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Scenario analysis: {output}")
+
+
+@portfolio_app.command("stage-gate")
+def portfolio_stage_gate(
+    candidate_id: Annotated[str, typer.Option("--candidate-id")],
+    from_run: Annotated[
+        Path,
+        typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    to_stage: Annotated[str, typer.Option("--to-stage")] = "assay_candidate",
+    reviewer_id: Annotated[str | None, typer.Option("--reviewer-id")] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", file_okay=True, dir_okay=False),
+    ] = Path("stage_gate_decision.json"),
+) -> None:
+    """Evaluate a deterministic candidate stage gate."""
+    try:
+        candidates = _portfolio_candidates_from_run(from_run)
+        candidate = _portfolio_candidate_by_id(candidates, candidate_id)
+        gate = build_stage_gate(
+            candidate,
+            from_stage=str(candidate.metadata.get("stage") or "computational_triage"),
+            to_stage=to_stage,
+            require_human_approval=reviewer_id is not None,
+        )
+        gate = gate.model_copy(
+            update={
+                "metadata": {
+                    **gate.metadata,
+                    "reviewer_id": reviewer_id,
+                }
+            },
+            deep=True,
+        )
+        _write_json_file(output, gate.model_dump(mode="json"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Stage-gate decision: {output}")
+
+
+@portfolio_app.command("batch")
+def portfolio_batch(
+    optimization: Annotated[
+        Path,
+        typer.Option("--optimization", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    batch_type: Annotated[str, typer.Option("--batch-type")] = "expert_review_batch",
+    output: Annotated[
+        Path,
+        typer.Option("--output", file_okay=True, dir_okay=False),
+    ] = Path("portfolio_batch.json"),
+) -> None:
+    """Build a high-level expert review or assay planning batch."""
+    try:
+        run = _load_portfolio_optimization_run(optimization)
+        selection = _portfolio_recommended_selection(run)
+        candidates = _portfolio_candidates_from_optimization(run)
+        batch = build_portfolio_batch(
+            candidates,
+            batch_type=batch_type,  # type: ignore[arg-type]
+            selection=selection,
+        )
+        _write_json_file(output, batch.model_dump(mode="json"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Portfolio batch: {output}")
+
+
+@portfolio_app.command("memo")
+def portfolio_memo(
+    optimization: Annotated[
+        Path,
+        typer.Option("--optimization", exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", file_okay=True, dir_okay=False),
+    ] = Path("program_decision_memo.md"),
+    use_codex: Annotated[bool, typer.Option("--use-codex")] = False,
+) -> None:
+    """Render a guarded program decision memo from optimization output."""
+    try:
+        run = _load_portfolio_optimization_run(optimization)
+        scenario_analysis = _load_portfolio_scenario_analysis(optimization)
+        codex_draft = _load_portfolio_codex_draft(optimization) if use_codex else None
+        memo = generate_program_decision_memo(
+            run,
+            _portfolio_recommended_selection(run),
+            scenario_analysis=scenario_analysis,
+            candidate_summaries=run.metadata.get("input_candidates"),
+            codex_draft=codex_draft,
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(render_decision_memo_markdown(memo))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Program decision memo: {output}")
+
+
+@portfolio_app.command("report")
+def portfolio_report(
+    from_run: Annotated[
+        Path,
+        typer.Option("--from-run", exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", file_okay=True, dir_okay=False),
+    ] = Path("portfolio_report.md"),
+) -> None:
+    """Write a high-level portfolio report from a completed run directory."""
+    try:
+        candidates = _portfolio_candidates_from_run(from_run)
+        markdown = _render_portfolio_cli_report(from_run, candidates)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(markdown)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Portfolio report: {output}")
 
 
 @experiment_app.command("export")
@@ -7056,9 +7382,7 @@ def structure_find(
             records.extend(adapter.retrieve(target))
             warnings.extend(adapter.warnings)
             if not records:
-                warnings.append(
-                    f"No {normalized_source} structures retrieved for {target_symbol}."
-                )
+                warnings.append(f"No {normalized_source} structures retrieved for {target_symbol}.")
         else:
             raise ValueError("--source must be one of rcsb, alphafold, user.")
         payload = _structure_cli_payload(
@@ -7353,14 +7677,10 @@ def structure_benchmark(
         payload = report.model_dump(mode="json")
         _structure_cli_echo(payload, json_output, "Structure benchmark summary")
         if not json_output:
-            generated_count = (
-                report.metrics.generated_molecules_with_structure_assessment
-            )
+            generated_count = report.metrics.generated_molecules_with_structure_assessment
             docking_success_rate = report.metrics.docking_success_rate
             typer.echo(f"Generated assessments: {generated_count}")
-            typer.echo(
-                f"Docking success rate: {docking_success_rate:.3f}"
-            )
+            typer.echo(f"Docking success rate: {docking_success_rate:.3f}")
     except Exception as exc:
         _structure_cli_fail(exc)
 
@@ -8138,12 +8458,8 @@ def _render_structure_cli_report(run_dir: Path) -> str:
     ligands = artifact.get("ligand_preparations", [])
     docking_runs = artifact.get("docking_runs", [])
     assessments = artifact.get("structure_assessments", [])
-    binding_sites = _records_from_run_file(
-        run_dir, "binding_sites.json", "binding_sites"
-    )
-    docking_poses = _records_from_run_file(
-        run_dir, "docking_poses.json", "docking_poses"
-    )
+    binding_sites = _records_from_run_file(run_dir, "binding_sites.json", "binding_sites")
+    docking_poses = _records_from_run_file(run_dir, "docking_poses.json", "docking_poses")
     interaction_profiles = _records_from_run_file(
         run_dir, "interaction_profiles.json", "interaction_profiles"
     )
@@ -8322,6 +8638,299 @@ def _read_optional_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"Artifact must be a JSON object: {path}")
     return payload
+
+
+def _run_disease_name(run_dir: Path) -> str | None:
+    disease_payload = _read_optional_json(run_dir / "disease.json")
+    disease = disease_payload.get("disease") if isinstance(disease_payload, dict) else None
+    if isinstance(disease, dict):
+        value = disease.get("canonical_name") or disease.get("input_name")
+        if value:
+            return str(value)
+    candidates_payload = _read_optional_json(run_dir / "candidates.json")
+    disease = candidates_payload.get("disease") if isinstance(candidates_payload, dict) else None
+    if isinstance(disease, dict):
+        value = disease.get("canonical_name") or disease.get("input_name")
+        if value:
+            return str(value)
+    value = candidates_payload.get("disease_name") if isinstance(candidates_payload, dict) else None
+    return str(value) if value else None
+
+
+def _portfolio_generated_targets(molecule: Any) -> list[str]:
+    conditioned_targets = getattr(molecule, "conditioned_targets", None)
+    if isinstance(conditioned_targets, list):
+        return [str(target) for target in conditioned_targets if target]
+    target_symbol = getattr(molecule, "target_symbol", None)
+    return [str(target_symbol)] if target_symbol else []
+
+
+def _portfolio_candidates_from_run(run_dir: Path) -> list[PortfolioCandidate]:
+    try:
+        return build_portfolio_candidates_from_artifacts(run_dir)
+    except ValueError:
+        candidates, generated = _load_experiment_run_candidates(
+            run_dir,
+            include_generated=True,
+        )
+        return build_portfolio_candidates(
+            existing_candidates=candidates,
+            generated_molecules=generated,
+            disease_name=_run_disease_name(run_dir),
+        )
+
+
+def _portfolio_candidates_from_cli_inputs(
+    candidates_path: Path | None,
+    from_run: Path | None,
+) -> list[PortfolioCandidate]:
+    if candidates_path is None and from_run is None:
+        raise ValueError("Provide either --candidates or --from-run.")
+    if candidates_path is not None and from_run is not None:
+        raise ValueError("Use only one of --candidates or --from-run.")
+    if candidates_path is not None:
+        return _load_portfolio_candidates_json(candidates_path)
+    if from_run is None:  # pragma: no cover - guarded above
+        raise ValueError("Missing --from-run.")
+    return _portfolio_candidates_from_run(from_run)
+
+
+def _load_portfolio_candidates_json(path: Path) -> list[PortfolioCandidate]:
+    payload = json.loads(path.read_text())
+    if isinstance(payload, list):
+        raw_candidates = payload
+    elif isinstance(payload, dict):
+        raw_candidates = (
+            payload.get("portfolio_candidates")
+            or payload.get("candidates")
+            or payload.get("input_candidates")
+        )
+    else:
+        raw_candidates = None
+    if not isinstance(raw_candidates, list):
+        raise ValueError("Portfolio candidates JSON must contain a candidate list.")
+    return [PortfolioCandidate.model_validate(candidate) for candidate in raw_candidates]
+
+
+def _portfolio_from_cli_candidates(
+    candidates: list[PortfolioCandidate],
+    *,
+    max_candidates: int,
+    max_generated_fraction: float,
+    algorithm: str,
+    source_path: Path | None,
+) -> Portfolio:
+    disease_focus = sorted(
+        {candidate.disease_name for candidate in candidates if candidate.disease_name}
+    )
+    target_focus = sorted(
+        {target for candidate in candidates for target in candidate.target_symbols}
+    )
+    program_name = disease_focus[0] if disease_focus else "CLI portfolio"
+    return Portfolio(
+        portfolio_id=f"cli-portfolio-{slugify(program_name)}-{len(candidates)}",
+        program=Program(
+            program_id=f"cli-{slugify(program_name)}",
+            name=f"{program_name} portfolio",
+            disease_focus=disease_focus,
+            target_focus=target_focus,
+        ),
+        candidates=candidates,
+        objectives=default_objectives(),
+        constraints=_portfolio_cli_constraints(
+            max_candidates=max_candidates,
+            max_generated_fraction=max_generated_fraction,
+        ),
+        budget=ResourceBudget(max_candidates=max_candidates),
+        metadata={
+            "algorithm": algorithm,
+            "source_path": str(source_path) if source_path is not None else None,
+            "deterministic_validation": True,
+            "codex_generated_selection": False,
+        },
+    )
+
+
+def _portfolio_cli_constraints(
+    *,
+    max_candidates: int,
+    max_generated_fraction: float,
+) -> list[PortfolioConstraint]:
+    max_generated_count = int(max_candidates * max_generated_fraction)
+    return [
+        PortfolioConstraint(
+            constraint_id="cli-max-candidates",
+            name="Maximum candidates",
+            constraint_type="max_candidates",
+            value=max_candidates,
+            hard=True,
+            violation_action="reject",
+            description="Limit selected portfolio size.",
+        ),
+        PortfolioConstraint(
+            constraint_id="cli-max-generated-candidates",
+            name="Maximum generated candidates",
+            constraint_type="max_generated_candidates",
+            value=max_generated_count,
+            hard=True,
+            violation_action="reject",
+            description="Enforce configured generated-candidate exposure.",
+        ),
+        PortfolioConstraint(
+            constraint_id="cli-max-generated-fraction",
+            name="Maximum generated fraction",
+            constraint_type="max_generated_fraction",
+            value=max_generated_fraction,
+            hard=False,
+            violation_action="warn",
+            description="Warn when generated-only hypotheses exceed configured exposure.",
+        ),
+        PortfolioConstraint(
+            constraint_id="cli-exclude-critical-risk",
+            name="Exclude critical risk",
+            constraint_type="exclude_critical_developability_risk",
+            value=True,
+            hard=True,
+            violation_action="reject",
+            description="Exclude candidates with critical risk annotations by default.",
+        ),
+    ]
+
+
+def _portfolio_cli_scenarios(scenario_ids: list[str] | None) -> list[DecisionScenario]:
+    if not scenario_ids:
+        return []
+    available = {scenario.scenario_id: scenario for scenario in default_scenarios()}
+    if "all" in {scenario_id.lower() for scenario_id in scenario_ids}:
+        return list(available.values())
+    selected = []
+    for scenario_id in scenario_ids:
+        if scenario_id not in available:
+            raise ValueError(f"Unsupported portfolio scenario: {scenario_id}")
+        selected.append(available[scenario_id])
+    return selected
+
+
+def _load_portfolio_optimization_payload(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("Portfolio optimization JSON must contain an object.")
+    return payload
+
+
+def _load_portfolio_optimization_run(path: Path) -> PortfolioOptimizationRun:
+    payload = _load_portfolio_optimization_payload(path)
+    raw_run = payload.get("optimization_run") if "optimization_run" in payload else payload
+    if not isinstance(raw_run, dict):
+        raise ValueError("Portfolio optimization JSON is missing optimization_run.")
+    return PortfolioOptimizationRun.model_validate(raw_run)
+
+
+def _load_portfolio_scenario_analysis(path: Path) -> SensitivityAnalysis | None:
+    payload = _load_portfolio_optimization_payload(path)
+    raw = payload.get("scenario_analysis")
+    if raw is None:
+        raw = payload.get("metadata", {}).get("scenario_analysis")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("scenario_analysis must be a JSON object.")
+    return SensitivityAnalysis.model_validate(raw)
+
+
+def _load_portfolio_codex_draft(path: Path) -> str | None:
+    payload = _load_portfolio_optimization_payload(path)
+    value = payload.get("codex_draft") or payload.get("codex_memo_draft")
+    return str(value) if value else None
+
+
+def _portfolio_recommended_selection(run: PortfolioOptimizationRun) -> PortfolioSelection:
+    if run.recommended_selection_id:
+        for selection in run.selections:
+            if selection.selection_id == run.recommended_selection_id:
+                return selection
+    if not run.selections:
+        raise ValueError("Portfolio optimization run has no selections.")
+    return run.selections[0]
+
+
+def _portfolio_candidates_from_optimization(
+    run: PortfolioOptimizationRun,
+) -> list[PortfolioCandidate]:
+    raw = run.metadata.get("input_candidates")
+    if not isinstance(raw, list):
+        raise ValueError("Optimization output is missing input_candidates metadata.")
+    return [PortfolioCandidate.model_validate(candidate) for candidate in raw]
+
+
+def _portfolio_candidate_by_id(
+    candidates: list[PortfolioCandidate],
+    candidate_id: str,
+) -> PortfolioCandidate:
+    for candidate in candidates:
+        if candidate.portfolio_candidate_id == candidate_id:
+            return candidate
+    raise ValueError(f"Portfolio candidate not found: {candidate_id}")
+
+
+def _render_portfolio_cli_report(
+    run_dir: Path,
+    candidates: list[PortfolioCandidate],
+) -> str:
+    optimization_path = run_dir / "portfolio_optimization.json"
+    if optimization_path.exists():
+        run = _load_portfolio_optimization_run(optimization_path)
+        scenario_analysis = _load_portfolio_scenario_analysis(optimization_path)
+    else:
+        portfolio = _portfolio_from_cli_candidates(
+            candidates,
+            max_candidates=min(8, max(1, len(candidates))),
+            max_generated_fraction=0.4,
+            algorithm="greedy",
+            source_path=run_dir,
+        )
+        run = PortfolioOptimizer(algorithm="greedy").optimize(portfolio)
+        scenario_analysis = None
+    selection = _portfolio_recommended_selection(run)
+    batch = build_portfolio_batch(
+        candidates,
+        batch_type="expert_review_batch",
+        selection=selection,
+    )
+    stage_gates = [
+        build_stage_gate(
+            candidate.model_copy(
+                update={
+                    "metadata": {
+                        **candidate.metadata,
+                        "portfolio_selection_status": (
+                            "selected"
+                            if candidate.portfolio_candidate_id
+                            in selection.selected_candidate_ids
+                            else "not_selected"
+                        ),
+                    }
+                },
+                deep=True,
+            ),
+            from_stage=str(candidate.metadata.get("stage") or "computational_triage"),
+            to_stage="expert_review",
+        )
+        for candidate in candidates
+    ]
+    return render_portfolio_report_markdown(
+        run,
+        selection,
+        candidates=candidates,
+        scenario_analysis=scenario_analysis,
+        stage_gates=stage_gates,
+        batches=[batch],
+    )
+
+
+def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def _build_design_plan(
