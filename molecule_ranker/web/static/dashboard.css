@@ -54,8 +54,10 @@ a {
 }
 
 .brand {
+  flex: 0 0 auto;
   font-weight: 700;
   letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .nav {
@@ -63,6 +65,11 @@ a {
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.topbar .nav {
+  flex: 1 1 auto;
+  justify-content: flex-end;
 }
 
 .nav a,
@@ -323,6 +330,10 @@ input {
     align-items: flex-start;
     flex-direction: column;
     padding: 12px 0;
+  }
+
+  .topbar .nav {
+    justify-content: flex-start;
   }
 
   th,
