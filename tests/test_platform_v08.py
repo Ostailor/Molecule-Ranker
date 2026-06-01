@@ -43,7 +43,7 @@ class FakeCodexProvider:
 
 
 def test_version_is_v13() -> None:
-    assert __version__ == "1.4.0"
+    assert __version__ == "1.5.0"
 
 
 def test_hosted_auth_rbac_project_sharing_and_codex_queue(tmp_path: Path) -> None:
@@ -331,6 +331,91 @@ def test_hosted_structure_jobs_enforce_permissions_acknowledgement_and_budget(
     assert queued.status_code == 200, queued.text
     assert queued.json()["job"]["job_type"] == "structure_dock"
     assert queued.json()["structure_report_boundary"] == "not_binding_evidence"
+
+
+def test_hosted_graph_jobs_enforce_rbac_scope_and_boundaries(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    assert (
+        client.post(
+            "/projects",
+            json={"workspace_id": "workspace-a", "name": "Research"},
+            headers=admin_headers,
+        ).status_code
+        == 200
+    )
+    created = client.post(
+        "/admin/users",
+        json={"email": "viewer@example.com", "password": "Viewer-password-1"},
+        headers=admin_headers,
+    )
+    viewer_id = created.json()["user"]["user_id"]
+    client.post(
+        "/projects/workspace-a/share",
+        json={"role": "viewer", "user_id": viewer_id},
+        headers=admin_headers,
+    )
+    viewer_headers = _login(client, "viewer@example.com", "Viewer-password-1")
+
+    build_denied = client.post(
+        "/projects/workspace-a/graph/jobs",
+        json={"job_type": "graph_build"},
+        headers=viewer_headers,
+    )
+    query = client.post(
+        "/projects/workspace-a/graph/jobs",
+        json={
+            "job_type": "graph_query",
+            "query": "generated_molecules_without_direct_evidence",
+        },
+        headers=viewer_headers,
+    )
+    cross_program_denied = client.post(
+        "/projects/workspace-a/graph/jobs",
+        json={
+            "job_type": "graph_query",
+            "query": "generated_molecules_without_direct_evidence",
+            "included_project_ids": ["workspace-a", "workspace-b"],
+        },
+        headers=viewer_headers,
+    )
+    export_denied = client.post(
+        "/projects/workspace-a/graph/jobs",
+        json={"job_type": "graph_export"},
+        headers=viewer_headers,
+    )
+    arbitrary_path_denied = client.post(
+        "/projects/workspace-a/graph/jobs",
+        json={"job_type": "graph_query", "graph_path": "/tmp/graph.json"},
+        headers=admin_headers,
+    )
+    recommendation = client.post(
+        "/projects/workspace-a/graph/jobs",
+        json={"job_type": "graph_recommendation"},
+        headers=admin_headers,
+    )
+
+    assert build_denied.status_code == 403
+    assert "graph:build" in build_denied.text
+    assert query.status_code == 200, query.text
+    assert query.json()["graph_boundary"] == "memory_and_reasoning_layer_not_new_biomedical_truth"
+    assert cross_program_denied.status_code == 403
+    assert "workspace-b" in cross_program_denied.text
+    assert export_denied.status_code == 403
+    assert "graph:export" in export_denied.text
+    assert arbitrary_path_denied.status_code == 400
+    assert "arbitrary file paths" in arbitrary_path_denied.text
+    assert recommendation.status_code == 200, recommendation.text
+    assert recommendation.json()["recommendation_boundary"] == "advisory_not_automatic_decisions"
+    assert recommendation.json()["job"]["metadata"]["graph_recommendations_advisory"] is True
 
 
 def test_hosted_mode_blocks_arbitrary_codex_tasks(tmp_path: Path) -> None:

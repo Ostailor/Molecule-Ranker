@@ -1,6 +1,6 @@
 # Admin and Operator Runbook
 
-This runbook is for V1.4 internal hosted deployments. molecule-ranker is not a
+This runbook is for V1.5 internal hosted deployments. molecule-ranker is not a
 regulated clinical product and does not provide medical advice, dosage,
 synthesis instructions, lab protocols, or patient treatment guidance.
 
@@ -27,7 +27,7 @@ synthesis instructions, lab protocols, or patient treatment guidance.
    curl -fsS http://127.0.0.1:8765/version
    ```
 
-The version endpoint must report `1.4.0`, `api.v1`, `artifacts.v1`,
+The version endpoint must report `1.5.0`, `api.v1`, `artifacts.v1`,
 `data-contracts.v1`, and `mr_warehouse_v1.0.0`.
 
 ## Routine Operations
@@ -54,7 +54,7 @@ The version endpoint must report `1.4.0`, `api.v1`, `artifacts.v1`,
 
 ## Backup and Restore
 
-Backup cadence and restore drills are release gates for V1.4.
+Backup cadence and restore drills are release gates for V1.5.
 
 Backup:
 

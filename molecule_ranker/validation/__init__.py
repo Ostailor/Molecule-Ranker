@@ -11,6 +11,13 @@ from molecule_ranker.validation.golden_workflows import (
     get_golden_workflow,
     list_golden_workflows,
 )
+from molecule_ranker.validation.graph import (
+    GraphGuardrailAuditReport,
+    GraphGuardrailFinding,
+    GraphValidationReport,
+    run_graph_guardrail_audit,
+    run_graph_validation,
+)
 from molecule_ranker.validation.guardrail_audit import (
     GuardrailAuditReport,
     GuardrailFinding,
@@ -52,6 +59,9 @@ __all__ = [
     "GoldenWorkflowResult",
     "GuardrailAuditReport",
     "GuardrailFinding",
+    "GraphGuardrailAuditReport",
+    "GraphGuardrailFinding",
+    "GraphValidationReport",
     "DesignGuardrailAuditReport",
     "DesignGuardrailFinding",
     "DesignValidationReport",
@@ -77,4 +87,6 @@ __all__ = [
     "run_structure_guardrail_audit",
     "run_structure_validation",
     "run_golden_workflows",
+    "run_graph_guardrail_audit",
+    "run_graph_validation",
 ]

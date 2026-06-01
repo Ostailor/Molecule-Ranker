@@ -15,12 +15,12 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V1.4 upgrades the V1.3 validated internal research platform with "
-            "multi-objective portfolio optimization and program-level decision analytics. "
+            "V1.5 upgrades the V1.4 validated internal research platform with "
+            "a cross-program knowledge graph and mechanism-level reasoning layer. "
             "The validated internal research platform MVP boundary remains intact: "
-            "portfolio recommendations, structure workflows, docking scores, model "
-            "predictions, and generated molecules are computational prioritization "
-            "signals, not biomedical claims.",
+            "graph paths, portfolio recommendations, structure workflows, docking "
+            "scores, model predictions, and generated molecules are computational "
+            "prioritization signals, not biomedical claims.",
             "",
             "## Included",
             "",
@@ -39,6 +39,17 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- Program, portfolio, candidate, objective, constraint, optimization-run, "
             "selection, scenario, stage-gate, budget, sensitivity, and decision-memo "
             "schemas for V1.4 portfolio analytics.",
+            "- KnowledgeGraph, GraphEntity, and GraphRelation schemas for V1.5 "
+            "cross-program memory with explicit provenance and hypothesis boundaries.",
+            "- Ontology and identifier mapping for disease, target, molecule, mechanism, "
+            "scaffold, assay-result, risk, literature-claim, and expert-decision nodes.",
+            "- Deterministic graph building from existing ranking, assay, review, "
+            "developability, portfolio, and generated-molecule artifacts.",
+            "- Cross-program reasoning queries for recurring mechanisms, target outcomes, "
+            "scaffold/family patterns, contradictions, staleness, repeated blockers, "
+            "review-outcome correlations, novelty checks, and prior-knowledge reuse.",
+            "- Graph dashboard and Codex graph assistant with guardrails that prevent "
+            "invented nodes, edges, mechanisms, citations, evidence, or assay results.",
             "- Deterministic multi-objective portfolio selection with diversity, "
             "learning-value, uncertainty, budget, and correlated-risk constraints.",
             "- Expert-review, assay-triage, learning-batch, deprioritization, "
@@ -64,8 +75,11 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- poses are not experimental evidence",
             "- structure-based scores are not activity evidence",
             "- portfolio recommendations are prioritization aids only",
+            "- knowledge graph paths are memory and reasoning aids only",
+            "- graph inference must not create EvidenceItem records or assay results",
+            "- graph-inferred relationships are hypotheses unless source-backed",
             "- Codex must not create portfolio selections, scores, evidence, assay "
-            "results, citations, or molecules",
+            "results, citations, molecules, graph nodes, graph edges, or mechanisms",
             "- predicted structures are lower-confidence than suitable experimental structures",
             "- Codex outputs are assistant artifacts, not biomedical evidence",
             "",

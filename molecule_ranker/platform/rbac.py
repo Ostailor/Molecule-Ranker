@@ -53,6 +53,11 @@ Permission = Literal[
     "portfolio:approve_stage_gate",
     "portfolio:export",
     "portfolio:configure",
+    "graph:read",
+    "graph:build",
+    "graph:query",
+    "graph:export",
+    "graph:admin",
     "admin:manage_users",
     "admin:manage_org",
     "admin:view_audit",
@@ -111,6 +116,11 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "portfolio:approve_stage_gate",
         "portfolio:export",
         "portfolio:configure",
+        "graph:read",
+        "graph:build",
+        "graph:query",
+        "graph:export",
+        "graph:admin",
         "admin:view_audit",
     },
     "editor": {
@@ -146,6 +156,10 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "portfolio:run",
         "portfolio:export",
         "portfolio:configure",
+        "graph:read",
+        "graph:build",
+        "graph:query",
+        "graph:export",
     },
     "reviewer": {
         "project:read",
@@ -163,6 +177,8 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "structure:read",
         "portfolio:read",
         "portfolio:approve_stage_gate",
+        "graph:read",
+        "graph:query",
     },
     "viewer": {
         "project:read",
@@ -176,6 +192,8 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "model:read",
         "structure:read",
         "portfolio:read",
+        "graph:read",
+        "graph:query",
     },
     "runner": {
         "project:read",
@@ -196,6 +214,9 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "structure:run",
         "portfolio:read",
         "portfolio:run",
+        "graph:read",
+        "graph:build",
+        "graph:query",
     },
 }
 

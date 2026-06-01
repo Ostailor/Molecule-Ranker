@@ -132,7 +132,16 @@
               "summarize_structure_assessment",
               "explain_pose_qc_failure",
               "draft_structure_report_summary",
-              "plan_followup_structure_workflow"
+              "plan_followup_structure_workflow",
+              "summarize_portfolio_tradeoffs",
+              "draft_decision_memo",
+              "explain_candidate_rejection",
+              "explain_scenario_differences",
+              "generate_review_questions_for_portfolio",
+              "draft_project_update_from_portfolio",
+              "explain_graph_patterns",
+              "draft_graph_reuse_questions",
+              "summarize_graph_contradictions"
             ],
             "title": "Task Type",
             "type": "string"
@@ -1266,6 +1275,153 @@
         "title": "PlatformSettingsRequest",
         "type": "object"
       },
+      "PortfolioJobRequest": {
+        "properties": {
+          "batch_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Type"
+          },
+          "candidate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Id"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "explicit_export_permission": {
+            "default": false,
+            "title": "Explicit Export Permission",
+            "type": "boolean"
+          },
+          "external_export": {
+            "default": false,
+            "title": "External Export",
+            "type": "boolean"
+          },
+          "job_type": {
+            "title": "Job Type",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "scenario": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scenario",
+            "type": "array"
+          },
+          "scenarios": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scenarios",
+            "type": "array"
+          },
+          "use_codex": {
+            "default": false,
+            "title": "Use Codex",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "job_type"
+        ],
+        "title": "PortfolioJobRequest",
+        "type": "object"
+      },
+      "PortfolioStageGateApprovalRequest": {
+        "properties": {
+          "approval_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Note"
+          },
+          "candidate_id": {
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "decision": {
+            "default": "advance",
+            "title": "Decision",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "reviewer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "stage_gate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Gate Id"
+          }
+        },
+        "required": [
+          "candidate_id"
+        ],
+        "title": "PortfolioStageGateApprovalRequest",
+        "type": "object"
+      },
       "ProjectCommentRequest": {
         "properties": {
           "body": {
@@ -2092,7 +2248,7 @@
   "info": {
     "description": "Local API by default. Hosted mode adds users, teams, RBAC, jobs, audit logs, guarded Codex worker orchestration, and V1.0 integrations.",
     "title": "molecule-ranker API",
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7146,6 +7302,114 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/portfolio/jobs": {
+      "post": {
+        "operationId": "enqueue_portfolio_job_api_v1_projects__project_id__portfolio_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortfolioJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Portfolio Job Api V1 Projects  Project Id  Portfolio Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Portfolio Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/portfolio/stage-gates/approve": {
+      "post": {
+        "operationId": "approve_portfolio_stage_gate_api_v1_projects__project_id__portfolio_stage_gates_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortfolioStageGateApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Portfolio Stage Gate Api V1 Projects  Project Id  Portfolio Stage Gates Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Portfolio Stage Gate",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/share": {
       "post": {
         "operationId": "share_project_api_v1_projects__project_id__share_post",
@@ -8991,6 +9255,48 @@
         ]
       }
     },
+    "/dashboard/projects/{project_id}/knowledge-graph": {
+      "get": {
+        "operationId": "knowledge_graph_page_dashboard_projects__project_id__knowledge_graph_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Knowledge Graph Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
     "/dashboard/projects/{project_id}/models": {
       "get": {
         "operationId": "model_registry_page_dashboard_projects__project_id__models_get",
@@ -9340,6 +9646,99 @@
           }
         },
         "summary": "Model Card Detail Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/portfolio": {
+      "get": {
+        "operationId": "portfolio_overview_page_dashboard_projects__project_id__portfolio_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Portfolio Overview Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/portfolio/{section}": {
+      "get": {
+        "operationId": "portfolio_section_page_dashboard_projects__project_id__portfolio__section__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "section",
+            "required": true,
+            "schema": {
+              "title": "Section",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Portfolio Section Page",
         "tags": [
           "web"
         ]
@@ -12997,6 +13396,114 @@
           }
         },
         "summary": "Project Permissions",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/portfolio/jobs": {
+      "post": {
+        "operationId": "enqueue_portfolio_job_projects__project_id__portfolio_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortfolioJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Portfolio Job Projects  Project Id  Portfolio Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Portfolio Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/portfolio/stage-gates/approve": {
+      "post": {
+        "operationId": "approve_portfolio_stage_gate_projects__project_id__portfolio_stage_gates_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortfolioStageGateApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Portfolio Stage Gate Projects  Project Id  Portfolio Stage Gates Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Portfolio Stage Gate",
         "tags": [
           "platform"
         ]

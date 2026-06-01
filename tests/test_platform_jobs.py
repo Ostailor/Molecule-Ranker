@@ -529,6 +529,110 @@ def test_portfolio_external_export_requires_explicit_permission(tmp_path: Path) 
     assert job.status == "queued"
 
 
+def test_graph_jobs_require_permissions_and_worker_outputs_are_advisory(
+    tmp_path: Path,
+) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    viewer = database.create_user(email="viewer@example.com", password="Viewer-password-1")
+    database.grant_project_permission(
+        project_id="project-1",
+        role="viewer",
+        actor_user_id=user.user_id,
+        user_id=viewer.user_id,
+    )
+    _write_graph_candidates(tmp_path)
+    queue = PlatformJobQueue(database)
+
+    try:
+        queue.enqueue(job_type="graph_build", requested_by=viewer, project_id="project-1")
+    except PermissionError as exc:
+        assert "graph:build" in str(exc)
+    else:
+        raise AssertionError("Expected graph build permission denial.")
+
+    build = queue.enqueue(job_type="graph_build", requested_by=user, project_id="project-1")
+    finished_build = PipelineWorker(database=database).run_once()
+
+    assert finished_build is not None
+    assert finished_build.job_id == build.job_id
+    assert finished_build.status == "succeeded"
+    assert finished_build.result_artifact_ids
+    with database.engine.connect() as connection:
+        graph_artifact = (
+            connection.execute(
+                select(artifact_records).where(
+                    artifact_records.c.artifact_id == finished_build.result_artifact_ids[0]
+                )
+            )
+            .mappings()
+            .one()
+        )
+    graph_payload = json.loads(Path(graph_artifact["path"]).read_text())
+    assert graph_payload["limitations"]
+    assert graph_payload["entities"]
+
+    query = queue.enqueue(
+        job_type="graph_query",
+        requested_by=viewer,
+        project_id="project-1",
+        config_snapshot={
+            "graph_artifact_id": finished_build.result_artifact_ids[0],
+            "query": "candidates_for_target",
+            "target_symbol": "MAOB",
+        },
+    )
+    finished_query = PipelineWorker(database=database).run_once()
+
+    assert finished_query is not None
+    assert finished_query.job_id == query.job_id
+    assert finished_query.status == "succeeded"
+    with database.engine.connect() as connection:
+        query_artifact = (
+            connection.execute(
+                select(artifact_records).where(
+                    artifact_records.c.artifact_id == finished_query.result_artifact_ids[0]
+                )
+            )
+            .mappings()
+            .one()
+        )
+    query_payload = json.loads(Path(query_artifact["path"]).read_text())
+    assert query_payload["query_results"][0]["provenance"]
+
+    try:
+        queue.enqueue(
+            job_type="graph_export",
+            requested_by=viewer,
+            project_id="project-1",
+            config_snapshot={"graph_artifact_id": finished_build.result_artifact_ids[0]},
+        )
+    except PermissionError as exc:
+        assert "graph:export" in str(exc)
+    else:
+        raise AssertionError("Expected graph export permission denial.")
+
+
+def test_cross_program_graph_jobs_require_permission_across_all_projects(
+    tmp_path: Path,
+) -> None:
+    database, user = _database_with_project_user(tmp_path)
+
+    try:
+        PlatformJobQueue(database).enqueue(
+            job_type="graph_query",
+            requested_by=user,
+            project_id="project-1",
+            config_snapshot={
+                "query": "generated_molecules_without_direct_evidence",
+                "included_project_ids": ["project-1", "project-2"],
+            },
+        )
+    except PermissionError as exc:
+        assert "project-2" in str(exc)
+    else:
+        raise AssertionError("Expected cross-program graph permission denial.")
+
+
 def test_design_generation_budget_limit_enforced(tmp_path: Path) -> None:
     database, user = _database_with_project_user(tmp_path)
 
@@ -555,3 +659,35 @@ def _database_with_project_user(tmp_path: Path):
         user_id=user.user_id,
     )
     return database, user
+
+
+def _write_graph_candidates(path: Path) -> None:
+    path.joinpath("candidates.json").write_text(
+        json.dumps(
+            {
+                "disease": {"canonical_name": "Parkinson disease"},
+                "targets": [
+                    {
+                        "symbol": "MAOB",
+                        "evidence": [
+                            {
+                                "source": "opentargets",
+                                "source_id": "OTAR-test",
+                                "confidence": 0.8,
+                            }
+                        ],
+                    }
+                ],
+                "candidates": [
+                    {
+                        "candidate_id": "candidate-rasagiline",
+                        "name": "Rasagiline",
+                        "known_targets": ["MAOB"],
+                        "score": 0.82,
+                        "scaffold": "indane",
+                    }
+                ],
+            },
+            sort_keys=True,
+        )
+    )

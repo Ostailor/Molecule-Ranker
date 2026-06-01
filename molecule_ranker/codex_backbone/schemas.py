@@ -47,6 +47,15 @@ CodexTaskType = Literal[
     "explain_scenario_differences",
     "generate_review_questions_for_portfolio",
     "draft_project_update_from_portfolio",
+    "explain_graph_patterns",
+    "draft_graph_reuse_questions",
+    "summarize_graph_contradictions",
+    "explain_mechanism_hypothesis",
+    "summarize_contradictions",
+    "draft_graph_query_answer",
+    "explain_cross_program_recommendation",
+    "summarize_stale_decisions",
+    "draft_mechanism_review_questions",
 ]
 CodexOutputFormat = Literal["json", "markdown", "text"]
 CodexResultStatus = Literal[

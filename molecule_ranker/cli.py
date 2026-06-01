@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import uuid
 from collections import Counter
+from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -283,7 +284,7 @@ config_app = typer.Typer(
     no_args_is_help=True,
 )
 validate_app = typer.Typer(
-    help="Run V1.0 validation suites.",
+    help="Run molecule-ranker validation suites.",
     no_args_is_help=True,
 )
 api_app = typer.Typer(
@@ -370,6 +371,10 @@ structure_app = typer.Typer(
     help="V1.3 optional structure workflow artifact commands.",
     no_args_is_help=True,
 )
+graph_app = typer.Typer(
+    help="V1.5 knowledge graph export and reasoning commands.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
@@ -392,6 +397,7 @@ app.add_typer(release_app, name="release")
 app.add_typer(design_app, name="design")
 app.add_typer(model_app, name="model")
 app.add_typer(structure_app, name="structure")
+app.add_typer(graph_app, name="graph")
 model_app.add_typer(model_dataset_app, name="dataset")
 model_app.add_typer(model_registry_app, name="registry")
 codex_app.add_typer(codex_assist_app, name="assist")
@@ -762,6 +768,37 @@ def validate_portfolio_command(
         raise typer.Exit(code=1)
 
 
+@validate_app.command("graph")
+def validate_graph_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    fixture: Annotated[
+        Literal["golden", "fake_relation", "overclaim", "causality_claim"],
+        typer.Option("--fixture", help="Synthetic graph-validation fixture to run."),
+    ] = "golden",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V1.5 knowledge graph validation workflow."""
+    from molecule_ranker.validation import run_graph_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "graph"
+    report = run_graph_validation(output_dir=output_dir, fixture=fixture)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Graph validation: {report.status}")
+        typer.echo(f"Fixture: {fixture}")
+        typer.echo(f"Artifacts: {len(report.artifacts)}")
+        typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
+        typer.echo(f"JSON: {output_dir / 'graph_guardrail_audit.json'}")
+        typer.echo(f"Markdown: {output_dir / 'graph_guardrail_audit.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
 @validate_app.command("security")
 def validate_security_command(
     root_dir: Annotated[
@@ -821,6 +858,353 @@ def api_export_openapi_command(
     schema = create_app(root_dir=root_dir).openapi()
     target.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n")
     typer.echo(str(target))
+
+
+@graph_app.command("export")
+def graph_export_command(
+    graph_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--graph",
+            "--input",
+            "-i",
+            exists=True,
+            dir_okay=False,
+            help="KnowledgeGraph JSON input.",
+        ),
+    ] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Output file, or output directory for CSV export."),
+    ] = Path("graph_export.json"),
+    export_format: Annotated[
+        Literal["json", "csv", "ttl"],
+        typer.Option("--format", help="Export format."),
+    ] = "json",
+) -> None:
+    """Export a V1.5 knowledge graph as JSON, CSV, or Turtle."""
+    from molecule_ranker.knowledge_graph.export import export_graph
+
+    if graph_path is None:
+        raise typer.BadParameter("--graph is required.")
+    graph = _load_knowledge_graph_cli(graph_path)
+    target = export_graph(graph, output, export_format)
+    typer.echo(str(target))
+
+
+@graph_app.command("build")
+def graph_build_command(
+    from_project: Annotated[
+        Path | None,
+        typer.Option("--from-project", file_okay=False, help="Project workspace directory."),
+    ] = None,
+    from_run: Annotated[
+        Path | None,
+        typer.Option("--from-run", file_okay=False, help="Run artifact directory."),
+    ] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output graph JSON path."),
+    ] = Path("graph.json"),
+) -> None:
+    """Build a V1.5 knowledge graph from project or run artifacts."""
+
+    graph = _build_knowledge_graph_cli(from_project=from_project, from_run=from_run)
+    _write_json_cli(output, graph.model_dump(mode="json"))
+    typer.echo(str(output))
+
+
+@graph_app.command("query")
+def graph_query_command(
+    graph_path: Annotated[
+        Path,
+        typer.Option("--graph", exists=True, dir_okay=False, help="KnowledgeGraph JSON input."),
+    ],
+    query: Annotated[str, typer.Option("--query", help="Graph query name.")],
+    target_symbol: Annotated[str | None, typer.Option("--target-symbol")] = None,
+    disease: Annotated[str | None, typer.Option("--disease")] = None,
+    candidate_id: Annotated[str | None, typer.Option("--candidate-id")] = None,
+    molecule_id: Annotated[str | None, typer.Option("--molecule-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit JSON output.")] = False,
+) -> None:
+    """Run a graph reasoning query."""
+    graph = _load_knowledge_graph_cli(graph_path)
+    results = _run_graph_query_cli(
+        graph,
+        query=query,
+        target_symbol=target_symbol,
+        disease=disease,
+        candidate_id=candidate_id,
+        molecule_id=molecule_id,
+    )
+    payload = [result.model_dump(mode="json") for result in results]
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for result in results:
+        typer.echo(
+            f"{result.query_name}: confidence={result.confidence:.3g} "
+            f"provenance={','.join(result.provenance)}"
+        )
+
+
+@graph_app.command("mechanism")
+def graph_mechanism_command(
+    graph_path: Annotated[
+        Path,
+        typer.Option("--graph", exists=True, dir_okay=False, help="KnowledgeGraph JSON input."),
+    ],
+    disease: Annotated[str | None, typer.Option("--disease", help="Disease name filter.")] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output mechanism JSON path."),
+    ] = Path("mechanisms.json"),
+) -> None:
+    """Extract mechanism hypotheses from a graph."""
+    from molecule_ranker.knowledge_graph.mechanism import extract_mechanism_hypotheses
+
+    graph = _load_knowledge_graph_cli(graph_path)
+    mechanisms = extract_mechanism_hypotheses(graph)
+    if disease:
+        entity_ids = {
+            entity.entity_id
+            for entity in graph.entities
+            if entity.entity_type == "disease" and disease.lower() in entity.name.lower()
+        }
+        mechanisms = [
+            mechanism
+            for mechanism in mechanisms
+            if mechanism.disease_entity_id in entity_ids or mechanism.disease_entity_id is None
+        ]
+    _write_json_cli(output, [mechanism.model_dump(mode="json") for mechanism in mechanisms])
+    typer.echo(str(output))
+
+
+@graph_app.command("contradictions")
+def graph_contradictions_command(
+    graph_path: Annotated[
+        Path,
+        typer.Option("--graph", exists=True, dir_okay=False, help="KnowledgeGraph JSON input."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output contradiction report JSON."),
+    ] = Path("contradiction_report.json"),
+) -> None:
+    """Write an advisory graph contradiction report."""
+    from molecule_ranker.knowledge_graph.contradiction import build_contradiction_report
+
+    report = build_contradiction_report(_load_knowledge_graph_cli(graph_path))
+    _write_json_cli(output, _jsonable_cli(report))
+    typer.echo(str(output))
+
+
+@graph_app.command("stale")
+def graph_stale_command(
+    graph_path: Annotated[
+        Path,
+        typer.Option("--graph", exists=True, dir_okay=False, help="KnowledgeGraph JSON input."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output staleness report JSON."),
+    ] = Path("staleness_report.json"),
+) -> None:
+    """Write an advisory graph staleness report."""
+    from molecule_ranker.knowledge_graph.contradiction import build_staleness_report
+
+    report = build_staleness_report(_load_knowledge_graph_cli(graph_path))
+    _write_json_cli(output, _jsonable_cli(report))
+    typer.echo(str(output))
+
+
+@graph_app.command("recommend")
+def graph_recommend_command(
+    graph_path: Annotated[
+        Path,
+        typer.Option("--graph", exists=True, dir_okay=False, help="KnowledgeGraph JSON input."),
+    ],
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output recommendation JSON."),
+    ] = Path("graph_recommendations.json"),
+) -> None:
+    """Generate advisory graph recommendations."""
+    from molecule_ranker.knowledge_graph.recommendations import generate_graph_recommendations
+
+    recommendations = generate_graph_recommendations(
+        _load_knowledge_graph_cli(graph_path),
+        current_project_id=project_id,
+    )
+    _write_json_cli(
+        output,
+        [recommendation.model_dump(mode="json") for recommendation in recommendations],
+    )
+    typer.echo(str(output))
+
+
+@graph_app.command("dashboard")
+def graph_dashboard_command(
+    graph_path: Annotated[
+        Path,
+        typer.Option("--graph", exists=True, dir_okay=False, help="KnowledgeGraph JSON input."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", file_okay=False, help="Output dashboard directory."),
+    ] = Path("graph_dashboard"),
+) -> None:
+    """Render a static knowledge graph dashboard."""
+    from molecule_ranker.knowledge_graph.dashboard import write_knowledge_graph_dashboard
+
+    target = write_knowledge_graph_dashboard(_load_knowledge_graph_cli(graph_path), output)
+    typer.echo(str(target))
+
+
+def _load_knowledge_graph_cli(path: Path) -> Any:
+    from molecule_ranker.knowledge_graph.schemas import KnowledgeGraph
+
+    return KnowledgeGraph.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _build_knowledge_graph_cli(
+    *,
+    from_project: Path | None,
+    from_run: Path | None,
+) -> Any:
+    from molecule_ranker.knowledge_graph.builder import GraphBuilder
+    from molecule_ranker.knowledge_graph.mechanism import extract_mechanism_hypotheses
+    from molecule_ranker.knowledge_graph.schemas import KnowledgeGraph
+    from molecule_ranker.workspace.store import ProjectWorkspaceStore
+
+    directories: list[Path] = []
+    graph_id_parts: list[str] = []
+    if from_project is not None:
+        project_dir = from_project.resolve()
+        graph_id_parts.append(project_dir.name or "project")
+        directories.append(project_dir)
+        try:
+            workspace = ProjectWorkspaceStore(project_dir).load()
+        except ValueError:
+            workspace = None
+        if workspace is not None:
+            directories.extend(Path(run.run_dir).resolve() for run in workspace.runs)
+    if from_run is not None:
+        run_dir = from_run.resolve()
+        graph_id_parts.append(run_dir.name or "run")
+        directories.append(run_dir)
+    graph_id = "kg-cli-" + "-".join(graph_id_parts or ["graph"])
+    directories = _graph_artifact_directories(directories)
+    if not directories:
+        if from_project is None and from_run is None:
+            raise typer.BadParameter("Provide --from-project or --from-run with graph artifacts.")
+        return KnowledgeGraph(
+            graph_id=graph_id,
+            metadata={"warning": "No graph source artifacts found for CLI build."},
+        )
+    graphs = [
+        GraphBuilder().build_from_directory(directory, graph_id=f"{graph_id}-{index + 1}")
+        for index, directory in enumerate(directories)
+    ]
+    if len(graphs) == 1:
+        return graphs[0].model_copy(update={"graph_id": graph_id})
+    entities = {entity.entity_id: entity for graph in graphs for entity in graph.entities}
+    relations = {relation.relation_id: relation for graph in graphs for relation in graph.relations}
+    graph = KnowledgeGraph(
+        graph_id=graph_id,
+        entities=sorted(entities.values(), key=lambda entity: entity.entity_id),
+        relations=sorted(relations.values(), key=lambda relation: relation.relation_id),
+    )
+    graph.mechanisms = extract_mechanism_hypotheses(graph)
+    return graph
+
+
+def _graph_artifact_directories(directories: list[Path]) -> list[Path]:
+    from molecule_ranker.knowledge_graph.builder import GraphBuilder
+
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for directory in directories:
+        resolved = directory.resolve()
+        if resolved in seen or not resolved.exists() or not resolved.is_dir():
+            continue
+        if any((resolved / filename).exists() for filename in GraphBuilder.ARTIFACT_FILENAMES):
+            result.append(resolved)
+            seen.add(resolved)
+    return result
+
+
+def _run_graph_query_cli(
+    graph: Any,
+    *,
+    query: str,
+    target_symbol: str | None,
+    disease: str | None,
+    candidate_id: str | None,
+    molecule_id: str | None,
+) -> list[Any]:
+    from molecule_ranker.knowledge_graph.reasoning import GraphReasoner
+
+    reasoner = GraphReasoner(graph)
+    if query == "candidates_for_target":
+        if not target_symbol:
+            raise typer.BadParameter("--target-symbol is required for candidates_for_target.")
+        return reasoner.candidates_for_target(target_symbol)
+    if query == "mechanisms_for_disease":
+        if not disease:
+            raise typer.BadParameter("--disease is required for mechanisms_for_disease.")
+        return reasoner.mechanisms_for_disease(disease)
+    if query == "generated_molecules_without_direct_evidence":
+        return reasoner.generated_molecules_without_direct_evidence()
+    if query == "candidates_with_contradictory_evidence":
+        return reasoner.candidates_with_contradictory_evidence()
+    if query == "scaffolds_with_positive_assay_history":
+        return reasoner.scaffolds_with_positive_assay_history()
+    if query == "targets_with_repeated_developability_failures":
+        return reasoner.targets_with_repeated_developability_failures()
+    if query == "mechanisms_supported_across_programs":
+        return reasoner.mechanisms_supported_across_programs()
+    if query == "molecules_with_safety_concerns_across_programs":
+        return reasoner.molecules_with_safety_concerns_across_programs()
+    if query == "portfolios_reusing_same_scaffold_risk":
+        return reasoner.portfolios_reusing_same_scaffold_risk()
+    if query == "projects_with_stale_model_predictions":
+        return reasoner.projects_with_stale_model_predictions()
+    if query == "graph_paths_between_disease_and_molecule":
+        if not disease or not molecule_id:
+            raise typer.BadParameter(
+                "--disease and --molecule-id are required for "
+                "graph_paths_between_disease_and_molecule."
+            )
+        return reasoner.graph_paths_between_disease_and_molecule(disease, molecule_id)
+    if query == "evidence_gaps_for_candidate":
+        if not candidate_id:
+            raise typer.BadParameter("--candidate-id is required for evidence_gaps_for_candidate.")
+        return reasoner.evidence_gaps_for_candidate(candidate_id)
+    raise typer.BadParameter(f"Unsupported graph query: {query}")
+
+
+def _write_json_cli(path: Path, payload: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_jsonable_cli(payload), indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def _jsonable_cli(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if is_dataclass(value) and not isinstance(value, type):
+        return {field.name: _jsonable_cli(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable_cli(item) for key, item in value.items()}
+    if isinstance(value, list | tuple | set):
+        return [_jsonable_cli(item) for item in value]
+    return value
 
 
 @integration_system_app.command("create")

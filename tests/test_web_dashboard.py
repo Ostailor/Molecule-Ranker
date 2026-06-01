@@ -10,6 +10,14 @@ from fastapi.testclient import TestClient
 
 from molecule_ranker.integrations.schemas import ExternalSystem
 from molecule_ranker.integrations.store import IntegrationStore
+from molecule_ranker.knowledge_graph import (
+    GraphEntity,
+    GraphProvenance,
+    GraphRelation,
+    KnowledgeGraph,
+    KnowledgeGraphStore,
+    MechanismHypothesis,
+)
 from molecule_ranker.models.registry import ModelRegistry
 from molecule_ranker.models.schemas import (
     ModelCard,
@@ -74,6 +82,20 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/projects/workspace-a/portfolio/batches",
         "/dashboard/projects/workspace-a/portfolio/memos",
         "/dashboard/projects/workspace-a/portfolio/audit",
+        "/dashboard/projects/workspace-a/knowledge-graph",
+        "/dashboard/projects/workspace-a/knowledge-graph/search",
+        "/dashboard/projects/workspace-a/knowledge-graph/targets/target%3AMAOB",
+        "/dashboard/projects/workspace-a/knowledge-graph/molecules/molecule%3Arasagiline",
+        (
+            "/dashboard/projects/workspace-a/knowledge-graph/generated-molecules/"
+            "generated_molecule%3Agen1"
+        ),
+        "/dashboard/projects/workspace-a/knowledge-graph/mechanisms/mechanism%3Amaob",
+        "/dashboard/projects/workspace-a/knowledge-graph/contradictions",
+        "/dashboard/projects/workspace-a/knowledge-graph/staleness",
+        "/dashboard/projects/workspace-a/knowledge-graph/recommendations",
+        "/dashboard/projects/workspace-a/knowledge-graph/query",
+        "/dashboard/projects/workspace-a/knowledge-graph/portfolio",
         "/dashboard/projects/workspace-a/candidates/Rasagiline",
         "/dashboard/projects/workspace-a/codex",
         "/dashboard/notifications",
@@ -219,12 +241,94 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
             "Stage gates",
             "portfolio:approve_stage_gate",
         ],
+        "/dashboard/projects/workspace-a/knowledge-graph": [
+            "Cross-program knowledge graph",
+            "memory and reasoning layer",
+            "does not create biomedical truth",
+        ],
     }
     for path, snippets in expectations.items():
         response = client.get(path)
         assert response.status_code == 200, path
         for snippet in snippets:
             assert snippet in response.text, path
+
+
+def test_knowledge_graph_dashboard_pages_show_labels_provenance_and_escape_html(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    _create_project_with_run(client, tmp_path, admin_headers, project_id="workspace-a")
+    _seed_knowledge_graph(tmp_path)
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    expectations = {
+        "/dashboard/projects/workspace-a/knowledge-graph": [
+            "Graph overview",
+            "Inferred relation",
+            "Generated hypothesis",
+            "Model prediction, not evidence",
+            "Codex graph summary, assistant output",
+            "/dashboard/projects/workspace-a/artifacts/kg-artifact/download",
+            "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;",
+        ],
+        "/dashboard/projects/workspace-a/knowledge-graph/search?q=MAOB": [
+            "Entity search",
+            "MAOB",
+        ],
+        "/dashboard/projects/workspace-a/knowledge-graph/targets/target%3AMAOB": [
+            "Target graph page",
+            "Graph edges",
+            "Inferred edge: graph hypothesis, not EvidenceItem",
+        ],
+        "/dashboard/projects/workspace-a/knowledge-graph/molecules/molecule%3Arasagiline": [
+            "Molecule graph page",
+            "Source-backed relation",
+            "Provenance links",
+        ],
+        (
+            "/dashboard/projects/workspace-a/knowledge-graph/generated-molecules/"
+            "generated_molecule%3Agen1"
+        ): [
+            "Generated molecule graph page",
+            "Generated hypothesis",
+            "hypothesis, not EvidenceItem",
+        ],
+        "/dashboard/projects/workspace-a/knowledge-graph/mechanisms/mechanism%3Amaob": [
+            "Mechanism hypothesis page",
+            "hypothesis, not proof",
+        ],
+        "/dashboard/projects/workspace-a/knowledge-graph/contradictions": [
+            "Contradiction report",
+            "advisory",
+        ],
+        "/dashboard/projects/workspace-a/knowledge-graph/staleness": [
+            "Staleness report",
+            "preserves temporal provenance",
+        ],
+        "/dashboard/projects/workspace-a/knowledge-graph/recommendations": [
+            "Cross-program recommendations",
+            "contradiction_to_resolve",
+            "advisory graph-derived summaries",
+        ],
+        "/dashboard/projects/workspace-a/knowledge-graph/query": [
+            "Graph query explorer",
+            "graph-derived summaries, not new evidence",
+        ],
+        "/dashboard/projects/workspace-a/knowledge-graph/portfolio": [
+            "Portfolio graph view",
+            "decision-memory context only",
+        ],
+    }
+
+    for path, snippets in expectations.items():
+        response = client.get(path)
+        assert response.status_code == 200, path
+        for snippet in snippets:
+            assert snippet in response.text, path
+        assert "<script>alert(\"x\")</script>" not in response.text
 
 
 def test_model_dashboard_pages_label_predictions_and_uncalibrated_warnings(
@@ -919,6 +1023,264 @@ def _create_project_with_run(
     store = ProjectWorkspaceStore(tmp_path)
     workspace = store.load()
     store.register_run_dir(tmp_path / "run-a", run_id="run-a", workspace=workspace)
+
+
+def _seed_knowledge_graph(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    graph = KnowledgeGraph(
+        graph_id="kg-dashboard-test",
+        entities=[
+            GraphEntity(
+                entity_id="disease:pd",
+                entity_type="disease",
+                name="Parkinson disease",
+                source_artifact_ids=["kg-artifact"],
+            ),
+            GraphEntity(
+                entity_id="target:MAOB",
+                entity_type="target",
+                name="MAOB",
+                identifiers={"uniprot": "P27338"},
+                source_artifact_ids=["kg-artifact"],
+            ),
+            GraphEntity(
+                entity_id="target:xss",
+                entity_type="target",
+                name='<script>alert("x")</script>',
+            ),
+            GraphEntity(
+                entity_id="molecule:rasagiline",
+                entity_type="molecule",
+                name="Rasagiline",
+                identifiers={"chembl": "CHEMBL887"},
+                provenance_refs=["prov:chembl"],
+                source_artifact_ids=["kg-artifact"],
+            ),
+            GraphEntity(
+                entity_id="generated_molecule:gen1",
+                entity_type="generated_molecule",
+                name="Generated MAOB follow-up",
+                source_artifact_ids=["kg-artifact"],
+            ),
+            GraphEntity(
+                entity_id="model_prediction:pred1",
+                entity_type="model_prediction",
+                name="MAOB surrogate prediction",
+                source_artifact_ids=["model-artifact"],
+            ),
+            GraphEntity(
+                entity_id="assay_result:positive",
+                entity_type="assay_result",
+                name="Positive assay",
+            ),
+            GraphEntity(
+                entity_id="assay_result:negative",
+                entity_type="assay_result",
+                name="Negative assay",
+            ),
+            GraphEntity(
+                entity_id="scaffold:indane",
+                entity_type="scaffold",
+                name="Indane scaffold",
+            ),
+            GraphEntity(
+                entity_id="developability_alert:alert1",
+                entity_type="developability_alert",
+                name="High hERG risk",
+            ),
+            GraphEntity(
+                entity_id="portfolio:current",
+                entity_type="portfolio",
+                name="Current portfolio",
+            ),
+            GraphEntity(
+                entity_id="review_decision:old",
+                entity_type="review_decision",
+                name="Old accept decision",
+            ),
+            GraphEntity(
+                entity_id="codex_summary:kg",
+                entity_type="codex_summary",
+                name="Assistant-generated graph summary",
+                metadata={"codex_summary": True},
+            ),
+        ],
+        relations=[
+            GraphRelation(
+                relation_id="rel-disease-target",
+                subject_entity_id="disease:pd",
+                predicate="associated_with",
+                object_entity_id="target:MAOB",
+                relation_type="evidence_backed",
+                confidence=0.8,
+                source_artifact_ids=["kg-artifact"],
+                source_record_ids=["ot-record-1"],
+            ),
+            GraphRelation(
+                relation_id="rel-mol-target",
+                subject_entity_id="molecule:rasagiline",
+                predicate="targets",
+                object_entity_id="target:MAOB",
+                relation_type="evidence_backed",
+                confidence=0.82,
+                source_artifact_ids=["kg-artifact"],
+                source_record_ids=["chembl-record-1"],
+            ),
+            GraphRelation(
+                relation_id="rel-generated-hypothesis",
+                subject_entity_id="generated_molecule:gen1",
+                predicate="hypothesizes",
+                object_entity_id="target:MAOB",
+                relation_type="inferred",
+                confidence=0.55,
+                source_artifact_ids=["kg-artifact"],
+                source_record_ids=["generation-record-1"],
+            ),
+            GraphRelation(
+                relation_id="rel-no-direct-evidence",
+                subject_entity_id="generated_molecule:gen1",
+                predicate="has_no_direct_evidence",
+                object_entity_id="target:MAOB",
+                relation_type="inferred",
+                confidence=0.9,
+                source_artifact_ids=["kg-artifact"],
+            ),
+            GraphRelation(
+                relation_id="rel-model-prediction",
+                subject_entity_id="model_prediction:pred1",
+                predicate="predicted_by_model",
+                object_entity_id="generated_molecule:gen1",
+                relation_type="model_prediction",
+                confidence=0.7,
+                source_artifact_ids=["model-artifact"],
+                source_record_ids=["prediction-1"],
+                metadata={"prediction_score": 0.7},
+            ),
+            GraphRelation(
+                relation_id="rel-assay-positive",
+                subject_entity_id="molecule:rasagiline",
+                predicate="supports",
+                object_entity_id="assay_result:positive",
+                relation_type="experimental",
+                confidence=0.8,
+                source_artifact_ids=["assay-artifact"],
+                source_record_ids=["assay-positive"],
+                created_at=now,
+                updated_at=now,
+                metadata={
+                    "assay_name": "MAOB biochemical",
+                    "target_symbol": "MAOB",
+                    "outcome": "positive",
+                    "qc_status": "passed",
+                },
+            ),
+            GraphRelation(
+                relation_id="rel-assay-negative",
+                subject_entity_id="molecule:rasagiline",
+                predicate="contradicts",
+                object_entity_id="assay_result:negative",
+                relation_type="experimental",
+                confidence=0.75,
+                source_artifact_ids=["assay-artifact"],
+                source_record_ids=["assay-negative"],
+                created_at=now,
+                updated_at=now,
+                metadata={
+                    "assay_name": "MAOB biochemical",
+                    "target_symbol": "MAOB",
+                    "outcome": "negative",
+                    "qc_status": "passed",
+                },
+            ),
+            GraphRelation(
+                relation_id="rel-explicit-contradiction",
+                subject_entity_id="assay_result:positive",
+                predicate="contradicts",
+                object_entity_id="assay_result:negative",
+                relation_type="experimental",
+                confidence=0.75,
+                source_artifact_ids=["assay-artifact"],
+                source_record_ids=["assay-positive", "assay-negative"],
+                metadata={"reason": "assay_positive_vs_negative"},
+            ),
+            GraphRelation(
+                relation_id="rel-scaffold",
+                subject_entity_id="molecule:rasagiline",
+                predicate="has_scaffold",
+                object_entity_id="scaffold:indane",
+                relation_type="computational",
+                confidence=0.7,
+                source_artifact_ids=["kg-artifact"],
+            ),
+            GraphRelation(
+                relation_id="rel-risk",
+                subject_entity_id="molecule:rasagiline",
+                predicate="has_developability_risk",
+                object_entity_id="developability_alert:alert1",
+                relation_type="computational",
+                confidence=0.6,
+                source_artifact_ids=["developability-artifact"],
+            ),
+            GraphRelation(
+                relation_id="rel-portfolio",
+                subject_entity_id="molecule:rasagiline",
+                predicate="selected_in_portfolio",
+                object_entity_id="portfolio:current",
+                relation_type="review",
+                confidence=0.5,
+                source_artifact_ids=["portfolio-artifact"],
+            ),
+            GraphRelation(
+                relation_id="rel-stale",
+                subject_entity_id="review_decision:old",
+                predicate="stale_due_to",
+                object_entity_id="molecule:rasagiline",
+                relation_type="inferred",
+                confidence=0.7,
+                source_artifact_ids=["kg-artifact"],
+                source_record_ids=["review-stale-1"],
+                metadata={"reason": "review_decision_predates_new_experimental_result"},
+            ),
+            GraphRelation(
+                relation_id="rel-codex",
+                subject_entity_id="codex_summary:kg",
+                predicate="supports",
+                object_entity_id="target:MAOB",
+                relation_type="inferred",
+                confidence=0.4,
+                metadata={"assistant_output": True},
+            ),
+        ],
+        provenance=[
+            GraphProvenance(
+                provenance_id="prov:codex",
+                source_type="codex_summary",
+                source_artifact_id="kg-artifact",
+                source_record_id="summary-1",
+                transformation="Assistant summary of graph paths; not evidence.",
+                confidence=0.4,
+            )
+        ],
+        mechanisms=[
+            MechanismHypothesis(
+                mechanism_id="mechanism:maob",
+                disease_entity_id="disease:pd",
+                target_entity_ids=["target:MAOB"],
+                molecule_entity_ids=["molecule:rasagiline"],
+                generated_molecule_entity_ids=["generated_molecule:gen1"],
+                evidence_relation_ids=["rel-disease-target", "rel-mol-target"],
+                contradiction_relation_ids=["rel-explicit-contradiction"],
+                summary="MAOB-linked graph hypothesis for review.",
+                support_score=0.7,
+                contradiction_score=0.4,
+                novelty_score=0.5,
+                confidence=0.6,
+                status="weakly_supported",
+                warnings=["Graph mechanism is not proof of causality."],
+            )
+        ],
+    )
+    KnowledgeGraphStore(tmp_path).save(graph)
 
 
 def _write_run(run_dir: Path, *, candidate_name: str, assay_file_name: str) -> None:

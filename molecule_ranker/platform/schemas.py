@@ -64,6 +64,13 @@ PlatformJobType = Literal[
     "portfolio_stage_gate",
     "portfolio_batch_build",
     "portfolio_memo",
+    "graph_build",
+    "graph_query",
+    "graph_mechanism_extract",
+    "graph_contradiction_scan",
+    "graph_staleness_scan",
+    "graph_recommendation",
+    "graph_export",
 ]
 PlatformJobStatus = Literal[
     "queued",

@@ -114,6 +114,23 @@ class PortfolioJobRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class GraphJobRequest(BaseModel):
+    job_type: str
+    query: str | None = None
+    target_symbol: str | None = None
+    disease: str | None = None
+    molecule_id: str | None = None
+    candidate_id: str | None = None
+    graph_artifact_id: str | None = None
+    graph_path: str | None = None
+    run_id: str | None = None
+    from_run: str | None = None
+    output_format: str | None = None
+    included_project_ids: list[str] = Field(default_factory=list)
+    project_ids: list[str] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 class DesignPlanApprovalRequest(BaseModel):
     plan_id: str
     run_id: str | None = None
@@ -756,6 +773,68 @@ def enqueue_portfolio_job(
         "job": job.model_dump(mode="json"),
         "portfolio_boundary": "advisory_until_approved",
         "memo_boundary": "codex_memos_are_assistant_output_not_final_decisions",
+    }
+
+
+@router.post("/projects/{project_id}/graph/jobs")
+def enqueue_graph_job(
+    project_id: str,
+    request: GraphJobRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    graph_job_types = {
+        "graph_build",
+        "graph_query",
+        "graph_mechanism_extract",
+        "graph_contradiction_scan",
+        "graph_staleness_scan",
+        "graph_recommendation",
+        "graph_export",
+    }
+    if request.job_type not in graph_job_types:
+        raise HTTPException(status_code=400, detail="Unsupported graph job type.")
+    require_project_access(database, user, project_id=project_id, action="read")
+    config = dict(request.config)
+    for key, value in {
+        "query": request.query,
+        "target_symbol": request.target_symbol,
+        "disease": request.disease,
+        "molecule_id": request.molecule_id,
+        "candidate_id": request.candidate_id,
+        "graph_artifact_id": request.graph_artifact_id,
+        "graph_path": request.graph_path,
+        "run_id": request.run_id,
+        "from_run": request.from_run,
+        "output_format": request.output_format,
+    }.items():
+        if value is not None:
+            config[key] = value
+    if request.included_project_ids:
+        config["included_project_ids"] = list(request.included_project_ids)
+    if request.project_ids:
+        config["project_ids"] = list(request.project_ids)
+    try:
+        job = PlatformJobQueue(database).enqueue(
+            job_type=request.job_type,
+            requested_by=user,
+            project_id=project_id,
+            config_snapshot=config,
+            metadata={
+                "knowledge_graph_v1_5": True,
+                "graph_memory_layer_only": True,
+                "graph_recommendations_advisory": request.job_type == "graph_recommendation",
+            },
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": job.status,
+        "job": job.model_dump(mode="json"),
+        "graph_boundary": "memory_and_reasoning_layer_not_new_biomedical_truth",
+        "recommendation_boundary": "advisory_not_automatic_decisions",
     }
 
 

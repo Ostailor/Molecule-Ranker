@@ -18,7 +18,7 @@ def render_portfolio_dashboard_html(run: PortfolioOptimizationRun) -> str:
         )
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        "<title>molecule-ranker V1.4 portfolio</title></head><body>"
+        "<title>molecule-ranker V1.5 portfolio</title></head><body>"
         "<h1>Portfolio Optimization</h1>"
         "<p>Research prioritization aid only. No clinical, lab, synthesis, dosing, "
         "or patient-treatment instruction.</p>"

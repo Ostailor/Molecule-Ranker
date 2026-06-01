@@ -1,15 +1,17 @@
 {
   "api_contract_version": "api.v1",
   "artifact_contract_version": "1.0",
-  "build_timestamp": "2026-05-30T19:27:08Z",
-  "dependency_lock_hash": "83275df4b459c247862e8343d9398d9e2884f91ec06c9a955c1713bb63ad2245",
-  "git_commit": "fff1e1bb30d975150663c2a497997b145df9aca2",
+  "build_timestamp": "2026-05-31T19:52:33Z",
+  "dependency_lock_hash": "b645427e5fb0bca22f04fdf9da268fb03e2a4fece8b86ba1211843e7fe394a6f",
+  "git_commit": "48968df13dc62a9d81e888225e4cbdd82710941e",
   "known_limitations": [
-    "V1.4 is for internal research use only and is not a clinical product.",
+    "V1.5 is for internal research use only and is not a clinical product.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules are computational hypotheses and require independent validation.",
     "Portfolio recommendations are research prioritization aids, not clinical or experimental instructions.",
     "Portfolio selections and scores must be computed by deterministic modules, not Codex.",
+    "Knowledge graph inference is a hypothesis layer and must not create evidence or assay results.",
+    "Graph paths do not prove causality, efficacy, safety, binding, or activity.",
     "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
     "Docking scores, poses, and structure-derived interactions are computational heuristics, not proof of binding or activity.",
     "Predicted structures are lower-confidence than suitable experimental structures.",
@@ -18,7 +20,7 @@
   ],
   "name": "molecule-ranker",
   "readiness": {
-    "gate_count": 14,
+    "gate_count": 15,
     "missing_gates": [],
     "status": "pass"
   },
@@ -30,5 +32,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "1.4.0"
+  "version": "1.5.0"
 }

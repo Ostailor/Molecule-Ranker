@@ -68,6 +68,13 @@ QUEUE_JOB_TYPES = {
     "portfolio_stage_gate",
     "portfolio_batch_build",
     "portfolio_memo",
+    "graph_build",
+    "graph_query",
+    "graph_mechanism_extract",
+    "graph_contradiction_scan",
+    "graph_staleness_scan",
+    "graph_recommendation",
+    "graph_export",
 }
 
 JOB_PERMISSION: dict[str, str] = {
@@ -120,6 +127,13 @@ JOB_PERMISSION: dict[str, str] = {
     "portfolio_stage_gate": "portfolio:run",
     "portfolio_batch_build": "portfolio:run",
     "portfolio_memo": "portfolio:run",
+    "graph_build": "graph:build",
+    "graph_query": "graph:query",
+    "graph_mechanism_extract": "graph:query",
+    "graph_contradiction_scan": "graph:query",
+    "graph_staleness_scan": "graph:query",
+    "graph_recommendation": "graph:query",
+    "graph_export": "graph:export",
 }
 
 PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
@@ -135,6 +149,15 @@ PORTFOLIO_JOB_TYPES = {
     "portfolio_stage_gate",
     "portfolio_batch_build",
     "portfolio_memo",
+}
+GRAPH_JOB_TYPES = {
+    "graph_build",
+    "graph_query",
+    "graph_mechanism_extract",
+    "graph_contradiction_scan",
+    "graph_staleness_scan",
+    "graph_recommendation",
+    "graph_export",
 }
 
 
@@ -199,6 +222,13 @@ class PlatformJobQueue:
             config_snapshot=config,
         )
         _enforce_hosted_portfolio_policy(
+            database=self.database,
+            requested_by=requested_by,
+            job_type=job_type,
+            project_id=project_id,
+            config_snapshot=config,
+        )
+        _enforce_hosted_graph_policy(
             database=self.database,
             requested_by=requested_by,
             job_type=job_type,
@@ -774,6 +804,96 @@ def _enforce_hosted_portfolio_policy(
     raise PermissionError(
         "External portfolio exports require portfolio:export and explicit permission."
     )
+
+
+def _enforce_hosted_graph_policy(
+    *,
+    database: PlatformDatabase,
+    requested_by: UserAccount,
+    job_type: str,
+    project_id: str | None,
+    config_snapshot: dict[str, Any],
+) -> None:
+    if job_type not in GRAPH_JOB_TYPES:
+        return
+    permission = JOB_PERMISSION[job_type]
+    project_ids = _graph_scope_project_ids(project_id, config_snapshot)
+    for scoped_project_id in project_ids:
+        if requested_by.is_admin:
+            continue
+        if not has_permission(
+            requested_by,
+            "graph:read",
+            project_id=scoped_project_id,
+            database=database,
+        ):
+            raise PermissionError(
+                f"Missing permission graph:read for graph project {scoped_project_id}."
+            )
+        if not has_permission(
+            requested_by,
+            permission,
+            project_id=scoped_project_id,
+            database=database,
+        ):
+            raise PermissionError(
+                f"Missing permission {permission} for graph project {scoped_project_id}."
+            )
+    if job_type == "graph_recommendation":
+        config_snapshot["graph_recommendations_are_advisory"] = True
+        config_snapshot["automatic_decisions_disabled"] = True
+    if bool(config_snapshot.get("graph_inference_creates_evidence")) or bool(
+        config_snapshot.get("graph_inference_creates_assay_results")
+    ):
+        raise PermissionError(
+            "Graph inference may not create EvidenceItem records or assay results."
+        )
+    if any(
+        key in config_snapshot
+        for key in ("graph_path", "artifact_paths", "artifact_dir", "from_project")
+    ):
+        raise PlatformDatabaseError(
+            "Hosted graph jobs must use registered project artifacts, not arbitrary file paths."
+        )
+    for key in ("run_id", "from_run"):
+        if key in config_snapshot and _looks_like_path(config_snapshot.get(key)):
+            raise PlatformDatabaseError("Hosted graph run references must be run IDs, not paths.")
+    if job_type == "graph_export":
+        config_snapshot["graph_export_permission_checked"] = True
+
+
+def _graph_scope_project_ids(
+    project_id: str | None,
+    config_snapshot: dict[str, Any],
+) -> list[str]:
+    raw_values: list[Any] = []
+    for key in (
+        "included_project_ids",
+        "project_ids",
+        "include_project_ids",
+        "cross_program_project_ids",
+    ):
+        value = config_snapshot.get(key)
+        if isinstance(value, list):
+            raw_values.extend(value)
+        elif value is not None:
+            raw_values.append(value)
+    if project_id is not None:
+        raw_values.append(project_id)
+    seen: set[str] = set()
+    project_ids: list[str] = []
+    for value in raw_values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        project_ids.append(text)
+    return project_ids
+
+
+def _looks_like_path(value: Any) -> bool:
+    text = str(value or "")
+    return "/" in text or "\\" in text or text.startswith(".")
 
 
 def _structure_docking_budget(config_snapshot: dict[str, Any]) -> int:

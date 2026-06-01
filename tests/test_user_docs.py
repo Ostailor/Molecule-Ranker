@@ -15,6 +15,7 @@ USER_DOCS = [
     "integrations.md",
     "codex_assistant.md",
     "dashboard.md",
+    "knowledge_graph.md",
     "limitations.md",
 ]
 REQUIRED_DISCLAIMERS = [

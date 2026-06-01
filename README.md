@@ -1,9 +1,10 @@
 # molecule-ranker
 
 `molecule-ranker` is a validated internal research platform MVP for
-source-backed molecule ranking and research operations. V1.4 builds on the
-validated V1.3 platform with multi-objective portfolio optimization and
-program-level decision analytics. V1.3 already added conservative
+source-backed molecule ranking and research operations. V1.5 builds on the
+validated V1.4 platform with a cross-program knowledge graph and
+mechanism-level reasoning layer. V1.4 already added multi-objective portfolio
+optimization and program-level decision analytics. V1.3 already added conservative
 structure-based design and protein-ligand workflow hardening: auditable target structure selection,
 externally prepared receptor and ligand artifact tracking, docking
 reproducibility metadata, pose QC, consensus rescoring, interaction profiles,
@@ -18,7 +19,7 @@ hypotheses, developability triage, literature evidence, experimental feedback,
 review workflows, Codex-backed orchestration, hosted platform mode, and guarded
 external integrations.
 
-V1.4 is for internal research use only. It is not a regulated clinical product.
+V1.5 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
 treat, are safe, bind, inhibit, activate, or are active. Docking scores are not
@@ -26,14 +27,19 @@ proof of binding, poses are not experimental evidence, structure-based scores
 are not activity evidence, and predicted structures are lower-confidence than
 suitable experimental structures. Portfolio recommendations are research
 prioritization aids, not clinical or experimental instructions, and selected
-molecules are not claimed safe, active, effective, or synthesizable. Codex is an
+molecules are not claimed safe, active, effective, or synthesizable. The
+knowledge graph is a memory and reasoning layer, not a source of new biomedical
+truth; graph-inferred relationships are hypotheses unless backed by source
+evidence, and graph paths do not prove causality, efficacy, safety, binding, or
+activity. Codex is an
 orchestration and summarization layer, not scientific truth; it may not invent
 structures, poses, binding sites, docking scores, interactions, evidence, assay
-results, citations, molecules, scores, or portfolio optimization outputs. Data
+results, citations, molecules, mechanisms, graph nodes, graph edges, scores, or
+portfolio optimization outputs. Data
 provenance, audit logs, deterministic validation, and guardrails are core design
 principles.
 
-Given a disease name, V1.4 resolves the disease through public biomedical data
+Given a disease name, V1.5 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -43,13 +49,14 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V1.4
+## Current Scope Through V1.5
 
-V1.4 implements existing-molecule ranking, opt-in generated hypotheses,
+V1.5 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V1.4 adds deterministic portfolio analytics for
+external integration primitives. V1.5 adds cross-program graph memory and
+mechanism-level reasoning over existing artifacts. V1.4 added deterministic portfolio analytics for
 program-level decisions: balanced candidate selection, review versus assay
 triage queues, overrepresentation/underexploration summaries, learning-value
 batch selection, correlated-risk deprioritization, scenario robustness, and
@@ -134,6 +141,19 @@ benchmarking, and validation workflows.
   selections or scores.
 - Surface overrepresented and underexplored targets, mechanisms, and chemical
   series, plus stage gates for decisions that require human approval.
+- Build a provenance-aware `KnowledgeGraph` from existing ranking, literature,
+  assay, developability, generated-molecule, review, and portfolio artifacts.
+- Represent graph memory with `GraphEntity` and `GraphRelation` records,
+  ontology/identifier normalization, source provenance, and explicit hypothesis
+  status for graph-inferred relationships.
+- Query recurring mechanisms, target outcomes, scaffold and chemical-series
+  performance, assay contradictions, repeated developability blockers,
+  literature/experimental disagreements, expert-review outcome patterns,
+  generated-molecule novelty versus known chemistry, and stale or unsupported
+  hypotheses.
+- Render a graph dashboard and provide a Codex graph assistant that summarizes
+  graph-backed patterns without creating evidence, assay results, citations,
+  graph records, mechanisms, or biomedical claims.
 - Register hosted model training, model validation, and model prediction jobs
   with guardrails that reject patient, clinical, and dosing data.
 - Register local runs in a `ProjectWorkspace`, track artifacts through an
@@ -176,7 +196,7 @@ benchmarking, and validation workflows.
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V1.4 does not:
+V1.5 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -185,6 +205,9 @@ V1.4 does not:
 - Invent evidence for generated molecules.
 - Invent structures, poses, binding sites, docking scores, or interactions.
 - Promote docking scores, poses, or structure-based scores to evidence.
+- Let graph inference create `EvidenceItem` records or assay results.
+- Let graph paths prove causality, efficacy, safety, binding, or activity.
+- Let Codex invent graph nodes, graph edges, citations, results, or mechanisms.
 - Use LLMs to invent citations, paper claims, or biomedical relationships.
 - Create fake citations or placeholder papers.
 - Create synthesis protocols, retrosynthesis, synthesis planning, wet-lab,
@@ -238,7 +261,7 @@ uv sync --all-groups
 uv run molecule-ranker version
 ```
 
-Current release: `1.4.0`.
+Current release: `1.5.0`.
 
 Run a source-backed ranking workflow locally. Generation, docking, external
 writes, Codex, review workflows, and experimental evidence are disabled unless
@@ -511,6 +534,124 @@ endpoint-specific dataset, trains a baseline surrogate, evaluates leakage,
 calibrates when enough data exist, predicts on existing/generated candidates,
 integrates eligible predictions into oracle scoring, generates model reports,
 and verifies guardrails.
+
+## V1.5 Cross-Program Knowledge Graph
+
+V1.5 adds a cross-program knowledge graph and mechanism-level reasoning layer
+over existing molecule-ranker artifacts. The graph integrates diseases,
+targets, pathways, mechanisms, molecules, generated hypotheses, scaffolds,
+chemical series, assays, assay results, literature papers and claims, evidence
+items, developability risks, structures, docking poses, model predictions,
+expert reviews, portfolios, projects, programs, and portfolio context.
+
+Graph relations preserve provenance through source artifact IDs, source record
+IDs, evidence item IDs, timestamps, confidence values, relation type, and
+direction. Inferred graph relations are explicitly labeled hypotheses, not
+evidence. They must not become `EvidenceItem` records and must not create assay
+results. Mechanism hypotheses summarize graph-linked disease, target, pathway,
+and molecule evidence for review, but they are not proof of causality,
+efficacy, safety, binding, or activity.
+
+Contradictions and stale decisions are surfaced rather than hidden. Positive
+and negative assay outcomes, literature disagreements, high model predictions
+contradicted by experiments, stale reviews, stale portfolios, and repeated
+developability blockers are retained with provenance so experts can inspect the
+conflict. Codex can explain graph paths and draft graph review questions from
+existing graph facts, but it cannot create graph nodes, graph edges, citations,
+mechanisms, assay results, evidence, or confidence scores.
+
+RDF/Turtle export is available for interoperability. Graph exports do not
+include secrets, cache payloads, full copyrighted articles, or generated-
+molecule overclaims. V1.5 graph workflows provide no medical advice, synthesis
+instructions, lab protocols, dosing, patient guidance, or clinical claims.
+
+Build a graph from a registered project workspace:
+
+```bash
+uv run molecule-ranker graph build \
+  --from-project ./research/example \
+  --output graph.json
+```
+
+Query candidates for a target:
+
+```bash
+uv run molecule-ranker graph query \
+  --graph graph.json \
+  --query candidates_for_target \
+  --target-symbol LRRK2 \
+  --json
+```
+
+Extract mechanism hypotheses for a disease:
+
+```bash
+uv run molecule-ranker graph mechanism \
+  --graph graph.json \
+  --disease "Parkinson disease" \
+  --output mechanisms.json
+```
+
+Detect contradictions:
+
+```bash
+uv run molecule-ranker graph contradictions \
+  --graph graph.json \
+  --output contradiction_report.json
+```
+
+Detect stale decisions and stale graph-linked records:
+
+```bash
+uv run molecule-ranker graph stale \
+  --graph graph.json \
+  --output staleness_report.json
+```
+
+Export the graph as RDF/Turtle:
+
+```bash
+uv run molecule-ranker graph export \
+  --graph graph.json \
+  --format ttl \
+  --output graph_export.ttl
+```
+
+Generate a static graph dashboard:
+
+```bash
+uv run molecule-ranker graph dashboard \
+  --graph graph.json \
+  --output graph_dashboard/
+```
+
+Queue a hosted graph job. Hosted graph jobs require project access and graph
+permissions such as `graph:build`, `graph:query`, or `graph:export`.
+Cross-program graph jobs require permission across every included project.
+Graph recommendations are advisory and are not automatic decisions.
+
+```bash
+curl -X POST "$MOLECULE_RANKER_HOST/projects/project-1/graph/jobs" \
+  -H "Authorization: Bearer $MOLECULE_RANKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_type": "graph_query",
+    "query": "candidates_for_target",
+    "target_symbol": "LRRK2",
+    "graph_artifact_id": "artifact-knowledge-graph"
+  }'
+```
+
+Run deterministic V1.5 graph validation:
+
+```bash
+uv run molecule-ranker validate graph
+```
+
+The graph validation workflow builds synthetic artifacts for two projects,
+builds and deduplicates the graph, extracts mechanisms, detects contradictions
+and stale decisions, generates recommendations, exports RDF/Turtle, writes a
+dashboard, and verifies graph guardrails.
 
 ## V1.4 Portfolio Optimization and Program Decision Analytics
 
@@ -920,6 +1061,7 @@ external writes require explicit write-enabled configuration and permission.
 - Integrations: `docs/user/integrations.md`
 - Codex assistant: `docs/user/codex_assistant.md`
 - Dashboard: `docs/user/dashboard.md`
+- Knowledge graph: `docs/user/knowledge_graph.md`
 - Limitations: `docs/user/limitations.md`
 - Admin users and roles: `docs/admin/users_and_roles.md`
 - Admin security checklist: `docs/admin/security_checklist.md`
@@ -2455,6 +2597,8 @@ does not write a normal `report.md` that looks successful.
 - V1.4: multi-objective portfolio optimization and program-level decision
   analytics.
 - V1.5: cross-program knowledge graph and mechanism-level reasoning.
+- V1.6: automated hypothesis generation and testable research-question
+  planning.
 - V2.0: validated enterprise discovery operating system.
 
 ## Development

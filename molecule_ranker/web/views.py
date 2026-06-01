@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
@@ -15,6 +16,16 @@ from starlette import status
 
 from molecule_ranker.integrations.connectors import create_connector
 from molecule_ranker.integrations.store import IntegrationStore
+from molecule_ranker.knowledge_graph import (
+    GraphEntity,
+    KnowledgeGraph,
+    KnowledgeGraphStore,
+    analyze_cross_program_knowledge,
+    build_contradiction_report,
+    build_staleness_report,
+    generate_graph_recommendations,
+)
+from molecule_ranker.knowledge_graph.reasoning import GraphReasoner
 from molecule_ranker.models.registry import ModelRegistry
 from molecule_ranker.platform.auth import (
     AuthError,
@@ -1253,6 +1264,337 @@ def portfolio_section_page(
     )
 
 
+@router.get("/dashboard/projects/{project_id}/knowledge-graph", response_class=HTMLResponse)
+def knowledge_graph_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    return _knowledge_graph_dashboard_html(
+        "Cross-program knowledge graph",
+        workspace,
+        _graph_overview_body(workspace, graph, request),
+    )
+
+
+@router.get("/dashboard/projects/{project_id}/knowledge-graph/search", response_class=HTMLResponse)
+def knowledge_graph_search_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    query = request.query_params.get("q", "")
+    entity_type = request.query_params.get("entity_type", "")
+    entities = _graph_entities_matching(graph, query=query, entity_type=entity_type)
+    body = (
+        _graph_nav(project_id)
+        + _graph_boundary_notice()
+        + "<h2>Entity search</h2>"
+        + "<p class=\"muted\">Search returns stored graph entities only; it does not create new "
+        "nodes, claims, mechanisms, evidence, or assay results.</p>"
+        + "<form class=\"panel form-grid\" method=\"get\">"
+        "<label>Query <input name=\"q\" value=\""
+        + _h(query)
+        + "\"></label><label>Entity type <input name=\"entity_type\" value=\""
+        + _h(entity_type)
+        + "\"></label><button type=\"submit\">Search</button></form>"
+        + _graph_entity_table(project_id, entities)
+    )
+    return _knowledge_graph_dashboard_html("Knowledge graph entity search", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/knowledge-graph/targets/{entity_id:path}",
+    response_class=HTMLResponse,
+)
+def knowledge_graph_target_page(
+    project_id: str,
+    entity_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    entity = _graph_entity_or_404(graph, entity_id, {"target"})
+    return _knowledge_graph_dashboard_html(
+        f"Target graph page: {entity.name}",
+        workspace,
+        _graph_entity_detail_body(project_id, graph, entity),
+    )
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/knowledge-graph/molecules/{entity_id:path}",
+    response_class=HTMLResponse,
+)
+def knowledge_graph_molecule_page(
+    project_id: str,
+    entity_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    entity = _graph_entity_or_404(graph, entity_id, {"molecule"})
+    return _knowledge_graph_dashboard_html(
+        f"Molecule graph page: {entity.name}",
+        workspace,
+        _graph_entity_detail_body(project_id, graph, entity),
+    )
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/knowledge-graph/generated-molecules/{entity_id:path}",
+    response_class=HTMLResponse,
+)
+def knowledge_graph_generated_molecule_page(
+    project_id: str,
+    entity_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    entity = _graph_entity_or_404(graph, entity_id, {"generated_molecule"})
+    return _knowledge_graph_dashboard_html(
+        f"Generated molecule graph page: {entity.name}",
+        workspace,
+        _graph_entity_detail_body(project_id, graph, entity),
+    )
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/knowledge-graph/mechanisms/{mechanism_id:path}",
+    response_class=HTMLResponse,
+)
+def knowledge_graph_mechanism_page(
+    project_id: str,
+    mechanism_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    mechanism = next(
+        (item for item in graph.mechanisms if item.mechanism_id == mechanism_id),
+        None,
+    )
+    if mechanism is None:
+        raise HTTPException(status_code=404, detail="Mechanism hypothesis not found.")
+    body = (
+        _graph_nav(project_id)
+        + _graph_boundary_notice()
+        + "<h2>Mechanism hypothesis page</h2>"
+        + "<p><span class=\"mode-badge dry-run\">hypothesis, not proof</span></p>"
+        + _definition_list(
+            {
+                "Mechanism ID": mechanism.mechanism_id,
+                "Status": mechanism.status,
+                "Summary": mechanism.summary,
+                "Support score": mechanism.support_score,
+                "Contradiction score": mechanism.contradiction_score,
+                "Novelty score": mechanism.novelty_score,
+                "Confidence": mechanism.confidence,
+                "Warnings": "; ".join(mechanism.warnings),
+            }
+        )
+        + _table(
+            ["Linked entity class", "Entity IDs"],
+            [
+                ["Disease", mechanism.disease_entity_id or ""],
+                ["Targets", ", ".join(mechanism.target_entity_ids)],
+                ["Pathways", ", ".join(mechanism.pathway_entity_ids)],
+                ["Molecules", ", ".join(mechanism.molecule_entity_ids)],
+                ["Generated molecules", ", ".join(mechanism.generated_molecule_entity_ids)],
+                ["Claims", ", ".join(mechanism.claim_entity_ids)],
+                ["Support relations", ", ".join(mechanism.evidence_relation_ids)],
+                ["Contradiction relations", ", ".join(mechanism.contradiction_relation_ids)],
+            ],
+        )
+    )
+    return _knowledge_graph_dashboard_html("Mechanism hypothesis", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/knowledge-graph/contradictions",
+    response_class=HTMLResponse,
+)
+def knowledge_graph_contradictions_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    try:
+        report = build_contradiction_report(graph)
+        contradiction_relations = report.contradiction_relations
+        findings = report.findings
+    except ValueError:
+        contradiction_relations = [
+            relation for relation in graph.relations if relation.predicate == "contradicts"
+        ]
+        findings = []
+    body = (
+        _graph_nav(project_id)
+        + _graph_boundary_notice()
+        + "<h2>Contradiction report</h2>"
+        + "<p class=\"warning\">Contradiction detection is advisory. Older evidence is retained "
+        "and graph paths do not prove activity, safety, efficacy, binding, or causality.</p>"
+        + _graph_relation_table(project_id, graph, contradiction_relations)
+        + _graph_finding_table(findings)
+    )
+    return _knowledge_graph_dashboard_html("Contradiction report", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/knowledge-graph/staleness",
+    response_class=HTMLResponse,
+)
+def knowledge_graph_staleness_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    report = build_staleness_report(graph)
+    body = (
+        _graph_nav(project_id)
+        + _graph_boundary_notice()
+        + "<h2>Staleness report</h2>"
+        + "<p class=\"warning\">Staleness detection is advisory and preserves temporal "
+        "provenance. Stale decisions and predictions should be reviewed, not deleted.</p>"
+        + _graph_relation_table(project_id, graph, report.stale_relations)
+        + _graph_finding_table(report.findings)
+    )
+    return _knowledge_graph_dashboard_html("Staleness report", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/knowledge-graph/recommendations",
+    response_class=HTMLResponse,
+)
+def knowledge_graph_recommendations_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    recommendations = generate_graph_recommendations(graph, current_project_id=project_id)
+    body = (
+        _graph_nav(project_id)
+        + _graph_boundary_notice()
+        + "<h2>Cross-program recommendations</h2>"
+        + "<p>Recommendations are advisory graph-derived summaries. They must not be read as "
+        "activity, efficacy, safety, binding, or synthesis claims.</p>"
+        + _table(
+            ["Type", "Rationale", "Confidence", "Entities", "Relations", "Provenance"],
+            [
+                [
+                    item.recommendation_type,
+                    item.rationale,
+                    item.confidence,
+                    ", ".join(item.reuse_entity_ids),
+                    ", ".join(item.relation_ids),
+                    ", ".join(item.provenance),
+                ]
+                for item in recommendations
+            ],
+        )
+    )
+    if not recommendations:
+        body += "<p>No cross-program graph recommendations are available yet.</p>"
+    return _knowledge_graph_dashboard_html("Cross-program recommendations", workspace, body)
+
+
+@router.get("/dashboard/projects/{project_id}/knowledge-graph/query", response_class=HTMLResponse)
+def knowledge_graph_query_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    query_name = request.query_params.get("query", "generated_molecules_without_direct_evidence")
+    results = _run_graph_dashboard_query(graph, query_name)
+    body = (
+        _graph_nav(project_id)
+        + _graph_boundary_notice()
+        + "<h2>Graph query explorer</h2>"
+        + "<p>Query results are graph-derived summaries, not new evidence.</p>"
+        + "<form class=\"panel form-grid\" method=\"get\"><label>Query <select name=\"query\">"
+        + "".join(
+            "<option value=\""
+            + _h(name)
+            + ("\" selected>" if name == query_name else "\">")
+            + _h(name)
+            + "</option>"
+            for name in _graph_dashboard_queries()
+        )
+        + "</select></label><button type=\"submit\">Run query</button></form>"
+        + _table(
+            ["Query", "Entities", "Relations", "Provenance", "Confidence", "Warnings"],
+            [
+                [
+                    result.query_name,
+                    ", ".join(ref.name for ref in result.entity_refs),
+                    ", ".join(ref.relation_id for ref in result.relation_refs),
+                    ", ".join(result.provenance),
+                    result.confidence,
+                    "; ".join(result.warnings),
+                ]
+                for result in results
+            ],
+        )
+    )
+    if not results:
+        body += "<p>No graph query results for this selection.</p>"
+    return _knowledge_graph_dashboard_html("Graph query explorer", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/knowledge-graph/portfolio",
+    response_class=HTMLResponse,
+)
+def knowledge_graph_portfolio_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, graph = _knowledge_graph_workspace(database, user, store, project_id)
+    portfolio_entities = [
+        entity
+        for entity in graph.entities
+        if entity.entity_type in {"portfolio", "program", "project"}
+    ]
+    selected_relations = [
+        relation
+        for relation in graph.relations
+        if relation.predicate
+        in {"selected_in_portfolio", "has_scaffold", "has_developability_risk"}
+    ]
+    body = (
+        _graph_nav(project_id)
+        + _graph_boundary_notice()
+        + "<h2>Portfolio graph view</h2>"
+        + "<p>Portfolio graph links are decision-memory context only. Selected candidates are "
+        "not safety or activity claims.</p>"
+        + _graph_entity_table(project_id, portfolio_entities)
+        + _graph_relation_table(project_id, graph, selected_relations)
+    )
+    return _knowledge_graph_dashboard_html("Portfolio graph view", workspace, body)
+
+
 @router.get(
     "/dashboard/projects/{project_id}/candidates/{candidate_name}",
     response_class=HTMLResponse,
@@ -1766,9 +2108,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.4.0-structure-ui3\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.5.0-graph-ui\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.4</div>"
+        "<div class=\"brand\">molecule-ranker V1.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -1911,9 +2253,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.4.0-structure-ui3\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.5.0-graph-ui\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.4</div>"
+        "<div class=\"brand\">molecule-ranker V1.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -1946,9 +2288,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.4.0-portfolio-ui\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.5.0-graph-ui\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.4</div>"
+        "<div class=\"brand\">molecule-ranker V1.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2088,6 +2430,447 @@ def _portfolio_section_body(
             + _portfolio_audit_table(database, project_id, "portfolio")
         )
     return "<p>Portfolio dashboard page not found.</p>"
+
+
+def _knowledge_graph_workspace(
+    database: PlatformDatabase,
+    user: UserAccount,
+    store: ProjectWorkspaceStore,
+    project_id: str,
+) -> tuple[ProjectWorkspace, KnowledgeGraph]:
+    workspace = _project_or_404(store=store, project_id=project_id)
+    require_project_access(database, user, project_id=project_id, action="read")
+    graph_store = KnowledgeGraphStore(Path(workspace.root_dir))
+    graph_ids = graph_store.list_graphs()
+    graph = (
+        graph_store.load(graph_ids[-1])
+        if graph_ids
+        else KnowledgeGraph(
+            graph_id=f"{workspace.workspace_id}-knowledge-graph",
+            metadata={"empty_state": "No graph has been built for this project yet."},
+        )
+    )
+    return workspace, graph
+
+
+def _knowledge_graph_dashboard_html(
+    title: str,
+    workspace: ProjectWorkspace,
+    body: str,
+) -> HTMLResponse:
+    project_id = quote(workspace.workspace_id)
+    html = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.5.0-graph-ui\">"
+        "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
+        "<div class=\"brand\">molecule-ranker V1.5</div>"
+        "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        f"{_link('/dashboard', 'Projects')}"
+        f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
+        f"{_link(f'/dashboard/projects/{project_id}/knowledge-graph', 'Knowledge Graph')}"
+        f"{_link(f'/dashboard/projects/{project_id}/portfolio', 'Portfolio')}"
+        "</nav></div></header><main class=\"content\">"
+        f"<header class=\"page-heading\"><h1>{_h(title)}</h1>"
+        f"<p class=\"muted\">Project: {_h(workspace.name)}</p></header>"
+        f"{body}</main></div></body></html>\n"
+    )
+    return HTMLResponse(html)
+
+
+def _graph_nav(project_id: str) -> str:
+    quoted = quote(project_id)
+    links = {
+        "Graph overview": f"/dashboard/projects/{quoted}/knowledge-graph",
+        "Entity search": f"/dashboard/projects/{quoted}/knowledge-graph/search",
+        "Contradictions": f"/dashboard/projects/{quoted}/knowledge-graph/contradictions",
+        "Staleness": f"/dashboard/projects/{quoted}/knowledge-graph/staleness",
+        "Recommendations": f"/dashboard/projects/{quoted}/knowledge-graph/recommendations",
+        "Query explorer": f"/dashboard/projects/{quoted}/knowledge-graph/query",
+        "Portfolio graph": f"/dashboard/projects/{quoted}/knowledge-graph/portfolio",
+    }
+    return "<nav class=\"section\">" + " ".join(
+        _link(href, label) for label, href in links.items()
+    ) + "</nav>"
+
+
+def _graph_boundary_notice() -> str:
+    return (
+        "<aside class=\"research-disclaimer\">This graph is a memory and reasoning layer. It "
+        "does not create biomedical truth, EvidenceItem records, assay results, causality, "
+        "efficacy, safety, binding, or activity claims. Inferred graph relationships are "
+        "hypotheses unless backed by source evidence.</aside>"
+    )
+
+
+def _graph_overview_body(
+    workspace: ProjectWorkspace,
+    graph: KnowledgeGraph,
+    request: Request,
+) -> str:
+    del request
+    analysis = analyze_cross_program_knowledge(graph)
+    entity_counts = Counter(entity.entity_type for entity in graph.entities)
+    relation_counts = Counter(relation.relation_type for relation in graph.relations)
+    targets = [entity for entity in graph.entities if entity.entity_type == "target"][:8]
+    molecules = [entity for entity in graph.entities if entity.entity_type == "molecule"][:8]
+    generated = [
+        entity for entity in graph.entities if entity.entity_type == "generated_molecule"
+    ][:8]
+    predictions = [
+        entity for entity in graph.entities if entity.entity_type == "model_prediction"
+    ][:8]
+    body = (
+        _graph_nav(workspace.workspace_id)
+        + _graph_boundary_notice()
+        + "<h2>Graph overview</h2>"
+        + _table(
+            ["Metric", "Value"],
+            [
+                ["Graph ID", graph.graph_id],
+                ["Entities", len(graph.entities)],
+                ["Relations", len(graph.relations)],
+                ["Provenance records", len(graph.provenance)],
+                ["Mechanism hypotheses", len(graph.mechanisms)],
+            ],
+        )
+        + "<h2>Entity types</h2>"
+        + _table(["Entity type", "Count"], [[key, value] for key, value in entity_counts.items()])
+        + "<h2>Relation types</h2>"
+        + _table(
+            ["Relation type", "Count", "Label"],
+            [
+                [key, value, _graph_relation_type_badge(str(key))]
+                for key, value in relation_counts.items()
+            ],
+        )
+        + "<h2>Target pages</h2>"
+        + _graph_entity_table(workspace.workspace_id, targets)
+        + "<h2>Molecule pages</h2>"
+        + _graph_entity_table(workspace.workspace_id, molecules)
+        + "<h2>Generated molecule pages</h2>"
+        + _graph_entity_table(workspace.workspace_id, generated)
+        + "<h2>Model predictions</h2>"
+        + "<p>Model predictions are predictions, not evidence or assay results.</p>"
+        + _graph_entity_table(workspace.workspace_id, predictions)
+        + "<h2>Mechanism hypotheses</h2>"
+        + _table(
+            ["Mechanism", "Status", "Summary", "Confidence"],
+            [
+                [
+                    _link(
+                        f"/dashboard/projects/{quote(workspace.workspace_id)}/knowledge-graph/"
+                        f"mechanisms/{quote(item.mechanism_id)}",
+                        item.mechanism_id,
+                    ),
+                    item.status,
+                    item.summary,
+                    item.confidence,
+                ]
+                for item in graph.mechanisms
+            ],
+        )
+        + "<h2>Recent graph edges</h2>"
+        + _graph_relation_table(workspace.workspace_id, graph, graph.relations[:12])
+        + "<h2>Codex graph summaries</h2>"
+        + _graph_codex_summary_table(graph)
+        + "<h2>Cross-program patterns</h2>"
+        + _table(
+            ["Pattern", "Count", "Rationale"],
+            [
+                [pattern.name, pattern.count, pattern.rationale]
+                for pattern in [
+                    *analysis.recurring_mechanisms,
+                    *analysis.scaffold_patterns,
+                    *analysis.repeated_developability_risks,
+                ]
+            ],
+        )
+    )
+    if not graph.entities:
+        empty_state = graph.metadata.get(
+            "empty_state",
+            "The current graph has no entities yet. "
+            "Build or import source artifacts to populate it.",
+        )
+        body += f"<p>{_h(empty_state)}</p>"
+    return body
+
+
+def _graph_entities_matching(
+    graph: KnowledgeGraph,
+    *,
+    query: str,
+    entity_type: str,
+) -> list[GraphEntity]:
+    normalized_query = query.lower().strip()
+    normalized_type = entity_type.lower().strip()
+    entities = graph.entities
+    if normalized_type:
+        entities = [
+            entity for entity in entities if entity.entity_type.lower() == normalized_type
+        ]
+    if normalized_query:
+        entities = [
+            entity
+            for entity in entities
+            if normalized_query in entity.name.lower()
+            or normalized_query in entity.entity_id.lower()
+            or any(normalized_query in value.lower() for value in entity.identifiers.values())
+        ]
+    return sorted(entities, key=lambda entity: (entity.entity_type, entity.name, entity.entity_id))
+
+
+def _graph_entity_table(project_id: str, entities: list[GraphEntity]) -> str:
+    return _table(
+        ["Entity", "Type", "Canonical ID", "Identifiers", "Labels", "Provenance"],
+        [
+            [
+                _graph_entity_link(project_id, entity),
+                entity.entity_type,
+                entity.canonical_id or "",
+                _compact_json(entity.identifiers),
+                _graph_entity_badges(entity),
+                ", ".join(entity.provenance_refs or entity.source_artifact_ids),
+            ]
+            for entity in entities
+        ],
+    )
+
+
+def _graph_entity_detail_body(
+    project_id: str,
+    graph: KnowledgeGraph,
+    entity: GraphEntity,
+) -> str:
+    incident = [
+        relation
+        for relation in graph.relations
+        if entity.entity_id in {relation.subject_entity_id, relation.object_entity_id}
+    ]
+    return (
+        _graph_nav(project_id)
+        + _graph_boundary_notice()
+        + f"<h2>{_h(entity.entity_type.replace('_', ' ').title())}</h2>"
+        + _graph_entity_badges(entity)
+        + _definition_list(
+            {
+                "Entity ID": entity.entity_id,
+                "Name": entity.name,
+                "Type": entity.entity_type,
+                "Canonical ID": entity.canonical_id or "",
+                "Identifiers": _compact_json(entity.identifiers),
+                "Source artifacts": ", ".join(entity.source_artifact_ids),
+                "Provenance refs": ", ".join(entity.provenance_refs),
+            }
+        )
+        + "<h2>Graph edges</h2>"
+        + _graph_relation_table(project_id, graph, incident)
+        + "<h2>Metadata</h2>"
+        + f"<pre>{_h(_compact_json(entity.metadata))}</pre>"
+    )
+
+
+def _graph_entity_or_404(
+    graph: KnowledgeGraph,
+    entity_id: str,
+    allowed_types: set[str],
+) -> GraphEntity:
+    entity = graph.entity_map().get(entity_id)
+    if entity is None or entity.entity_type not in allowed_types:
+        raise HTTPException(status_code=404, detail="Graph entity not found.")
+    return entity
+
+
+def _graph_entity_link(project_id: str, entity: GraphEntity) -> str:
+    path = _graph_entity_path(project_id, entity)
+    if path is None:
+        return _h(entity.name)
+    return _link(path, entity.name)
+
+
+def _graph_entity_path(project_id: str, entity: GraphEntity) -> str | None:
+    quoted_project = quote(project_id)
+    quoted_entity = quote(entity.entity_id, safe="")
+    if entity.entity_type == "target":
+        return f"/dashboard/projects/{quoted_project}/knowledge-graph/targets/{quoted_entity}"
+    if entity.entity_type == "molecule":
+        return f"/dashboard/projects/{quoted_project}/knowledge-graph/molecules/{quoted_entity}"
+    if entity.entity_type == "generated_molecule":
+        return (
+            f"/dashboard/projects/{quoted_project}/knowledge-graph/generated-molecules/"
+            f"{quoted_entity}"
+        )
+    return None
+
+
+def _graph_entity_badges(entity: GraphEntity) -> str:
+    badges: list[str] = []
+    if entity.entity_type == "generated_molecule":
+        badges.append("Generated hypothesis")
+    if entity.entity_type == "model_prediction":
+        badges.append("Model prediction, not evidence")
+    if entity.metadata.get("codex_summary") or entity.entity_type == "codex_summary":
+        badges.append("Codex graph summary, assistant output")
+    if not badges:
+        return ""
+    return " ".join(_graph_badge(label, css="dry-run") for label in badges)
+
+
+def _graph_relation_table(
+    project_id: str,
+    graph: KnowledgeGraph,
+    relations: list[Any],
+) -> str:
+    entities = graph.entity_map()
+    return _table(
+        [
+            "Subject",
+            "Predicate",
+            "Object",
+            "Relation type",
+            "Confidence",
+            "Direction",
+            "Provenance links",
+            "Labels",
+        ],
+        [
+            [
+                _graph_entity_ref(project_id, entities.get(relation.subject_entity_id)),
+                relation.predicate,
+                _graph_entity_ref(project_id, entities.get(relation.object_entity_id)),
+                _graph_relation_type_badge(relation.relation_type),
+                relation.confidence,
+                relation.direction or "",
+                _graph_provenance_links(project_id, relation),
+                _graph_relation_badges(relation),
+            ]
+            for relation in relations
+        ],
+    )
+
+
+def _graph_entity_ref(project_id: str, entity: GraphEntity | None) -> str:
+    if entity is None:
+        return ""
+    return _graph_entity_link(project_id, entity)
+
+
+def _graph_relation_type_badge(relation_type: str) -> str:
+    if relation_type == "inferred":
+        return _graph_badge("Inferred relation", css="dry-run")
+    if relation_type == "model_prediction":
+        return _graph_badge("Prediction only", css="dry-run")
+    if relation_type == "experimental":
+        return _graph_badge("Experimental record", css="live")
+    if relation_type == "evidence_backed":
+        return _graph_badge("Source-backed relation", css="live")
+    return _graph_badge(relation_type.replace("_", " "), css="dry-run")
+
+
+def _graph_relation_badges(relation: Any) -> str:
+    badges: list[str] = []
+    if relation.relation_type == "inferred":
+        badges.append("Inferred edge: graph hypothesis, not EvidenceItem")
+    if relation.relation_type == "model_prediction" or relation.predicate == "predicted_by_model":
+        badges.append("Model prediction distinct from evidence")
+    if relation.metadata.get("codex_summary") or relation.metadata.get("assistant_output"):
+        badges.append("Codex graph summary, assistant output")
+    if relation.predicate in {"contradicts", "stale_due_to"}:
+        badges.append("Advisory review signal")
+    return " ".join(_graph_badge(label, css="dry-run") for label in badges)
+
+
+def _graph_provenance_links(project_id: str, relation: Any) -> str:
+    links = [
+        _link(
+            f"/dashboard/projects/{quote(project_id)}/artifacts/{quote(artifact_id)}/download",
+            artifact_id,
+        )
+        for artifact_id in relation.source_artifact_ids
+    ]
+    labels = [
+        _h(record_id) for record_id in [*relation.source_record_ids, *relation.evidence_item_ids]
+    ]
+    if not links and not labels and relation.relation_type == "inferred":
+        return _graph_badge("explicit inferred label; no evidence created", css="dry-run")
+    return ", ".join([*links, *labels])
+
+
+def _graph_finding_table(findings: list[Any]) -> str:
+    return _table(
+        ["Finding", "Status", "Reason"],
+        [[finding.name, finding.status, finding.reason] for finding in findings],
+    )
+
+
+def _graph_codex_summary_table(graph: KnowledgeGraph) -> str:
+    rows: list[list[Any]] = []
+    for provenance in graph.provenance:
+        if provenance.source_type == "codex_summary":
+            rows.append(
+                [
+                    provenance.provenance_id,
+                    "Codex graph summary, assistant output",
+                    provenance.source_artifact_id or "",
+                    provenance.source_record_id or "",
+                    provenance.transformation,
+                ]
+            )
+    for entity in graph.entities:
+        if entity.metadata.get("codex_summary") or entity.entity_type == "codex_summary":
+            rows.append(
+                [
+                    entity.entity_id,
+                    "Codex graph summary, assistant output",
+                    ", ".join(entity.source_artifact_ids),
+                    "",
+                    entity.name,
+                ]
+            )
+    return _table(
+        ["Record", "Label", "Source artifact", "Source record", "Summary"],
+        rows,
+    )
+
+
+def _run_graph_dashboard_query(graph: KnowledgeGraph, query_name: str) -> list[Any]:
+    reasoner = GraphReasoner(graph)
+    if query_name == "generated_molecules_without_direct_evidence":
+        return reasoner.generated_molecules_without_direct_evidence()
+    if query_name == "candidates_with_contradictory_evidence":
+        return reasoner.candidates_with_contradictory_evidence()
+    if query_name == "scaffolds_with_positive_assay_history":
+        return reasoner.scaffolds_with_positive_assay_history()
+    if query_name == "targets_with_repeated_developability_failures":
+        return reasoner.targets_with_repeated_developability_failures()
+    if query_name == "mechanisms_supported_across_programs":
+        return reasoner.mechanisms_supported_across_programs()
+    if query_name == "molecules_with_safety_concerns_across_programs":
+        return reasoner.molecules_with_safety_concerns_across_programs()
+    if query_name == "portfolios_reusing_same_scaffold_risk":
+        return reasoner.portfolios_reusing_same_scaffold_risk()
+    if query_name == "projects_with_stale_model_predictions":
+        return reasoner.projects_with_stale_model_predictions()
+    return reasoner.generated_molecules_without_direct_evidence()
+
+
+def _graph_dashboard_queries() -> list[str]:
+    return [
+        "generated_molecules_without_direct_evidence",
+        "candidates_with_contradictory_evidence",
+        "scaffolds_with_positive_assay_history",
+        "targets_with_repeated_developability_failures",
+        "mechanisms_supported_across_programs",
+        "molecules_with_safety_concerns_across_programs",
+        "portfolios_reusing_same_scaffold_risk",
+        "projects_with_stale_model_predictions",
+    ]
+
+
+def _graph_badge(label: str, *, css: str) -> str:
+    return f"<span class=\"mode-badge {css}\">{_h(label)}</span>"
 
 
 def _portfolio_run_snapshots(workspace: ProjectWorkspace) -> list[dict[str, Any]]:
