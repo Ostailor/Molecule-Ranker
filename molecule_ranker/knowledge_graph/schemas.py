@@ -356,7 +356,7 @@ class GraphBuildRun(TimezoneAwareGraphModel):
 
 class KnowledgeGraph(TimezoneAwareGraphModel):
     graph_id: str
-    schema_version: str = "1.5"
+    schema_version: str = "1.6"
     entities: list[GraphEntity] = Field(default_factory=list)
     relations: list[GraphRelation] = Field(default_factory=list)
     provenance: list[GraphProvenance] = Field(default_factory=list)

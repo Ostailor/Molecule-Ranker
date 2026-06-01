@@ -35,6 +35,8 @@ InternalEntityType = Literal[
     "review_item",
     "experiment",
     "project",
+    "campaign",
+    "campaign_work_package",
 ]
 MappingMethod = Literal[
     "exact_id",

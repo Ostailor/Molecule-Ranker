@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 from molecule_ranker.contracts import ARTIFACT_CONTRACTS, with_artifact_contract_metadata
+from molecule_ranker.validation.campaign import run_campaign_validation
 from molecule_ranker.validation.design import run_design_validation
 from molecule_ranker.validation.golden_workflows import (
     get_golden_workflow,
@@ -833,6 +834,15 @@ def _v1_1_generator_benchmark_workflow(
     )
 
 
+def _v1_7_campaign_planning_workflow(
+    workflow: GoldenWorkflow,
+    artifact_dir: Path,
+    mode: GoldenWorkflowMode,
+) -> None:
+    del workflow, mode
+    run_campaign_validation(output_dir=artifact_dir)
+
+
 WORKFLOW_WRITERS = {
     "existing_molecule_ranking": _existing_molecule_ranking,
     "generation_workflow": _generation_workflow,
@@ -844,4 +854,5 @@ WORKFLOW_WRITERS = {
     "v1_1_design_optimization_workflow": _v1_1_design_optimization_workflow,
     "v1_1_agentic_generation_workflow": _v1_1_agentic_generation_workflow,
     "v1_1_generator_benchmark_workflow": _v1_1_generator_benchmark_workflow,
+    "v1_7_campaign_planning_workflow": _v1_7_campaign_planning_workflow,
 }

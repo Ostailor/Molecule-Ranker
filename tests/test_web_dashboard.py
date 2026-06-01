@@ -8,6 +8,17 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient
 
+from molecule_ranker.campaigns import (
+    Campaign,
+    CampaignBudget,
+    CampaignExecutionEvent,
+    CampaignMemo,
+    CampaignObjective,
+    CampaignPlan,
+    CampaignStore,
+    CampaignWorkPackage,
+    ReplanTrigger,
+)
 from molecule_ranker.integrations.schemas import ExternalSystem
 from molecule_ranker.integrations.store import IntegrationStore
 from molecule_ranker.knowledge_graph import (
@@ -96,6 +107,24 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/projects/workspace-a/knowledge-graph/recommendations",
         "/dashboard/projects/workspace-a/knowledge-graph/query",
         "/dashboard/projects/workspace-a/knowledge-graph/portfolio",
+        "/dashboard/projects/workspace-a/hypotheses",
+        "/dashboard/projects/workspace-a/hypotheses/hypothesis-generated-1",
+        "/dashboard/projects/workspace-a/hypotheses/evidence-gaps",
+        "/dashboard/projects/workspace-a/hypotheses/research-questions",
+        "/dashboard/projects/workspace-a/hypotheses/falsification-criteria",
+        "/dashboard/projects/workspace-a/hypotheses/contradictions",
+        "/dashboard/projects/workspace-a/hypotheses/review-queue",
+        "/dashboard/projects/workspace-a/hypotheses/lifecycle",
+        "/dashboard/projects/workspace-a/campaigns",
+        "/dashboard/projects/workspace-a/campaigns/campaign-1",
+        "/dashboard/projects/workspace-a/campaigns/plan",
+        "/dashboard/projects/workspace-a/campaigns/work-packages",
+        "/dashboard/projects/workspace-a/campaigns/budget",
+        "/dashboard/projects/workspace-a/campaigns/dependencies",
+        "/dashboard/projects/workspace-a/campaigns/stage-gates",
+        "/dashboard/projects/workspace-a/campaigns/replan-triggers",
+        "/dashboard/projects/workspace-a/campaigns/memo",
+        "/dashboard/projects/workspace-a/campaigns/audit",
         "/dashboard/projects/workspace-a/candidates/Rasagiline",
         "/dashboard/projects/workspace-a/codex",
         "/dashboard/notifications",
@@ -252,6 +281,74 @@ def test_dashboard_core_pages_render_project_run_and_research_views(tmp_path: Pa
         assert response.status_code == 200, path
         for snippet in snippets:
             assert snippet in response.text, path
+
+
+def test_campaign_dashboard_pages_render_campaign_artifacts(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    admin_headers = _api_login(client, "admin@example.com", "Admin-password-1")
+    _create_project_with_run(client, tmp_path, admin_headers, project_id="workspace-a")
+    _seed_campaign_dashboard_store(tmp_path, "workspace-a")
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    expectations = {
+        "/dashboard/projects/workspace-a/campaigns": [
+            "Campaign list",
+            "campaign-1",
+            "research-management guidance",
+        ],
+        "/dashboard/projects/workspace-a/campaigns/campaign-1": [
+            "Campaign detail",
+            "selection-1",
+            "not lab protocols",
+        ],
+        "/dashboard/projects/workspace-a/campaigns/plan": [
+            "Campaign plan",
+            "deterministic campaign plan",
+            "wp-generated-review",
+        ],
+        "/dashboard/projects/workspace-a/campaigns/work-packages": [
+            "Work packages",
+            "planning objects, not protocols",
+            "generated_molecule_review",
+            "completed",
+        ],
+        "/dashboard/projects/workspace-a/campaigns/budget": [
+            "Budget/resource view",
+            "review hours",
+            "planning estimates only",
+        ],
+        "/dashboard/projects/workspace-a/campaigns/dependencies": [
+            "Dependency graph",
+            "planning order",
+            "wp-generated-review",
+        ],
+        "/dashboard/projects/workspace-a/campaigns/stage-gates": [
+            "Stage gates",
+            "generated_molecule_review",
+            "campaign:approve",
+        ],
+        "/dashboard/projects/workspace-a/campaigns/replan-triggers": [
+            "Replan triggers",
+            "contradiction_detected",
+        ],
+        "/dashboard/projects/workspace-a/campaigns/memo": [
+            "Campaign memo",
+            "assistant output",
+            "separate from the deterministic campaign plan",
+        ],
+        "/dashboard/projects/workspace-a/campaigns/audit": [
+            "Campaign audit timeline",
+            "stage_gate_decided",
+        ],
+    }
+    for path, snippets in expectations.items():
+        response = client.get(path)
+        assert response.status_code == 200, path
+        for snippet in snippets:
+            assert snippet in response.text, path
+        assert "incubation" not in response.text.lower(), path
+        assert "synthesis route" not in response.text.lower(), path
 
 
 def test_knowledge_graph_dashboard_pages_show_labels_provenance_and_escape_html(
@@ -1023,6 +1120,163 @@ def _create_project_with_run(
     store = ProjectWorkspaceStore(tmp_path)
     workspace = store.load()
     store.register_run_dir(tmp_path / "run-a", run_id="run-a", workspace=workspace)
+
+
+def _seed_campaign_dashboard_store(tmp_path: Path, project_id: str) -> None:
+    store = CampaignStore(
+        tmp_path / ".molecule-ranker" / "campaigns" / project_id / "campaigns.sqlite"
+    )
+    now = datetime.now(UTC)
+    campaign = Campaign(
+        campaign_id="campaign-1",
+        project_id=project_id,
+        program_id="program-1",
+        name="Generated candidate review campaign",
+        description="Research-management planning artifact.",
+        disease_focus=["Parkinson disease"],
+        target_focus=["MAOB"],
+        hypothesis_ids=["hypothesis-1"],
+        portfolio_selection_ids=["selection-1"],
+        status="under_review",
+        created_at=now,
+        updated_at=now,
+        metadata={},
+    )
+    store.create_campaign(campaign)
+    objective = CampaignObjective(
+        objective_id="objective-1",
+        campaign_id=campaign.campaign_id,
+        name="Review generated candidate",
+        objective_type="validate_hypothesis",
+        linked_hypothesis_ids=["hypothesis-1"],
+        linked_candidate_ids=["candidate-generated-1"],
+        success_criteria=["Human review decision recorded."],
+        stop_criteria=["Critical safety or developability concern remains unresolved."],
+        priority_weight=0.8,
+        metadata={"portfolio_selection_ids": ["selection-1"]},
+    )
+    work_package = CampaignWorkPackage(
+        work_package_id="wp-generated-review",
+        campaign_id=campaign.campaign_id,
+        objective_ids=[objective.objective_id],
+        package_type="expert_review",
+        title="Generated candidate review",
+        description="High-level review of computational hypothesis artifacts.",
+        linked_candidate_ids=["candidate-generated-1"],
+        linked_hypothesis_ids=["hypothesis-1"],
+        high_level_activity_category="generated_molecule_review",
+        dependencies=[],
+        required_approvals=["generated_molecule_review"],
+        estimated_cost=None,
+        cost_units="relative_units",
+        estimated_review_hours=2.0,
+        estimated_compute_units=1.0,
+        estimated_assay_slots=0,
+        status="proposed",
+        blocking_reasons=[],
+        warnings=["Generated molecule follow-up requires review gate."],
+        metadata={"generated_molecule": True},
+    )
+    budget = CampaignBudget(
+        budget_id="budget-1",
+        campaign_id=campaign.campaign_id,
+        max_total_cost=None,
+        cost_units="relative_units",
+        max_assay_slots=2,
+        max_review_hours=4.0,
+        max_compute_units=10.0,
+        max_codex_tasks=1,
+        max_external_sync_jobs=1,
+        reserved_budget={},
+        metadata={},
+    )
+    gate = {
+        "gate_id": "gate-generated-review",
+        "campaign_id": campaign.campaign_id,
+        "work_package_id": work_package.work_package_id,
+        "gate_type": "generated_molecule_review",
+        "required_role": ["scientific_reviewer"],
+        "required_permissions": ["campaign:approve"],
+        "required_artifacts": ["hypothesis-1", "candidate-generated-1"],
+        "required_review_decisions": ["generated_molecule_review_decision"],
+        "blocking_conditions": ["generated_molecule_human_review_required"],
+        "approval_status": "pending",
+        "rationale": "Generated molecule follow-up requires review.",
+        "audit_event": None,
+        "metadata": {"not_codex_approvable": True},
+    }
+    plan = CampaignPlan(
+        campaign_plan_id="campaign-plan-1",
+        campaign_id=campaign.campaign_id,
+        objectives=[objective],
+        work_packages=[work_package],
+        budget=budget,
+        stage_gates=[gate],
+        dependency_graph={"nodes": ["wp-generated-review"], "edges": []},
+        expected_learning_value=0.7,
+        risk_summary={"generated_molecule_review_required": True},
+        uncertainty_summary={"model_uncertainty": "moderate"},
+        budget_summary={"review_hours": 2.0, "assay_slots": 0},
+        recommended_sequence=["wp-generated-review"],
+        replan_triggers=["contradiction_detected"],
+        human_approval_required=True,
+        warnings=["Selected candidates are not proven active, safe, or effective."],
+        created_at=now,
+        metadata={},
+    )
+    store.save_campaign_plan(plan)
+    store.add_stage_gate_decision(gate)
+    store.add_replan_trigger(
+        ReplanTrigger(
+            trigger_id="trigger-1",
+            campaign_id=campaign.campaign_id,
+            trigger_type="contradiction_detected",
+            severity="high",
+            description="Graph contradiction changed planning priority.",
+            linked_entity_ids=["hypothesis-1"],
+            recommended_action="replan",
+            metadata={},
+        )
+    )
+    store.save_campaign_memo(
+        CampaignMemo(
+            memo_id="memo-1",
+            campaign_id=campaign.campaign_id,
+            title="Campaign memo",
+            executive_summary="Assistant output summary from deterministic artifacts.",
+            objectives_summary="Review generated candidate hypothesis.",
+            selected_work_packages=[work_package.work_package_id],
+            budget_summary="Uses review hours and no assay slots.",
+            key_tradeoffs=["Review gate before follow-up."],
+            risks=["Generated candidate remains computational hypothesis."],
+            uncertainty_notes=["Model uncertainty remains unresolved."],
+            replan_triggers=["contradiction_detected"],
+            approvals_required=["generated_molecule_review"],
+            limitations=["Not a lab protocol.", "No synthesis instructions.", "No dosing."],
+            created_at=now,
+            metadata={"assistant_output": True, "codex": True},
+        )
+    )
+    store.add_execution_event(
+        CampaignExecutionEvent(
+            event_id="campaign-event-1",
+            campaign_id=campaign.campaign_id,
+            work_package_id=work_package.work_package_id,
+            event_type="stage_gate_decided",
+            actor="reviewer-1",
+            timestamp=now,
+            summary="Generated molecule review gate recorded.",
+            before={"approval_status": "pending"},
+            after={"approval_status": "approved"},
+            metadata={},
+        )
+    )
+    store.update_work_package_status(
+        "wp-generated-review",
+        "completed",
+        actor="mock_external_integration",
+        rationale="Mock external workflow status completed.",
+    )
 
 
 def _seed_knowledge_graph(tmp_path: Path) -> None:

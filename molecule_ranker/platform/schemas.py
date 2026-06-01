@@ -71,6 +71,16 @@ PlatformJobType = Literal[
     "graph_staleness_scan",
     "graph_recommendation",
     "graph_export",
+    "hypothesis_generate",
+    "hypothesis_rank",
+    "hypothesis_questions",
+    "hypothesis_report",
+    "hypothesis_review",
+    "campaign_create",
+    "campaign_plan",
+    "campaign_replan",
+    "campaign_memo",
+    "campaign_export",
 ]
 PlatformJobStatus = Literal[
     "queued",

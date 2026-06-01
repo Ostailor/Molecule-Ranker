@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from starlette import status
 
+from molecule_ranker.campaigns import CampaignPlan, CampaignStore
 from molecule_ranker.integrations.connectors import create_connector
 from molecule_ranker.integrations.store import IntegrationStore
 from molecule_ranker.knowledge_graph import (
@@ -1264,6 +1265,108 @@ def portfolio_section_page(
     )
 
 
+@router.get("/dashboard/projects/{project_id}/campaigns", response_class=HTMLResponse)
+def campaign_list_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, campaign_store = _campaign_workspace(database, user, store, project_id)
+    campaigns = campaign_store.list_campaigns(project_id=project_id)
+    body = (
+        _campaign_nav(project_id)
+        + _campaign_boundary_notice()
+        + "<h2>Campaign list</h2>"
+        + _table(
+            ["Campaign", "Name", "Status", "Hypotheses", "Portfolio selections"],
+            [
+                [
+                    _link(
+                        f"/dashboard/projects/{quote(project_id)}/campaigns/{quote(campaign.campaign_id)}",
+                        campaign.campaign_id,
+                    ),
+                    campaign.name,
+                    campaign.status,
+                    ", ".join(campaign.hypothesis_ids),
+                    ", ".join(campaign.portfolio_selection_ids),
+                ]
+                for campaign in campaigns
+            ],
+        )
+    )
+    if not campaigns:
+        body += "<p>No campaign planning artifacts have been saved for this project.</p>"
+    return _campaign_dashboard_html("Campaign list", workspace, body)
+
+
+@router.get("/dashboard/projects/{project_id}/campaigns/{section}", response_class=HTMLResponse)
+def campaign_section_page(
+    project_id: str,
+    section: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, campaign_store = _campaign_workspace(database, user, store, project_id)
+    normalized = _campaign_section_slug(section)
+    if normalized in {"detail", ""}:
+        raise HTTPException(status_code=404, detail="Campaign dashboard page not found.")
+    title = _campaign_section_title(normalized)
+    if title is None:
+        return campaign_detail_page(
+            project_id=project_id,
+            campaign_id=section,
+            user=user,
+            database=database,
+            store=store,
+        )
+    return _campaign_dashboard_html(
+        title,
+        workspace,
+        _campaign_section_body(
+            campaign_store=campaign_store,
+            database=database,
+            project_id=project_id,
+            section=normalized,
+        ),
+    )
+
+
+def campaign_detail_page(
+    project_id: str,
+    campaign_id: str,
+    user: UserAccount,
+    database: PlatformDatabase,
+    store: ProjectWorkspaceStore,
+) -> Response:
+    workspace, campaign_store = _campaign_workspace(database, user, store, project_id)
+    try:
+        campaign = campaign_store.get_campaign(campaign_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Campaign not found.") from exc
+    if campaign.project_id not in {None, project_id}:
+        raise HTTPException(status_code=404, detail="Campaign not found.")
+    body = (
+        _campaign_nav(project_id)
+        + _campaign_boundary_notice()
+        + "<h2>Campaign detail</h2>"
+        + _definition_list(
+            {
+                "Campaign ID": campaign.campaign_id,
+                "Name": campaign.name,
+                "Status": campaign.status,
+                "Program": campaign.program_id or "",
+                "Disease focus": ", ".join(campaign.disease_focus),
+                "Target focus": ", ".join(campaign.target_focus),
+                "Hypotheses": ", ".join(campaign.hypothesis_ids),
+                "Portfolio selections": ", ".join(campaign.portfolio_selection_ids),
+            }
+        )
+    )
+    return _campaign_dashboard_html("Campaign detail", workspace, body)
+
+
 @router.get("/dashboard/projects/{project_id}/knowledge-graph", response_class=HTMLResponse)
 def knowledge_graph_page(
     project_id: str,
@@ -1595,6 +1698,324 @@ def knowledge_graph_portfolio_page(
     return _knowledge_graph_dashboard_html("Portfolio graph view", workspace, body)
 
 
+@router.get("/dashboard/projects/{project_id}/hypotheses", response_class=HTMLResponse)
+def hypothesis_overview_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, hypothesis_store = _hypothesis_workspace(database, user, store, project_id)
+    hypotheses = hypothesis_store.list_hypotheses(project_id=project_id)
+    body = (
+        _hypothesis_nav(project_id)
+        + _hypothesis_boundary_notice()
+        + "<h2>Hypothesis overview</h2>"
+        + _hypothesis_generated_warning(hypotheses)
+        + _table(
+            ["Metric", "Value"],
+            [
+                ["Hypotheses", len(hypotheses)],
+                ["Evidence gaps", len(hypothesis_store.list_evidence_gaps())],
+                ["Research questions", len(hypothesis_store.list_research_questions())],
+                [
+                    "Falsification criteria",
+                    len(hypothesis_store.list_falsification_criteria()),
+                ],
+            ],
+        )
+        + _hypothesis_table(project_id, hypotheses)
+    )
+    return _hypothesis_dashboard_html("Hypothesis overview", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/hypotheses/evidence-gaps",
+    response_class=HTMLResponse,
+)
+def hypothesis_evidence_gaps_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, hypothesis_store = _hypothesis_workspace(database, user, store, project_id)
+    gaps = _project_hypothesis_children(
+        hypothesis_store.list_evidence_gaps(),
+        hypothesis_store,
+        project_id,
+    )
+    body = (
+        _hypothesis_nav(project_id)
+        + _hypothesis_boundary_notice()
+        + "<h2>Evidence gaps</h2>"
+        + "<p>Evidence gaps are not failures. Absence of evidence is not evidence of absence.</p>"
+        + _table(
+            ["Gap", "Hypothesis", "Type", "Severity", "Suggested high-level resolution"],
+            [
+                [
+                    gap.gap_id,
+                    _hypothesis_link(project_id, gap.hypothesis_id),
+                    gap.gap_type,
+                    gap.severity,
+                    gap.suggested_high_level_resolution,
+                ]
+                for gap in gaps
+            ],
+        )
+    )
+    return _hypothesis_dashboard_html("Evidence gaps", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/hypotheses/research-questions",
+    response_class=HTMLResponse,
+)
+def hypothesis_research_questions_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, hypothesis_store = _hypothesis_workspace(database, user, store, project_id)
+    questions = _project_hypothesis_children(
+        hypothesis_store.list_research_questions(),
+        hypothesis_store,
+        project_id,
+    )
+    body = (
+        _hypothesis_nav(project_id)
+        + _hypothesis_boundary_notice()
+        + "<h2>Research questions</h2>"
+        + "<p>Research questions are high-level planning questions, not lab protocols.</p>"
+        + _table(
+            ["Question", "Hypothesis", "Type", "Category", "Ambiguity notes"],
+            [
+                [
+                    question.question_text,
+                    _hypothesis_link(project_id, question.hypothesis_id),
+                    question.question_type,
+                    question.high_level_validation_category,
+                    "; ".join(question.ambiguity_notes),
+                ]
+                for question in questions
+            ],
+        )
+    )
+    return _hypothesis_dashboard_html("Research questions", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/hypotheses/falsification-criteria",
+    response_class=HTMLResponse,
+)
+def hypothesis_falsification_criteria_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, hypothesis_store = _hypothesis_workspace(database, user, store, project_id)
+    criteria = _project_hypothesis_children(
+        hypothesis_store.list_falsification_criteria(),
+        hypothesis_store,
+        project_id,
+    )
+    body = (
+        _hypothesis_nav(project_id)
+        + _hypothesis_boundary_notice()
+        + "<h2>Falsification criteria</h2>"
+        + "<p>Criteria are decision-focused planning checks, not experimental procedures.</p>"
+        + _table(
+            ["Criterion", "Hypothesis", "Evidence type", "Decision impact"],
+            [
+                [
+                    criterion.criterion_text,
+                    _hypothesis_link(project_id, criterion.hypothesis_id),
+                    criterion.evidence_type_needed,
+                    criterion.decision_impact,
+                ]
+                for criterion in criteria
+            ],
+        )
+    )
+    return _hypothesis_dashboard_html("Falsification criteria", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/hypotheses/contradictions",
+    response_class=HTMLResponse,
+)
+def hypothesis_contradictions_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, hypothesis_store = _hypothesis_workspace(database, user, store, project_id)
+    hypotheses = [
+        hypothesis
+        for hypothesis in hypothesis_store.list_hypotheses(project_id=project_id)
+        if hypothesis.hypothesis_type == "assay_contradiction"
+        or hypothesis.contradicting_relation_ids
+        or hypothesis.status == "contradicted"
+    ]
+    body = (
+        _hypothesis_nav(project_id)
+        + _hypothesis_boundary_notice()
+        + "<h2>Contradictions</h2>"
+        + "<p>Contradiction-resolution hypotheses are review prompts, not proof that either "
+        "side is correct.</p>"
+        + _hypothesis_table(project_id, hypotheses)
+    )
+    return _hypothesis_dashboard_html("Contradictions", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/hypotheses/review-queue",
+    response_class=HTMLResponse,
+)
+def hypothesis_review_queue_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, hypothesis_store = _hypothesis_workspace(database, user, store, project_id)
+    hypotheses = [
+        hypothesis
+        for hypothesis in hypothesis_store.list_hypotheses(project_id=project_id)
+        if hypothesis.status in {"proposed", "under_review", "needs_more_evidence"}
+        or _requires_generated_review(hypothesis)
+    ]
+    body = (
+        _hypothesis_nav(project_id)
+        + _hypothesis_boundary_notice()
+        + "<h2>Review queue</h2>"
+        + "<p>Codex cannot approve hypotheses. Generated-molecule hypotheses require human "
+        "review before follow-up planning.</p>"
+        + _hypothesis_table(project_id, hypotheses)
+    )
+    return _hypothesis_dashboard_html("Review queue", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/hypotheses/lifecycle",
+    response_class=HTMLResponse,
+)
+def hypothesis_lifecycle_page(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, hypothesis_store = _hypothesis_workspace(database, user, store, project_id)
+    hypothesis_ids = {
+        hypothesis.hypothesis_id
+        for hypothesis in hypothesis_store.list_hypotheses(project_id=project_id)
+    }
+    events = [
+        event
+        for event in hypothesis_store.list_lifecycle_events()
+        if event.hypothesis_id in hypothesis_ids
+    ]
+    body = (
+        _hypothesis_nav(project_id)
+        + _hypothesis_boundary_notice()
+        + "<h2>Lifecycle timeline</h2>"
+        + "<p>Hypothesis status changes are audited through lifecycle events.</p>"
+        + _table(
+            ["Time", "Hypothesis", "Event", "Actor", "Summary"],
+            [
+                [
+                    event.timestamp.isoformat(),
+                    _hypothesis_link(project_id, event.hypothesis_id),
+                    event.event_type,
+                    event.actor or "",
+                    event.summary,
+                ]
+                for event in events
+            ],
+        )
+    )
+    return _hypothesis_dashboard_html("Lifecycle timeline", workspace, body)
+
+
+@router.get(
+    "/dashboard/projects/{project_id}/hypotheses/{hypothesis_id:path}",
+    response_class=HTMLResponse,
+)
+def hypothesis_detail_page(
+    project_id: str,
+    hypothesis_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace, hypothesis_store = _hypothesis_workspace(database, user, store, project_id)
+    try:
+        hypothesis = hypothesis_store.get_hypothesis(hypothesis_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Hypothesis not found.") from exc
+    if hypothesis.metadata.get("project_id") not in {None, project_id}:
+        raise HTTPException(status_code=404, detail="Hypothesis not found.")
+    gaps = hypothesis_store.list_evidence_gaps(hypothesis_id)
+    questions = hypothesis_store.list_research_questions(hypothesis_id)
+    criteria = hypothesis_store.list_falsification_criteria(hypothesis_id)
+    events = hypothesis_store.list_lifecycle_events(hypothesis_id)
+    body = (
+        _hypothesis_nav(project_id)
+        + _hypothesis_boundary_notice()
+        + "<h2>Hypothesis detail</h2>"
+        + _hypothesis_generated_warning([hypothesis])
+        + _definition_list(
+            {
+                "Hypothesis ID": hypothesis.hypothesis_id,
+                "Type": hypothesis.hypothesis_type,
+                "Status": hypothesis.status,
+                "Priority": hypothesis.priority_score,
+                "Confidence": hypothesis.confidence,
+                "Title": hypothesis.title,
+                "Statement": hypothesis.statement,
+                "Warnings": _hypothesis_warning_labels(hypothesis),
+                "Supporting relations": ", ".join(hypothesis.supporting_relation_ids),
+                "Contradicting relations": ", ".join(hypothesis.contradicting_relation_ids),
+                "Source artifacts": ", ".join(hypothesis.source_artifact_ids),
+            }
+        )
+        + "<h2>Evidence gaps</h2>"
+        + _table(
+            ["Gap", "Type", "Severity"],
+            [[gap.gap_id, gap.gap_type, gap.severity] for gap in gaps],
+        )
+        + "<h2>Research questions</h2>"
+        + _table(
+            ["Question", "Category"],
+            [
+                [question.question_text, question.high_level_validation_category]
+                for question in questions
+            ],
+        )
+        + "<h2>Falsification criteria</h2>"
+        + _table(
+            ["Criterion", "Decision impact"],
+            [
+                [criterion.criterion_text, criterion.decision_impact]
+                for criterion in criteria
+            ],
+        )
+        + "<h2>Lifecycle timeline</h2>"
+        + _table(
+            ["Time", "Event", "Actor", "Summary"],
+            [
+                [event.timestamp.isoformat(), event.event_type, event.actor or "", event.summary]
+                for event in events
+            ],
+        )
+    )
+    return _hypothesis_dashboard_html(f"Hypothesis detail {hypothesis_id}", workspace, body)
+
+
 @router.get(
     "/dashboard/projects/{project_id}/candidates/{candidate_name}",
     response_class=HTMLResponse,
@@ -1674,6 +2095,13 @@ def dashboard_artifact_download(
         database=database,
     ):
         raise HTTPException(status_code=403, detail="Missing permission structure:export.")
+    if _is_hypothesis_artifact(artifact_type) and not has_permission(
+        user,
+        "hypothesis:export",
+        project_id=project_id,
+        database=database,
+    ):
+        raise HTTPException(status_code=403, detail="Missing permission hypothesis:export.")
     path = safe_artifact_path(Path(artifact_path), root_dir=store.root_dir)
     return FileResponse(
         path,
@@ -2108,9 +2536,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.6.0-dashboard-fix2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.6</div>"
+        "<div class=\"brand\">molecule-ranker V1.7</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2253,9 +2681,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.6.0-dashboard-fix2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.6</div>"
+        "<div class=\"brand\">molecule-ranker V1.7</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2288,9 +2716,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.6.0-dashboard-fix2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.6</div>"
+        "<div class=\"brand\">molecule-ranker V1.7</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2307,6 +2735,326 @@ def _portfolio_dashboard_html(
         f"{body}</main></div></body></html>\n"
     )
     return HTMLResponse(html)
+
+
+def _campaign_workspace(
+    database: PlatformDatabase,
+    user: UserAccount,
+    store: ProjectWorkspaceStore,
+    project_id: str,
+) -> tuple[ProjectWorkspace, CampaignStore]:
+    workspace = _project_or_404(store=store, project_id=project_id)
+    if not user.is_admin and not has_permission(
+        user,
+        "campaign:read",
+        project_id=project_id,
+        database=database,
+    ):
+        raise HTTPException(status_code=403, detail="Campaign permission denied.")
+    return workspace, CampaignStore(_hosted_campaign_store_path(database.root_dir, project_id))
+
+
+def _hosted_campaign_store_path(root_dir: Any, project_id: str) -> Path:
+    return Path(root_dir) / ".molecule-ranker" / "campaigns" / project_id / "campaigns.sqlite"
+
+
+def _campaign_dashboard_html(
+    title: str,
+    workspace: ProjectWorkspace,
+    body: str,
+) -> HTMLResponse:
+    project_id = quote(workspace.workspace_id)
+    html = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
+        "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
+        "<div class=\"brand\">molecule-ranker V1.7</div>"
+        "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        f"{_link('/dashboard', 'Projects')}"
+        f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
+        f"{_link(f'/dashboard/projects/{project_id}/campaigns', 'Campaigns')}"
+        "</nav></div></header><main class=\"content\">"
+        f"<header class=\"page-heading\"><h1>{_h(title)}</h1>"
+        f"<p class=\"muted\">Project: {_h(workspace.name)}</p></header>"
+        f"{body}</main></div></body></html>\n"
+    )
+    return HTMLResponse(html)
+
+
+def _campaign_nav(project_id: str) -> str:
+    quoted = quote(project_id)
+    return "<nav class=\"section\">" + " ".join(
+        _link(f"/dashboard/projects/{quoted}/campaigns{path}", label)
+        for path, label in [
+            ("", "Campaign list"),
+            ("/plan", "Campaign plan"),
+            ("/work-packages", "Work packages"),
+            ("/budget", "Budget/resource view"),
+            ("/dependencies", "Dependency graph"),
+            ("/stage-gates", "Stage gates"),
+            ("/replan-triggers", "Replan triggers"),
+            ("/memo", "Campaign memo"),
+            ("/audit", "Campaign audit timeline"),
+        ]
+    ) + "</nav>"
+
+
+def _campaign_boundary_notice() -> str:
+    return (
+        "<aside class=\"research-disclaimer\">Campaign plans are research-management guidance, "
+        "not lab protocols. They do not contain synthesis instructions, dosing, clinical "
+        "guidance, or claims that selected candidates are active, safe, effective, "
+        "synthesizable, or clinically useful. Codex memos are labeled assistant output and "
+        "kept separate from deterministic campaign plans.</aside>"
+    )
+
+
+def _campaign_section_slug(section: str) -> str:
+    aliases = {
+        "campaign-plan": "plan",
+        "budget-resource-view": "budget",
+        "dependency-graph": "dependencies",
+        "replan": "replan-triggers",
+        "triggers": "replan-triggers",
+        "campaign-memo": "memo",
+        "audit-timeline": "audit",
+    }
+    return aliases.get(section, section)
+
+
+def _campaign_section_title(section: str) -> str | None:
+    return {
+        "plan": "Campaign plan",
+        "work-packages": "Work packages",
+        "budget": "Budget/resource view",
+        "dependencies": "Dependency graph",
+        "stage-gates": "Stage gates",
+        "replan-triggers": "Replan triggers",
+        "memo": "Campaign memo",
+        "audit": "Campaign audit timeline",
+    }.get(section)
+
+
+def _campaign_section_body(
+    *,
+    campaign_store: CampaignStore,
+    database: PlatformDatabase,
+    project_id: str,
+    section: str,
+) -> str:
+    campaign = _latest_campaign(campaign_store, project_id)
+    if campaign is None:
+        return (
+            _campaign_nav(project_id)
+            + _campaign_boundary_notice()
+            + f"<h2>{_h(_campaign_section_title(section) or 'Campaigns')}</h2>"
+            "<p>No campaign planning artifacts have been saved for this project.</p>"
+        )
+    plan = _latest_campaign_plan_or_none(campaign_store, campaign.campaign_id)
+    body = _campaign_nav(project_id) + _campaign_boundary_notice()
+    if section == "plan":
+        if plan is None:
+            return body + "<h2>Campaign plan</h2><p>No deterministic campaign plan is saved.</p>"
+        return (
+            body
+            + "<h2>Campaign plan</h2>"
+            "<p>Deterministic campaign plan artifact. Codex cannot create or approve this plan.</p>"
+            + _definition_list(
+                {
+                    "Campaign plan ID": plan.campaign_plan_id,
+                    "Campaign": plan.campaign_id,
+                    "Expected learning value": plan.expected_learning_value,
+                    "Human approval required": plan.human_approval_required,
+                    "Recommended sequence": ", ".join(plan.recommended_sequence),
+                    "Warnings": "; ".join(plan.warnings),
+                }
+            )
+            + "<h3>Objectives</h3>"
+            + _table(
+                ["Objective", "Type", "Hypotheses", "Candidates", "Weight"],
+                [
+                    [
+                        objective.objective_id,
+                        objective.objective_type,
+                        ", ".join(objective.linked_hypothesis_ids),
+                        ", ".join(objective.linked_candidate_ids),
+                        objective.priority_weight,
+                    ]
+                    for objective in plan.objectives
+                ],
+            )
+        )
+    if section == "work-packages":
+        packages = _current_campaign_work_packages(campaign_store, plan)
+        return (
+            body
+            + "<h2>Work packages</h2>"
+            "<p>Campaign work packages are planning objects, not protocols.</p>"
+            + _table(
+                ["Package", "Type", "Status", "Approvals", "Candidates", "Warnings"],
+                [
+                    [
+                        package.work_package_id,
+                        package.package_type,
+                        package.status,
+                        ", ".join(package.required_approvals),
+                        ", ".join(package.linked_candidate_ids),
+                        "; ".join(package.warnings),
+                    ]
+                    for package in packages
+                ],
+            )
+        )
+    if section == "budget":
+        if plan is None:
+            return body + "<h2>Budget/resource view</h2><p>No budget artifact is saved.</p>"
+        return (
+            body
+            + "<h2>Budget/resource view</h2>"
+            "<p>Cost fields are planning estimates only and do not imply vendor or lab pricing.</p>"
+            + _definition_list(
+                {
+                    "Budget": plan.budget.budget_id,
+                    "Max assay slots": plan.budget.max_assay_slots,
+                    "Max review hours": plan.budget.max_review_hours,
+                    "Max compute units": plan.budget.max_compute_units,
+                    "Max total cost": plan.budget.max_total_cost,
+                    "Cost units": plan.budget.cost_units or "unknown",
+                }
+            )
+            + "<h3>Budget summary</h3><pre>"
+            + _h(_compact_json(plan.budget_summary))
+            + "</pre>"
+        )
+    if section == "dependencies":
+        if plan is None:
+            return body + "<h2>Dependency graph</h2><p>No dependency graph is saved.</p>"
+        return (
+            body
+            + "<h2>Dependency graph</h2>"
+            "<p>This is planning order, not a lab protocol sequence.</p><pre>"
+            + _h(_compact_json(plan.dependency_graph))
+            + "</pre>"
+        )
+    if section == "stage-gates":
+        gates = campaign_store.list_stage_gates(campaign.campaign_id)
+        return (
+            body
+            + "<h2>Stage gates</h2>"
+            "<p>Campaign and stage gate approvals require campaign approval permission. "
+            "Generated molecule follow-up requires a review gate.</p>"
+            + _table(
+                ["Gate", "Type", "Status", "Work package", "Required permissions"],
+                [
+                    [
+                        gate.get("gate_id", ""),
+                        gate.get("gate_type", ""),
+                        gate.get("approval_status", ""),
+                        gate.get("work_package_id", ""),
+                        ", ".join(str(item) for item in gate.get("required_permissions", [])),
+                    ]
+                    for gate in gates
+                ],
+            )
+        )
+    if section == "replan-triggers":
+        triggers = campaign_store.list_replan_triggers(campaign.campaign_id)
+        return (
+            body
+            + "<h2>Replan triggers</h2>"
+            + _table(
+                ["Trigger", "Type", "Severity", "Action", "Description"],
+                [
+                    [
+                        trigger.trigger_id,
+                        trigger.trigger_type,
+                        trigger.severity,
+                        trigger.recommended_action,
+                        trigger.description,
+                    ]
+                    for trigger in triggers
+                ],
+            )
+        )
+    if section == "memo":
+        memos = campaign_store.list_campaign_memos(campaign.campaign_id)
+        return (
+            body
+            + "<h2>Campaign memo</h2>"
+            "<p>Codex memo assistant output is separate from the deterministic campaign plan.</p>"
+            + _table(
+                ["Memo", "Title", "Assistant output", "Budget summary", "Limitations"],
+                [
+                    [
+                        memo.memo_id,
+                        memo.title,
+                        bool(memo.metadata.get("assistant_output") or memo.metadata.get("codex")),
+                        memo.budget_summary,
+                        "; ".join(memo.limitations),
+                    ]
+                    for memo in memos
+                ],
+            )
+        )
+    if section == "audit":
+        campaign_events = campaign_store.list_execution_events(campaign.campaign_id)
+        platform_events = [
+            event
+            for event in database.list_audit_events(project_id=project_id, limit=100)
+            if str(event.object_type).startswith("campaign")
+            or str(event.metadata.get("campaign_id", "")) == campaign.campaign_id
+        ]
+        return (
+            body
+            + "<h2>Campaign audit timeline</h2>"
+            + _table(
+                ["Source", "Event", "Actor", "Summary"],
+                [
+                    ["campaign", event.event_type, event.actor or "", event.summary]
+                    for event in campaign_events
+                ]
+                + [
+                    ["platform", event.event_type, event.actor_user_id or "", event.summary]
+                    for event in platform_events
+                ],
+            )
+        )
+    raise HTTPException(status_code=404, detail="Campaign dashboard page not found.")
+
+
+def _latest_campaign(campaign_store: CampaignStore, project_id: str) -> Any | None:
+    campaigns = campaign_store.list_campaigns(project_id=project_id)
+    if campaigns:
+        return campaigns[0]
+    all_campaigns = campaign_store.list_campaigns()
+    return all_campaigns[0] if all_campaigns else None
+
+
+def _latest_campaign_plan_or_none(
+    campaign_store: CampaignStore,
+    campaign_id: str,
+) -> CampaignPlan | None:
+    try:
+        return campaign_store.get_latest_campaign_plan(campaign_id)
+    except ValueError:
+        return None
+
+
+def _current_campaign_work_packages(
+    campaign_store: CampaignStore,
+    plan: CampaignPlan | None,
+) -> list[Any]:
+    if plan is None:
+        return []
+    packages = []
+    for package in plan.work_packages:
+        try:
+            packages.append(campaign_store.get_work_package(package.work_package_id))
+        except ValueError:
+            packages.append(package)
+    return packages
 
 
 def _portfolio_dashboard_nav() -> dict[str, str]:
@@ -2463,9 +3211,9 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.6.0-dashboard-fix2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.6</div>"
+        "<div class=\"brand\">molecule-ranker V1.7</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3114,6 +3862,146 @@ def _prediction_candidate_key(prediction: dict[str, Any]) -> str:
     return str(prediction.get("candidate_name") or prediction.get("candidate_id") or "")
 
 
+def _hypothesis_workspace(
+    database: PlatformDatabase,
+    user: UserAccount,
+    store: ProjectWorkspaceStore,
+    project_id: str,
+) -> tuple[ProjectWorkspace, Any]:
+    from molecule_ranker.hypotheses.store import HypothesisStore
+
+    workspace = _project_or_404(store=store, project_id=project_id)
+    if not has_permission(user, "hypothesis:read", project_id=project_id, database=database):
+        raise HTTPException(status_code=403, detail="Hypothesis permission denied.")
+    return workspace, HypothesisStore(_hypothesis_store_path(database.root_dir, project_id))
+
+
+def _hypothesis_store_path(root_dir: Path, project_id: str) -> Path:
+    return root_dir / ".molecule-ranker" / "hypotheses" / project_id / "hypotheses.sqlite"
+
+
+def _hypothesis_dashboard_html(
+    title: str,
+    workspace: ProjectWorkspace,
+    body: str,
+) -> HTMLResponse:
+    project_id = quote(workspace.workspace_id)
+    html = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
+        "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
+        "<div class=\"brand\">molecule-ranker V1.7</div>"
+        "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        f"{_link('/dashboard', 'Projects')}"
+        f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
+        f"{_link(f'/dashboard/projects/{project_id}/hypotheses', 'Hypotheses')}"
+        f"{_link(f'/dashboard/projects/{project_id}/knowledge-graph', 'Knowledge Graph')}"
+        f"{_link(f'/dashboard/projects/{project_id}/review', 'Review')}"
+        "</nav></div></header><main class=\"content\">"
+        f"<header class=\"page-heading\"><h1>{_h(title)}</h1>"
+        f"<p class=\"muted\">Project: {_h(workspace.name)}</p></header>"
+        f"{body}</main></div></body></html>\n"
+    )
+    return HTMLResponse(html)
+
+
+def _hypothesis_nav(project_id: str) -> str:
+    quoted = quote(project_id)
+    links = {
+        "Hypothesis overview": f"/dashboard/projects/{quoted}/hypotheses",
+        "Evidence gaps": f"/dashboard/projects/{quoted}/hypotheses/evidence-gaps",
+        "Research questions": f"/dashboard/projects/{quoted}/hypotheses/research-questions",
+        "Falsification criteria": (
+            f"/dashboard/projects/{quoted}/hypotheses/falsification-criteria"
+        ),
+        "Contradictions": f"/dashboard/projects/{quoted}/hypotheses/contradictions",
+        "Review queue": f"/dashboard/projects/{quoted}/hypotheses/review-queue",
+        "Lifecycle timeline": f"/dashboard/projects/{quoted}/hypotheses/lifecycle",
+    }
+    return "<nav class=\"section\">" + " ".join(
+        _link(href, label) for label, href in links.items()
+    ) + "</nav>"
+
+
+def _hypothesis_boundary_notice() -> str:
+    return (
+        "<aside class=\"research-disclaimer\">Hypotheses are not evidence. Research "
+        "questions are not lab protocols. Validation plans are not experimental "
+        "procedures. No synthesis instructions, lab protocols, dosing, or clinical "
+        "claims are provided. Codex-drafted wording requires deterministic validation.</aside>"
+    )
+
+
+def _hypothesis_table(project_id: str, hypotheses: list[Any]) -> str:
+    return _table(
+        ["Hypothesis", "Type", "Status", "Priority", "Confidence", "Warnings"],
+        [
+            [
+                _hypothesis_link(project_id, hypothesis.hypothesis_id),
+                hypothesis.hypothesis_type,
+                hypothesis.status,
+                f"{hypothesis.priority_score:.3f}",
+                f"{hypothesis.confidence:.3f}",
+                _hypothesis_warning_labels(hypothesis),
+            ]
+            for hypothesis in hypotheses
+        ],
+    )
+
+
+def _hypothesis_link(project_id: str, hypothesis_id: str) -> str:
+    return _link(
+        f"/dashboard/projects/{quote(project_id)}/hypotheses/{quote(hypothesis_id, safe='')}",
+        hypothesis_id,
+    )
+
+
+def _hypothesis_warning_labels(hypothesis: Any) -> str:
+    warnings = list(hypothesis.warnings)
+    if _requires_generated_review(hypothesis):
+        warnings.append("Generated hypothesis warning visible: human review required")
+    if hypothesis.metadata.get("codex_draft"):
+        warnings.append("Codex draft deterministically validated or rejected")
+    if hypothesis.metadata.get("hypothesis_is_not_evidence") or hypothesis.metadata.get(
+        "not_evidence"
+    ):
+        warnings.append("not evidence")
+    return "; ".join(warnings)
+
+
+def _hypothesis_generated_warning(hypotheses: list[Any]) -> str:
+    if not any(_requires_generated_review(hypothesis) for hypothesis in hypotheses):
+        return ""
+    return (
+        "<p class=\"warning\"><strong>Generated hypothesis warning visible:</strong> "
+        "generated-molecule hypotheses remain computational hypotheses and require human "
+        "review before follow-up planning.</p>"
+    )
+
+
+def _requires_generated_review(hypothesis: Any) -> bool:
+    if hypothesis.hypothesis_type != "generated_molecule":
+        return False
+    ranking = hypothesis.metadata.get("ranking")
+    if isinstance(ranking, dict) and ranking.get("requires_review_before_follow_up") is True:
+        return True
+    return not hypothesis.review_decision_ids or hypothesis.status in {"proposed", "under_review"}
+
+
+def _project_hypothesis_children(
+    records: list[Any],
+    hypothesis_store: Any,
+    project_id: str,
+) -> list[Any]:
+    allowed_ids = {
+        hypothesis.hypothesis_id
+        for hypothesis in hypothesis_store.list_hypotheses(project_id=project_id)
+    }
+    return [record for record in records if record.hypothesis_id in allowed_ids]
+
+
 def _compact_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ": "))
 
@@ -3215,6 +4103,10 @@ def _is_pose_artifact(artifact_type: str) -> bool:
     return normalized in {"docking_pose", "pose_file", "structure_pose"} or (
         "pose" in normalized and "docking" in normalized
     )
+
+
+def _is_hypothesis_artifact(artifact_type: str) -> bool:
+    return "hypothesis" in artifact_type.lower().replace("-", "_")
 
 
 def _mode_badge(mode: Any) -> str:

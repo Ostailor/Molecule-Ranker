@@ -40,7 +40,7 @@ def test_validate_release_cli_runs_deterministic_suite(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["status"] == "pass"
-    assert payload["workflow_count"] == 10
+    assert payload["workflow_count"] == 11
     assert payload["live_validation"] is False
     assert payload["external_services"] == "mocked"
     assert payload["codex_provider"] == "NullCodexProvider"

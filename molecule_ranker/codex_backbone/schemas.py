@@ -56,6 +56,22 @@ CodexTaskType = Literal[
     "explain_cross_program_recommendation",
     "summarize_stale_decisions",
     "draft_mechanism_review_questions",
+    "draft_hypotheses",
+    "draft_hypothesis_statement",
+    "explain_hypothesis_evidence",
+    "draft_research_questions",
+    "summarize_evidence_gaps",
+    "draft_falsification_criteria",
+    "explain_contradiction_hypothesis",
+    "draft_hypothesis_review_questions",
+    "draft_limitations",
+    "draft_review_questions",
+    "draft_campaign_memo",
+    "summarize_campaign_tradeoffs",
+    "explain_replan_trigger",
+    "draft_review_questions_for_campaign",
+    "summarize_budget_bottlenecks",
+    "draft_project_update_from_campaign",
 ]
 CodexOutputFormat = Literal["json", "markdown", "text"]
 CodexResultStatus = Literal[

@@ -375,6 +375,14 @@ graph_app = typer.Typer(
     help="V1.5 knowledge graph export and reasoning commands.",
     no_args_is_help=True,
 )
+hypothesis_app = typer.Typer(
+    help="V1.6 hypothesis generation, planning, review, and reporting commands.",
+    no_args_is_help=True,
+)
+campaign_app = typer.Typer(
+    help="V1.7 closed-loop campaign planning and budget-aware execution commands.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
@@ -398,6 +406,8 @@ app.add_typer(design_app, name="design")
 app.add_typer(model_app, name="model")
 app.add_typer(structure_app, name="structure")
 app.add_typer(graph_app, name="graph")
+app.add_typer(hypothesis_app, name="hypothesis")
+app.add_typer(campaign_app, name="campaign")
 model_app.add_typer(model_dataset_app, name="dataset")
 model_app.add_typer(model_registry_app, name="registry")
 codex_app.add_typer(codex_assist_app, name="assist")
@@ -799,6 +809,71 @@ def validate_graph_command(
         raise typer.Exit(code=1)
 
 
+@validate_app.command("hypotheses")
+def validate_hypotheses_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    fixture: Annotated[
+        Literal["golden", "invented_relation", "protocol_text", "generated_activity_claim"],
+        typer.Option("--fixture", help="Synthetic hypothesis-validation fixture to run."),
+    ] = "golden",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V1.6 hypothesis workflow validation."""
+    from molecule_ranker.validation import run_hypothesis_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "hypotheses"
+    report = run_hypothesis_validation(output_dir=output_dir, fixture=fixture)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Hypothesis validation: {report.status}")
+        typer.echo(f"Fixture: {fixture}")
+        typer.echo(f"Hypotheses: {report.hypothesis_count}")
+        typer.echo(f"Research questions: {report.research_question_count}")
+        typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
+        typer.echo(f"JSON: {output_dir / 'hypothesis_guardrail_audit.json'}")
+        typer.echo(f"Markdown: {output_dir / 'hypothesis_guardrail_audit.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("campaign")
+def validate_campaign_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    fixture: Annotated[
+        Literal["golden", "protocol_text", "generated_no_review_gate", "codex_invented_cost"],
+        typer.Option("--fixture", help="Synthetic campaign-validation fixture to run."),
+    ] = "golden",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V1.7 campaign validation workflow."""
+    from molecule_ranker.validation import run_campaign_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "campaign"
+    report = run_campaign_validation(output_dir=output_dir, fixture=fixture)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Campaign validation: {report.status}")
+        typer.echo(f"Fixture: {fixture}")
+        typer.echo(f"Work packages: {report.work_package_count}")
+        typer.echo(f"Stage gates: {report.stage_gate_count}")
+        typer.echo(f"Replan triggers: {report.replan_trigger_count}")
+        typer.echo(f"Guardrail findings: {len(report.guardrail_audit.findings)}")
+        typer.echo(f"JSON: {output_dir / 'campaign_guardrail_audit.json'}")
+        typer.echo(f"Markdown: {output_dir / 'campaign_guardrail_audit.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
 @validate_app.command("security")
 def validate_security_command(
     root_dir: Annotated[
@@ -1183,6 +1258,1097 @@ def _run_graph_query_cli(
             raise typer.BadParameter("--candidate-id is required for evidence_gaps_for_candidate.")
         return reasoner.evidence_gaps_for_candidate(candidate_id)
     raise typer.BadParameter(f"Unsupported graph query: {query}")
+
+
+@hypothesis_app.command("generate")
+def hypothesis_generate_command(
+    from_graph: Annotated[
+        Path | None,
+        typer.Option("--from-graph", exists=True, dir_okay=False, help="KnowledgeGraph JSON."),
+    ] = None,
+    from_project: Annotated[
+        str | None,
+        typer.Option("--from-project", help="Project workspace path or project identifier."),
+    ] = None,
+    max_hypotheses: Annotated[
+        int,
+        typer.Option("--max-hypotheses", min=1, help="Maximum hypotheses to emit."),
+    ] = 100,
+    use_codex_drafting: Annotated[
+        bool,
+        typer.Option("--use-codex-drafting", help="Use Codex wording fallback if configured."),
+    ] = False,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output hypotheses JSON."),
+    ] = Path("hypotheses.json"),
+) -> None:
+    """Generate deterministic V1.6 hypotheses from graph-backed records."""
+    from molecule_ranker.hypotheses.evidence_gap import analyze_evidence_gaps_for_hypotheses
+    from molecule_ranker.hypotheses.falsification import build_falsification_criteria
+    from molecule_ranker.hypotheses.generator import generate_hypothesis_candidates
+    from molecule_ranker.hypotheses.questions import plan_research_questions
+    from molecule_ranker.hypotheses.ranking import rank_research_hypotheses
+    from molecule_ranker.hypotheses.schemas import HypothesisGenerationRun
+    from molecule_ranker.hypotheses.store import HypothesisStore
+    from molecule_ranker.knowledge_graph.store import KnowledgeGraphStore
+
+    graph = _load_or_build_hypothesis_graph_cli(from_graph, from_project)
+    work_dir = output.resolve().parent
+    graph_store = KnowledgeGraphStore(work_dir / ".hypothesis-graph")
+    graph_store.save(graph, actor="hypothesis-cli", reason="hypothesis_generate")
+    hypotheses = generate_hypothesis_candidates(
+        graph_store,
+        mechanism_hypotheses=graph.mechanisms,
+    )[:max_hypotheses]
+    if use_codex_drafting:
+        hypotheses = [
+            hypothesis.model_copy(
+                update={
+                    "metadata": {
+                        **hypothesis.metadata,
+                        "codex_drafting_requested": True,
+                        "codex_drafting_status": "deterministic_fallback",
+                    }
+                }
+            )
+            for hypothesis in hypotheses
+        ]
+    gaps = analyze_evidence_gaps_for_hypotheses(hypotheses, graph=graph)
+    criteria = {
+        hypothesis.hypothesis_id: build_falsification_criteria(hypothesis)
+        for hypothesis in hypotheses
+    }
+    ranked = rank_research_hypotheses(hypotheses, evidence_gaps_by_hypothesis=gaps)
+    questions = {
+        hypothesis.hypothesis_id: plan_research_questions(
+            hypothesis,
+            evidence_gaps=gaps.get(hypothesis.hypothesis_id, []),
+            criteria=criteria.get(hypothesis.hypothesis_id, []),
+        )
+        for hypothesis in ranked
+    }
+    run = HypothesisGenerationRun(
+        generation_run_id=f"hypothesis-cli-{slugify(graph.graph_id)}",
+        graph_build_id=graph.graph_id,
+        input_artifact_ids=[graph.graph_id, f"graph:{graph.graph_id}"],
+        hypothesis_count=len(ranked),
+        accepted_count=len(ranked),
+        rejected_count=0,
+        completed_at=datetime.now(UTC),
+        metadata={"cli": True, "use_codex_drafting": use_codex_drafting},
+    )
+    store = HypothesisStore(_hypothesis_cli_store_path(output))
+    for hypothesis in ranked:
+        _create_or_update_hypothesis_cli(store, hypothesis)
+        for gap in gaps.get(hypothesis.hypothesis_id, []):
+            store.add_evidence_gap(gap)
+        for criterion in criteria.get(hypothesis.hypothesis_id, []):
+            store.add_falsification_criterion(criterion)
+        for question in questions.get(hypothesis.hypothesis_id, []):
+            store.add_research_question(question)
+    store.add_generation_run(run)
+    _write_json_cli(
+        output,
+        {
+            "schema_version": "1.6",
+            "graph_id": graph.graph_id,
+            "generation_run": run.model_dump(mode="json"),
+            "hypotheses": [hypothesis.model_dump(mode="json") for hypothesis in ranked],
+            "boundaries": _hypothesis_cli_boundaries(),
+        },
+    )
+    typer.echo(str(output))
+
+
+@hypothesis_app.command("questions")
+def hypothesis_questions_command(
+    hypotheses: Annotated[
+        Path,
+        typer.Option("--hypotheses", exists=True, dir_okay=False, help="Hypotheses JSON."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output research questions JSON."),
+    ] = Path("research_questions.json"),
+) -> None:
+    """Generate high-level testable research questions."""
+    from molecule_ranker.hypotheses.falsification import build_falsification_criteria
+    from molecule_ranker.hypotheses.questions import plan_research_questions
+
+    loaded = _load_research_hypotheses_cli(hypotheses)
+    payload = {
+        "schema_version": "1.6",
+        "questions": {
+            hypothesis.hypothesis_id: [
+                question.model_dump(mode="json")
+                for question in plan_research_questions(
+                    hypothesis,
+                    criteria=build_falsification_criteria(hypothesis),
+                )
+            ]
+            for hypothesis in loaded
+        },
+    }
+    _write_json_cli(output, payload)
+    typer.echo(str(output))
+
+
+@hypothesis_app.command("gaps")
+def hypothesis_gaps_command(
+    hypotheses: Annotated[
+        Path,
+        typer.Option("--hypotheses", exists=True, dir_okay=False, help="Hypotheses JSON."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output evidence gaps JSON."),
+    ] = Path("evidence_gaps.json"),
+) -> None:
+    """Analyze evidence gaps for hypotheses."""
+    from molecule_ranker.hypotheses.evidence_gap import analyze_hypothesis_evidence_gaps
+
+    loaded = _load_research_hypotheses_cli(hypotheses)
+    payload = {
+        "schema_version": "1.6",
+        "evidence_gaps": {
+            hypothesis.hypothesis_id: [
+                gap.model_dump(mode="json")
+                for gap in analyze_hypothesis_evidence_gaps(hypothesis)
+            ]
+            for hypothesis in loaded
+        },
+    }
+    _write_json_cli(output, payload)
+    typer.echo(str(output))
+
+
+@hypothesis_app.command("falsification")
+def hypothesis_falsification_command(
+    hypotheses: Annotated[
+        Path,
+        typer.Option("--hypotheses", exists=True, dir_okay=False, help="Hypotheses JSON."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output criteria JSON."),
+    ] = Path("falsification_criteria.json"),
+) -> None:
+    """Build high-level falsification criteria."""
+    from molecule_ranker.hypotheses.falsification import build_falsification_criteria
+
+    loaded = _load_research_hypotheses_cli(hypotheses)
+    _write_json_cli(
+        output,
+        {
+            "schema_version": "1.6",
+            "falsification_criteria": {
+                hypothesis.hypothesis_id: [
+                    criterion.model_dump(mode="json")
+                    for criterion in build_falsification_criteria(hypothesis)
+                ]
+                for hypothesis in loaded
+            },
+        },
+    )
+    typer.echo(str(output))
+
+
+@hypothesis_app.command("rank")
+def hypothesis_rank_command(
+    hypotheses: Annotated[
+        Path,
+        typer.Option("--hypotheses", exists=True, dir_okay=False, help="Hypotheses JSON."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output ranked hypotheses JSON."),
+    ] = Path("ranked_hypotheses.json"),
+) -> None:
+    """Rank hypotheses for research planning."""
+    from molecule_ranker.hypotheses.evidence_gap import analyze_hypothesis_evidence_gaps
+    from molecule_ranker.hypotheses.ranking import rank_research_hypotheses
+
+    loaded = _load_research_hypotheses_cli(hypotheses)
+    gaps = {
+        hypothesis.hypothesis_id: analyze_hypothesis_evidence_gaps(hypothesis)
+        for hypothesis in loaded
+    }
+    ranked = rank_research_hypotheses(loaded, evidence_gaps_by_hypothesis=gaps)
+    _write_json_cli(
+        output,
+        {
+            "schema_version": "1.6",
+            "hypotheses": [hypothesis.model_dump(mode="json") for hypothesis in ranked],
+        },
+    )
+    typer.echo(str(output))
+
+
+@hypothesis_app.command("review")
+def hypothesis_review_command(
+    hypothesis_id: Annotated[str, typer.Option("--hypothesis-id", help="Hypothesis ID.")],
+    decision: Annotated[
+        Literal["accept_for_planning", "reject", "needs_more_evidence", "hold"],
+        typer.Option("--decision", help="Review decision."),
+    ],
+    reviewer_id: Annotated[str, typer.Option("--reviewer-id", help="Reviewer ID.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Review rationale.")],
+) -> None:
+    """Record a human hypothesis review decision and lifecycle event."""
+    from molecule_ranker.hypotheses.review import HypothesisReviewService
+    from molecule_ranker.hypotheses.store import HypothesisStore
+
+    store_path = Path("hypotheses.sqlite")
+    store = HypothesisStore(store_path)
+    _bootstrap_hypothesis_store_cli(store, hypothesis_id, Path("hypotheses.json"))
+    service = HypothesisReviewService(store)
+    review = service.record_decision(
+        hypothesis_id,
+        reviewer_id=reviewer_id,
+        decision=decision,
+        rationale=rationale,
+        confidence=0.0,
+        human_approval=decision == "accept_for_planning",
+    )
+    _write_json_cli(
+        Path("hypothesis_lifecycle.json"),
+        {
+            "schema_version": "1.6",
+            "hypothesis_id": hypothesis_id,
+            "review_decision": review.model_dump(mode="json"),
+            "lifecycle_events": [
+                event.model_dump(mode="json")
+                for event in store.list_lifecycle_events(hypothesis_id)
+            ],
+        },
+    )
+    typer.echo(review.decision_id)
+
+
+@hypothesis_app.command("report")
+def hypothesis_report_command(
+    hypotheses: Annotated[
+        Path,
+        typer.Option("--hypotheses", exists=True, dir_okay=False, help="Hypotheses JSON."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Output report Markdown."),
+    ] = Path("hypothesis_report.md"),
+) -> None:
+    """Render a hypothesis report."""
+    from molecule_ranker.hypotheses.evidence_gap import analyze_hypothesis_evidence_gaps
+    from molecule_ranker.hypotheses.falsification import build_falsification_criteria
+    from molecule_ranker.hypotheses.questions import plan_research_questions
+    from molecule_ranker.hypotheses.reports import render_hypothesis_report_markdown
+
+    loaded = _load_research_hypotheses_cli(hypotheses)
+    gaps = {
+        hypothesis.hypothesis_id: analyze_hypothesis_evidence_gaps(hypothesis)
+        for hypothesis in loaded
+    }
+    criteria = {
+        hypothesis.hypothesis_id: build_falsification_criteria(hypothesis)
+        for hypothesis in loaded
+    }
+    questions = {
+        hypothesis.hypothesis_id: plan_research_questions(
+            hypothesis,
+            evidence_gaps=gaps[hypothesis.hypothesis_id],
+            criteria=criteria[hypothesis.hypothesis_id],
+        )
+        for hypothesis in loaded
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        render_hypothesis_report_markdown(
+            loaded,
+            evidence_gaps_by_hypothesis=gaps,
+            criteria_by_hypothesis=criteria,
+            questions_by_hypothesis=questions,
+        ),
+        encoding="utf-8",
+    )
+    typer.echo(str(output))
+
+
+@hypothesis_app.command("lifecycle")
+def hypothesis_lifecycle_command(
+    hypothesis_id: Annotated[str, typer.Option("--hypothesis-id", help="Hypothesis ID.")],
+    json_output: Annotated[bool, typer.Option("--json", help="Emit JSON output.")] = False,
+) -> None:
+    """Show hypothesis lifecycle events from the local hypothesis store."""
+    from molecule_ranker.hypotheses.store import HypothesisStore
+
+    store = HypothesisStore(Path("hypotheses.sqlite"))
+    _bootstrap_hypothesis_store_cli(store, hypothesis_id, Path("hypotheses.json"))
+    events = store.list_lifecycle_events(hypothesis_id)
+    payload = [event.model_dump(mode="json") for event in events]
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for event in events:
+        typer.echo(f"{event.timestamp.isoformat()} {event.event_type}: {event.summary}")
+
+
+def _load_or_build_hypothesis_graph_cli(
+    from_graph: Path | None,
+    from_project: str | None,
+) -> Any:
+    if from_graph is not None:
+        return _load_knowledge_graph_cli(from_graph)
+    if from_project:
+        project_path = Path(from_project)
+        if project_path.exists():
+            return _build_knowledge_graph_cli(from_project=project_path, from_run=None)
+        raise typer.BadParameter("--from-project currently expects a project workspace path.")
+    raise typer.BadParameter("Provide --from-graph or --from-project.")
+
+
+def _load_research_hypotheses_cli(path: Path) -> list[Any]:
+    from molecule_ranker.hypotheses.schemas import ResearchHypothesis
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw = payload.get("hypotheses", payload) if isinstance(payload, dict) else payload
+    if not isinstance(raw, list):
+        raise typer.BadParameter("Hypotheses JSON must contain a hypotheses list.")
+    return [ResearchHypothesis.model_validate(item) for item in raw]
+
+
+def _create_or_update_hypothesis_cli(store: Any, hypothesis: Any) -> None:
+    try:
+        store.create_hypothesis(hypothesis)
+    except ValueError:
+        store.update_hypothesis(
+            hypothesis.hypothesis_id,
+            hypothesis.model_dump(),
+            actor="hypothesis-cli",
+        )
+
+
+def _bootstrap_hypothesis_store_cli(
+    store: Any,
+    hypothesis_id: str,
+    hypotheses_path: Path,
+) -> None:
+    try:
+        store.get_hypothesis(hypothesis_id)
+        return
+    except ValueError:
+        pass
+    if not hypotheses_path.exists():
+        raise typer.BadParameter(
+            "No local hypotheses.sqlite entry or hypotheses.json file for hypothesis."
+        )
+    for hypothesis in _load_research_hypotheses_cli(hypotheses_path):
+        if hypothesis.hypothesis_id == hypothesis_id:
+            store.create_hypothesis(hypothesis)
+            return
+    raise typer.BadParameter(f"Unknown hypothesis: {hypothesis_id}")
+
+
+def _hypothesis_cli_store_path(output: Path) -> Path:
+    return output.resolve().parent / "hypotheses.sqlite"
+
+
+def _hypothesis_cli_boundaries() -> list[str]:
+    return [
+        "Hypotheses are not evidence.",
+        "Questions are not protocols.",
+        "No synthesis instructions.",
+        "No lab protocols.",
+        "No dosing.",
+        "No clinical claims.",
+        "Generated molecules remain computational hypotheses.",
+    ]
+
+
+@campaign_app.command("create")
+def campaign_create_command(
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    program_id: Annotated[str | None, typer.Option("--program-id")] = None,
+    name: Annotated[str, typer.Option("--name")] = "Draft research campaign",
+    description: Annotated[str | None, typer.Option("--description")] = None,
+    from_hypotheses: Annotated[
+        Path,
+        typer.Option("--from-hypotheses", exists=True, dir_okay=False),
+    ] = Path("hypotheses.json"),
+    from_portfolio: Annotated[
+        Path | None,
+        typer.Option("--from-portfolio", exists=True, dir_okay=False),
+    ] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False),
+    ] = Path("campaign.json"),
+) -> None:
+    """Create a draft V1.7 campaign artifact from deterministic inputs."""
+    from molecule_ranker.campaigns import build_campaign_draft
+
+    try:
+        result = build_campaign_draft(
+            hypotheses_path=from_hypotheses,
+            portfolio_optimization_path=from_portfolio,
+            project_metadata={"project_id": project_id, "name": name},
+            program_metadata={"program_id": program_id, "name": name},
+            name=name,
+        )
+        campaign = result.campaign.model_copy(update={"description": description})
+        store = _campaign_cli_store()
+        _campaign_cli_create_or_load(store, campaign)
+        for package in result.work_packages:
+            store.add_work_package(package)
+        payload = {
+            "campaign": campaign,
+            "objectives": result.objectives,
+            "work_packages": result.work_packages,
+            "source_artifacts": {
+                "hypotheses": str(from_hypotheses),
+                "portfolio_optimization": str(from_portfolio) if from_portfolio else None,
+            },
+        }
+        _write_json_cli(output, payload)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Campaign: {output}")
+
+
+@campaign_app.command("plan")
+def campaign_plan_command(
+    campaign: Annotated[
+        Path | None,
+        typer.Option("--campaign", exists=True, dir_okay=False, help="Campaign JSON bundle."),
+    ] = None,
+    budget_assay_slots: Annotated[
+        int | None, typer.Option("--budget-assay-slots", min=0)
+    ] = None,
+    budget_review_hours: Annotated[
+        float | None, typer.Option("--budget-review-hours", min=0.0)
+    ] = None,
+    budget_compute_units: Annotated[
+        float | None, typer.Option("--budget-compute-units", min=0.0)
+    ] = None,
+    strategy: Annotated[
+        Literal["balanced", "safety_first", "learning_value", "budget_limited"],
+        typer.Option("--strategy"),
+    ] = "balanced",
+    hypotheses: Annotated[
+        Path | None,
+        typer.Option("--hypotheses", exists=True, dir_okay=False, help="Legacy hypotheses JSON."),
+    ] = None,
+    candidates: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidates",
+            exists=True,
+            dir_okay=False,
+            help="Legacy portfolio candidates JSON.",
+        ),
+    ] = None,
+    events: Annotated[
+        Path | None,
+        typer.Option(
+            "--events",
+            exists=True,
+            dir_okay=False,
+            help="Optional legacy campaign events JSON.",
+        ),
+    ] = None,
+    campaign_id: Annotated[str | None, typer.Option("--campaign-id")] = None,
+    max_work_packages: Annotated[int, typer.Option("--max-work-packages", min=0)] = 8,
+    max_assay_slots: Annotated[int | None, typer.Option("--max-assay-slots", min=0)] = None,
+    max_review_slots: Annotated[int | None, typer.Option("--max-review-slots", min=0)] = None,
+    max_computation_slots: Annotated[
+        int | None, typer.Option("--max-computation-slots", min=0)
+    ] = None,
+    max_total_cost: Annotated[float | None, typer.Option("--max-total-cost", min=0.0)] = None,
+    cost_units: Annotated[str | None, typer.Option("--cost-units")] = None,
+    require_human_approval: Annotated[
+        bool,
+        typer.Option("--require-human-approval/--no-human-approval"),
+    ] = True,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Campaign plan JSON."),
+    ] = Path("campaign_plan.json"),
+    memo_output: Annotated[
+        Path | None,
+        typer.Option("--memo-output", dir_okay=False, help="Optional campaign memo Markdown."),
+    ] = None,
+    dashboard_output: Annotated[
+        Path | None,
+        typer.Option("--dashboard-output", dir_okay=False, help="Optional dashboard HTML."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create a deterministic V1.7 closed-loop campaign plan."""
+    if campaign is None:
+        _campaign_legacy_plan_command(
+            hypotheses=hypotheses,
+            candidates=candidates,
+            events=events,
+            campaign_id=campaign_id,
+            max_work_packages=max_work_packages,
+            max_assay_slots=max_assay_slots,
+            max_review_slots=max_review_slots,
+            max_computation_slots=max_computation_slots,
+            max_total_cost=max_total_cost,
+            cost_units=cost_units,
+            require_human_approval=require_human_approval,
+            output=output,
+            memo_output=memo_output,
+            dashboard_output=dashboard_output,
+            json_output=json_output,
+        )
+        return
+
+    try:
+        plan = _campaigns_plan_from_bundle_cli(
+            campaign,
+            budget_assay_slots=budget_assay_slots,
+            budget_review_hours=budget_review_hours,
+            budget_compute_units=budget_compute_units,
+            strategy=strategy,
+        )
+        _write_json_cli(output, plan)
+        store = _campaign_cli_store()
+        _campaign_cli_create_or_load(store, _load_campaign_bundle_cli(campaign)["campaign"])
+        store.save_campaign_plan(plan)
+        for gate in plan.stage_gates:
+            store.add_stage_gate_decision(gate)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        typer.echo(json.dumps(plan.model_dump(mode="json"), indent=2, sort_keys=True))
+        return
+    typer.echo(f"Campaign plan: {output}")
+
+
+@campaign_app.command("memo")
+def campaign_memo_command(
+    campaign_plan: Annotated[
+        Path | None,
+        typer.Option("--campaign-plan", exists=True, dir_okay=False, help="Campaign plan JSON."),
+    ] = None,
+    plan: Annotated[
+        Path | None,
+        typer.Option("--plan", exists=True, dir_okay=False, help="Legacy campaign plan JSON."),
+    ] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Campaign memo Markdown."),
+    ] = Path("campaign_memo.md"),
+    use_codex: Annotated[
+        bool,
+        typer.Option("--use-codex", help="Accepted for compatibility; memo stays deterministic."),
+    ] = False,
+) -> None:
+    """Render a guarded campaign memo from a deterministic campaign plan."""
+    try:
+        selected_plan = campaign_plan or plan
+        if selected_plan is None:
+            raise typer.BadParameter("Provide --campaign-plan.")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if campaign_plan is not None:
+            from molecule_ranker.campaigns import CampaignPlan
+            from molecule_ranker.campaigns.reports import (
+                build_campaign_memo,
+                render_campaign_memo_markdown,
+            )
+
+            loaded = CampaignPlan.model_validate(
+                json.loads(selected_plan.read_text(encoding="utf-8"))
+            )
+            memo = build_campaign_memo(loaded)
+            memo_markdown = render_campaign_memo_markdown(memo, loaded)
+            output.write_text(memo_markdown, encoding="utf-8")
+            store = _campaign_cli_store()
+            _campaign_cli_create_or_load(
+                store,
+                store.get_campaign(loaded.campaign_id),
+            )
+            store.save_campaign_memo(memo)
+        else:
+            from molecule_ranker.campaign import render_campaign_memo_markdown
+
+            loaded = _load_campaign_plan_cli(selected_plan)
+            output.write_text(render_campaign_memo_markdown(loaded), encoding="utf-8")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if use_codex:
+        typer.echo("Codex memo drafting skipped; deterministic campaign artifact summary used.")
+    typer.echo(f"Campaign memo: {output}")
+
+
+@campaign_app.command("approve")
+def campaign_approve_command(
+    campaign_id: Annotated[str, typer.Option("--campaign-id")],
+    stage_gate_id: Annotated[str, typer.Option("--stage-gate-id")],
+    reviewer_id: Annotated[str, typer.Option("--reviewer-id")],
+    rationale: Annotated[str, typer.Option("--rationale")],
+) -> None:
+    """Approve a campaign stage gate as a human reviewer."""
+    from molecule_ranker.campaigns import approve_stage_gate
+
+    try:
+        store = _campaign_cli_store()
+        gate = store.get_stage_gate(stage_gate_id)
+        if str(gate.get("campaign_id")) != campaign_id:
+            raise ValueError("Stage gate does not belong to campaign.")
+        actor_role = _first_or_default(gate.get("required_role"), "scientific_reviewer")
+        permissions = _string_list_cli(gate.get("required_permissions"))
+        approved, event = approve_stage_gate(
+            gate,
+            actor=reviewer_id,
+            actor_role=actor_role,
+            actor_permissions=permissions,
+            decision="approved",
+            rationale=rationale,
+        )
+        store.add_stage_gate_decision(approved)
+        store.add_execution_event(event)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Campaign stage gate approved: {stage_gate_id}")
+
+
+@campaign_app.command("status")
+def campaign_status_command(
+    campaign_id: Annotated[str, typer.Option("--campaign-id")],
+) -> None:
+    """Print campaign status, gates, and audit events."""
+    try:
+        store = _campaign_cli_store()
+        campaign = store.get_campaign(campaign_id)
+        payload = {
+            "campaign": campaign.model_dump(mode="json"),
+            "stage_gates": store.list_stage_gates(campaign_id),
+            "events": [
+                event.model_dump(mode="json")
+                for event in store.list_execution_events(campaign_id)
+            ],
+        }
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_json(payload)
+
+
+@campaign_app.command("update-work-package")
+def campaign_update_work_package_command(
+    work_package_id: Annotated[str, typer.Option("--work-package-id")],
+    status: Annotated[
+        Literal[
+            "proposed",
+            "approved",
+            "blocked",
+            "ready",
+            "in_progress",
+            "completed",
+            "cancelled",
+            "failed",
+        ],
+        typer.Option("--status"),
+    ],
+    actor: Annotated[str, typer.Option("--actor")],
+) -> None:
+    """Update work-package status and write an audit event."""
+    try:
+        store = _campaign_cli_store()
+        updated = store.update_work_package_status(
+            work_package_id,
+            status,
+            actor=actor,
+            rationale=f"Work package status updated to {status}.",
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_json(updated.model_dump(mode="json"))
+
+
+@campaign_app.command("replan")
+def campaign_replan_command(
+    campaign_id: Annotated[str, typer.Option("--campaign-id")],
+    event_artifact: Annotated[
+        Path,
+        typer.Option("--event-artifact", exists=True, dir_okay=False),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False),
+    ] = Path("updated_campaign_plan.json"),
+) -> None:
+    """Evaluate deterministic replan triggers from a new event artifact."""
+    from molecule_ranker.campaigns import evaluate_replanning
+
+    try:
+        store = _campaign_cli_store()
+        current_plan = store.get_latest_campaign_plan(campaign_id)
+        event_payload = json.loads(event_artifact.read_text(encoding="utf-8"))
+        events = event_payload.get("events") if isinstance(event_payload, dict) else None
+        new_events = events if isinstance(events, list) else [event_payload]
+        report = evaluate_replanning(current_plan, new_events=new_events)
+        for trigger in report.triggers:
+            store.add_replan_trigger(trigger)
+        store.save_campaign_plan(report.updated_plan)
+        _write_json_cli(output, report.updated_plan)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Updated campaign plan: {output}")
+
+
+@campaign_app.command("export")
+def campaign_export_command(
+    campaign_id: Annotated[str, typer.Option("--campaign-id")],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False),
+    ] = Path("campaign_export.json"),
+) -> None:
+    """Export a campaign with audit trail and saved artifacts."""
+    try:
+        path = _campaign_cli_store().export_campaign_json(campaign_id, output)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Campaign export: {path}")
+
+
+@campaign_app.command("dashboard")
+def campaign_dashboard_command(
+    plan: Annotated[
+        Path,
+        typer.Option("--plan", exists=True, dir_okay=False, help="Campaign plan JSON."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="Campaign dashboard HTML."),
+    ] = Path("campaign_dashboard.html"),
+) -> None:
+    """Render a guarded campaign dashboard from a deterministic campaign plan."""
+    from molecule_ranker.campaign import render_campaign_dashboard_html
+
+    try:
+        loaded = _load_campaign_plan_cli(plan)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(render_campaign_dashboard_html(loaded), encoding="utf-8")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Campaign dashboard: {output}")
+
+
+def _campaign_legacy_plan_command(
+    *,
+    hypotheses: Path | None,
+    candidates: Path | None,
+    events: Path | None,
+    campaign_id: str | None,
+    max_work_packages: int,
+    max_assay_slots: int | None,
+    max_review_slots: int | None,
+    max_computation_slots: int | None,
+    max_total_cost: float | None,
+    cost_units: str | None,
+    require_human_approval: bool,
+    output: Path,
+    memo_output: Path | None,
+    dashboard_output: Path | None,
+    json_output: bool,
+) -> None:
+    if hypotheses is None or candidates is None:
+        typer.echo("Error: Provide --campaign or both --hypotheses and --candidates.", err=True)
+        raise typer.Exit(code=1)
+    from molecule_ranker.campaign import (
+        CampaignBudget,
+        CampaignPlanner,
+        render_campaign_dashboard_html,
+        render_campaign_memo_markdown,
+    )
+
+    try:
+        plan = CampaignPlanner(
+            CampaignBudget(
+                max_work_packages=max_work_packages,
+                max_assay_slots=max_assay_slots,
+                max_review_slots=max_review_slots,
+                max_computation_slots=max_computation_slots,
+                max_total_cost=max_total_cost,
+                cost_units=cost_units,
+                require_human_approval=require_human_approval,
+            )
+        ).plan(
+            hypotheses=_load_research_hypotheses_cli(hypotheses),
+            candidates=_load_portfolio_candidates_json(candidates),
+            events=_load_campaign_events_cli(events) if events is not None else [],
+            campaign_id=campaign_id,
+        )
+        _write_json_cli(output, plan)
+        if memo_output is not None:
+            memo_output.parent.mkdir(parents=True, exist_ok=True)
+            memo_output.write_text(render_campaign_memo_markdown(plan), encoding="utf-8")
+        if dashboard_output is not None:
+            dashboard_output.parent.mkdir(parents=True, exist_ok=True)
+            dashboard_output.write_text(render_campaign_dashboard_html(plan), encoding="utf-8")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        typer.echo(json.dumps(plan.model_dump(mode="json"), indent=2, sort_keys=True))
+        return
+    typer.echo(f"Campaign plan: {output}")
+
+
+def _campaigns_plan_from_bundle_cli(
+    path: Path,
+    *,
+    budget_assay_slots: int | None,
+    budget_review_hours: float | None,
+    budget_compute_units: float | None,
+    strategy: str,
+) -> Any:
+    from molecule_ranker.campaigns import (
+        CampaignBudget,
+        check_budget_constraints,
+        compute_campaign_budget_summary,
+        plan_campaign,
+        schedule_campaign_work,
+    )
+
+    bundle = _load_campaign_bundle_cli(path)
+    campaign = bundle["campaign"]
+    objectives = bundle["objectives"]
+    work_packages = bundle["work_packages"]
+    budget = CampaignBudget(
+        budget_id=f"campaign-budget-{slugify(campaign.campaign_id)}",
+        campaign_id=campaign.campaign_id,
+        max_total_cost=None,
+        cost_units=None,
+        max_assay_slots=budget_assay_slots,
+        max_review_hours=budget_review_hours,
+        max_compute_units=budget_compute_units,
+        max_codex_tasks=None,
+        max_external_sync_jobs=None,
+        reserved_budget={},
+        metadata={
+            "planning_estimates_only": True,
+            "cost_basis": "unknown",
+            "require_generated_molecule_review": True,
+        },
+    )
+    plan = plan_campaign(
+        campaign=campaign,
+        objectives=objectives,
+        work_packages=work_packages,
+        budget=budget,
+        portfolio_outputs=_campaign_bundle_portfolio_outputs(bundle),
+        hypothesis_ranking=_campaign_bundle_hypothesis_ranking(bundle),
+        active_learning_suggestions={},
+        review_status={},
+        experimental_evidence={},
+        model_uncertainty=_campaign_bundle_model_uncertainty(bundle),
+        graph_contradictions={},
+        config={
+            "human_approval_required": True,
+            "require_generated_molecule_review": True,
+            "campaign_planning_strategy": strategy,
+        },
+    )
+    schedule = schedule_campaign_work(plan.work_packages)
+    budget_summary = compute_campaign_budget_summary(plan)
+    budget_summary["usage"] = budget_summary.get("totals", {})
+    budget_check = check_budget_constraints(plan, plan.budget)
+    gates = _campaign_cli_stage_gates(plan, budget_check)
+    return plan.model_copy(
+        update={
+            "stage_gates": gates,
+            "dependency_graph": schedule["dependency_graph"],
+            "recommended_sequence": schedule["recommended_sequence"],
+            "budget_summary": budget_summary,
+            "warnings": _dedupe_cli([*plan.warnings, *schedule.get("warnings", [])]),
+            "metadata": {
+                **plan.metadata,
+                "campaign_planning_strategy": strategy,
+                "campaign_phases": schedule["phases"],
+                "parallel_groups": schedule["parallel_groups"],
+                "blocked_work_packages": schedule["blocked_work_packages"],
+            },
+        }
+    )
+
+
+def _campaign_cli_stage_gates(plan: Any, budget_check: dict[str, Any]) -> list[dict[str, Any]]:
+    from molecule_ranker.campaigns import (
+        build_budget_approval_gate,
+        build_campaign_approval_gate,
+        build_generated_molecule_review_gate,
+        build_safety_review_gate,
+    )
+
+    gates = [build_campaign_approval_gate(plan.campaign_id)]
+    for package in plan.work_packages:
+        if _campaign_cli_is_generated_package(package):
+            gates.append(build_generated_molecule_review_gate(package))
+        if _campaign_cli_is_safety_package(package):
+            gates.append(build_safety_review_gate(package))
+    budget_gate = build_budget_approval_gate(
+        campaign_id=plan.campaign_id,
+        budget_check=budget_check,
+    )
+    if budget_gate is not None:
+        gates.append(budget_gate)
+    return _unique_campaign_gates_cli(gates)
+
+
+def _load_campaign_bundle_cli(path: Path) -> dict[str, Any]:
+    from molecule_ranker.campaigns import Campaign, CampaignObjective, CampaignWorkPackage
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise typer.BadParameter("Campaign JSON must be an object.")
+    return {
+        "campaign": Campaign.model_validate(payload["campaign"]),
+        "objectives": [
+            CampaignObjective.model_validate(item) for item in payload.get("objectives", [])
+        ],
+        "work_packages": [
+            CampaignWorkPackage.model_validate(item)
+            for item in payload.get("work_packages", [])
+        ],
+        "source_artifacts": payload.get("source_artifacts", {}),
+    }
+
+
+def _campaign_bundle_portfolio_outputs(bundle: dict[str, Any]) -> dict[str, Any]:
+    source_artifacts = bundle.get("source_artifacts", {})
+    portfolio_path = source_artifacts.get("portfolio_optimization")
+    if not portfolio_path:
+        return {}
+    path = Path(str(portfolio_path))
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _campaign_bundle_hypothesis_ranking(bundle: dict[str, Any]) -> dict[str, float]:
+    output: dict[str, float] = {}
+    for objective in bundle["objectives"]:
+        for hypothesis_id in objective.linked_hypothesis_ids:
+            output[hypothesis_id] = objective.priority_weight
+    return output
+
+
+def _campaign_bundle_model_uncertainty(bundle: dict[str, Any]) -> dict[str, float]:
+    output: dict[str, float] = {}
+    for objective in bundle["objectives"]:
+        score = float(objective.metadata.get("uncertainty_score", 0.0) or 0.0)
+        for candidate_id in objective.linked_candidate_ids:
+            output[candidate_id] = score
+    return output
+
+
+def _campaign_cli_store() -> Any:
+    from molecule_ranker.campaigns import CampaignStore
+
+    return CampaignStore(_campaign_cli_store_path())
+
+
+def _campaign_cli_store_path() -> Path:
+    return Path(".molecule-ranker") / "campaigns.sqlite"
+
+
+def _campaign_cli_create_or_load(store: Any, campaign: Any) -> None:
+    try:
+        store.create_campaign(campaign)
+    except ValueError:
+        store.get_campaign(campaign.campaign_id)
+
+
+def _campaign_cli_is_generated_package(package: Any) -> bool:
+    text = " ".join(
+        [
+            str(package.package_type),
+            package.title,
+            package.high_level_activity_category,
+            *package.required_approvals,
+            *(str(value) for value in package.metadata.values()),
+        ]
+    ).lower()
+    return "generated" in text
+
+
+def _campaign_cli_is_safety_package(package: Any) -> bool:
+    text = " ".join(
+        [
+            package.title,
+            package.description,
+            package.high_level_activity_category,
+            *package.blocking_reasons,
+            *package.warnings,
+        ]
+    ).lower()
+    return "safety" in text or "critical risk" in text
+
+
+def _unique_campaign_gates_cli(gates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    output: list[dict[str, Any]] = []
+    for gate in gates:
+        gate_id = str(gate.get("gate_id"))
+        if gate_id in seen:
+            continue
+        seen.add(gate_id)
+        output.append(gate)
+    return output
+
+
+def _first_or_default(value: Any, default: str) -> str:
+    items = _string_list_cli(value)
+    return items[0] if items else default
+
+
+def _string_list_cli(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, list | tuple | set):
+        return [str(item) for item in value if str(item)]
+    return [str(value)]
+
+
+def _dedupe_cli(values: list[str]) -> list[str]:
+    output: list[str] = []
+    for value in values:
+        if value not in output:
+            output.append(value)
+    return output
+
+
+def _load_campaign_events_cli(path: Path) -> list[Any]:
+    from molecule_ranker.campaign import CampaignEvent
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw = payload.get("events", payload) if isinstance(payload, dict) else payload
+    if not isinstance(raw, list):
+        raise typer.BadParameter("Campaign events JSON must contain an events list.")
+    return [CampaignEvent.model_validate(item) for item in raw]
+
+
+def _load_campaign_plan_cli(path: Path) -> Any:
+    from molecule_ranker.campaign import CampaignPlan
+
+    return CampaignPlan.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _write_json_cli(path: Path, payload: Any) -> Path:

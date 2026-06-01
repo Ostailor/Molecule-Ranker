@@ -170,6 +170,14 @@ table {
 
 .table-scroll table {
   margin: 0;
+  min-width: 760px;
+  table-layout: auto;
+}
+
+.table-scroll th,
+.table-scroll td {
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 th,

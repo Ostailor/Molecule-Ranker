@@ -16,6 +16,8 @@ USER_DOCS = [
     "codex_assistant.md",
     "dashboard.md",
     "knowledge_graph.md",
+    "hypotheses.md",
+    "campaigns.md",
     "limitations.md",
 ]
 REQUIRED_DISCLAIMERS = [
@@ -36,6 +38,7 @@ REQUIRED_TOPICS = [
     "active learning",
     "integrations",
     "Codex",
+    "campaign",
 ]
 
 

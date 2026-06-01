@@ -4,11 +4,13 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from molecule_ranker import __version__
+from molecule_ranker.campaigns import Campaign, CampaignStore
 from molecule_ranker.codex.provider import CodexCLIProvider, CodexRequest, CodexResponse
 from molecule_ranker.codex_backbone.schemas import CodexTask
 from molecule_ranker.platform import CodexWorker, PlatformDatabase
@@ -43,7 +45,7 @@ class FakeCodexProvider:
 
 
 def test_version_is_v13() -> None:
-    assert __version__ == "1.5.0"
+    assert __version__ == "1.7.0"
 
 
 def test_hosted_auth_rbac_project_sharing_and_codex_queue(tmp_path: Path) -> None:
@@ -179,6 +181,152 @@ def test_hosted_design_jobs_enforce_permission_approval_and_budget(tmp_path: Pat
     assert queued.status_code == 200, queued.text
     assert queued.json()["job"]["job_type"] == "design_loop"
     assert queued.json()["generated_molecule_label"] == "computational_hypothesis"
+
+
+def test_hosted_campaign_jobs_permissions_guardrails_and_codex_memo_boundary(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    assert (
+        client.post(
+            "/projects",
+            json={"workspace_id": "workspace-a", "name": "Research"},
+            headers=admin_headers,
+        ).status_code
+        == 200
+    )
+    created = client.post(
+        "/admin/users",
+        json={"email": "viewer@example.com", "password": "Viewer-password-1"},
+        headers=admin_headers,
+    )
+    viewer_id = created.json()["user"]["user_id"]
+    client.post(
+        "/projects/workspace-a/share",
+        json={"role": "viewer", "user_id": viewer_id},
+        headers=admin_headers,
+    )
+    viewer_headers = _login(client, "viewer@example.com", "Viewer-password-1")
+
+    forbidden = client.post(
+        "/projects/workspace-a/campaign/jobs",
+        json={"job_type": "campaign_plan"},
+        headers=viewer_headers,
+    )
+    assert forbidden.status_code == 403
+
+    missing_gate = client.post(
+        "/projects/workspace-a/campaign/jobs",
+        json={"job_type": "campaign_plan", "generated_molecule_followup": True},
+        headers=admin_headers,
+    )
+    assert missing_gate.status_code == 403
+    assert "review gate" in missing_gate.text
+
+    protocol_text = client.post(
+        "/projects/workspace-a/campaign/jobs",
+        json={"job_type": "campaign_plan", "config": {"description": "Run this protocol."}},
+        headers=admin_headers,
+    )
+    assert protocol_text.status_code == 403
+    assert "planning objects" in protocol_text.text
+
+    queued = client.post(
+        "/projects/workspace-a/campaign/jobs",
+        json={
+            "job_type": "campaign_plan",
+            "generated_molecule_followup": True,
+            "generated_review_gate_present": True,
+        },
+        headers=admin_headers,
+    )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["job"]["config_snapshot"]["deterministic_campaign_plan_required"] is True
+
+    memo = client.post(
+        "/projects/workspace-a/campaign/jobs",
+        json={"job_type": "campaign_memo", "use_codex": True},
+        headers=admin_headers,
+    )
+    assert memo.status_code == 200, memo.text
+    config = memo.json()["job"]["config_snapshot"]
+    assert config["codex_memo_label"] == "assistant_output"
+    assert config["codex_memo_separate_from_deterministic_plan"] is True
+
+
+def test_hosted_campaign_stage_gate_approval_requires_permission_and_is_audited(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(
+            root_dir=tmp_path,
+            hosted_mode=True,
+            auth_secret=_secret(),
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="Admin-password-1",
+        )
+    )
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    assert (
+        client.post(
+            "/projects",
+            json={"workspace_id": "workspace-a", "name": "Research"},
+            headers=admin_headers,
+        ).status_code
+        == 200
+    )
+    gate_id = _seed_campaign_store(tmp_path, "workspace-a")
+    viewer = client.post(
+        "/admin/users",
+        json={"email": "viewer@example.com", "password": "Viewer-password-1"},
+        headers=admin_headers,
+    )
+    reviewer = client.post(
+        "/admin/users",
+        json={"email": "reviewer@example.com", "password": "Reviewer-password-1"},
+        headers=admin_headers,
+    )
+    client.post(
+        "/projects/workspace-a/share",
+        json={"role": "viewer", "user_id": viewer.json()["user"]["user_id"]},
+        headers=admin_headers,
+    )
+    client.post(
+        "/projects/workspace-a/share",
+        json={"role": "reviewer", "user_id": reviewer.json()["user"]["user_id"]},
+        headers=admin_headers,
+    )
+    viewer_headers = _login(client, "viewer@example.com", "Viewer-password-1")
+    reviewer_headers = _login(client, "reviewer@example.com", "Reviewer-password-1")
+
+    forbidden = client.post(
+        f"/projects/workspace-a/campaigns/campaign-1/stage-gates/{gate_id}/approve",
+        json={"reviewer_id": "reviewer-1", "rationale": "Reviewed artifact links."},
+        headers=viewer_headers,
+    )
+    assert forbidden.status_code == 403
+
+    approved = client.post(
+        f"/projects/workspace-a/campaigns/campaign-1/stage-gates/{gate_id}/approve",
+        json={"reviewer_id": "reviewer-1", "rationale": "Reviewed artifact links."},
+        headers=reviewer_headers,
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["stage_gate"]["approval_status"] == "approved"
+    database = cast(Any, client.app).state.platform_database
+    event_types = [
+        event.event_type for event in database.list_audit_events(project_id="workspace-a")
+    ]
+    assert "campaign_stage_gate_approved" in event_types
 
 
 def test_hosted_model_jobs_enforce_permissions_and_prediction_boundary(tmp_path: Path) -> None:
@@ -878,3 +1026,46 @@ def _artifact(path: Path, *, artifact_id: str) -> ArtifactRecord:
         sha256=hashlib.sha256(data).hexdigest(),
         size_bytes=len(data),
     )
+
+
+def _seed_campaign_store(tmp_path: Path, project_id: str) -> str:
+    store = CampaignStore(
+        tmp_path / ".molecule-ranker" / "campaigns" / project_id / "campaigns.sqlite"
+    )
+    now = datetime.now(UTC)
+    store.create_campaign(
+        Campaign(
+            campaign_id="campaign-1",
+            project_id=project_id,
+            program_id="program-1",
+            name="Campaign 1",
+            description="Planning artifact.",
+            disease_focus=["Parkinson disease"],
+            target_focus=["MAOB"],
+            hypothesis_ids=["hypothesis-1"],
+            portfolio_selection_ids=["selection-1"],
+            status="under_review",
+            created_at=now,
+            updated_at=now,
+            metadata={},
+        )
+    )
+    gate_id = "gate-generated-review"
+    store.add_stage_gate_decision(
+        {
+            "gate_id": gate_id,
+            "campaign_id": "campaign-1",
+            "work_package_id": None,
+            "gate_type": "generated_molecule_review",
+            "required_role": ["scientific_reviewer"],
+            "required_permissions": ["campaign:approve"],
+            "required_artifacts": ["hypothesis-1"],
+            "required_review_decisions": ["generated_molecule_review_decision"],
+            "blocking_conditions": ["generated_molecule_human_review_required"],
+            "approval_status": "pending",
+            "rationale": "Generated molecule follow-up requires review.",
+            "audit_event": None,
+            "metadata": {"not_codex_approvable": True},
+        }
+    )
+    return gate_id

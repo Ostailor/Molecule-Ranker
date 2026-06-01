@@ -104,7 +104,7 @@ def test_api_export_openapi_cli_writes_v1_schema(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     payload = json.loads(output.read_text())
-    assert payload["info"]["version"] == "1.5.0"
+    assert payload["info"]["version"] == "1.7.0"
     assert "/api/v1/health" in payload["paths"]
     assert "/api/v1/projects" in payload["paths"]
 

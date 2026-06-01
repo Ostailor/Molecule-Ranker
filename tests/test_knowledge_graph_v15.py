@@ -57,7 +57,7 @@ class FakeGraphCodexProvider:
 
 
 def test_v15_version_declared() -> None:
-    assert __version__ == "1.5.0"
+    assert __version__ == "1.7.0"
 
 
 def test_graph_schema_keeps_inference_separate_from_evidence_and_results() -> None:
@@ -91,7 +91,7 @@ def test_graph_schema_keeps_inference_separate_from_evidence_and_results() -> No
         ],
     )
 
-    assert graph.schema_version == "1.5"
+    assert graph.schema_version == "1.6"
     assert graph.relations[0].is_hypothesis is True
     assert "EvidenceItem" not in json.dumps(graph.model_dump(mode="json"))
     assert "AssayResult" not in json.dumps(graph.model_dump(mode="json"))

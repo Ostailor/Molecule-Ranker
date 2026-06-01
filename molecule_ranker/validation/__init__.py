@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from molecule_ranker.validation.campaign import (
+    CampaignGuardrailAuditReport,
+    CampaignGuardrailFinding,
+    CampaignValidationReport,
+    run_campaign_guardrail_audit,
+    run_campaign_validation,
+)
 from molecule_ranker.validation.design import (
     DesignGuardrailAuditReport,
     DesignGuardrailFinding,
@@ -22,6 +29,13 @@ from molecule_ranker.validation.guardrail_audit import (
     GuardrailAuditReport,
     GuardrailFinding,
     run_guardrail_audit,
+)
+from molecule_ranker.validation.hypotheses import (
+    HypothesisGuardrailAuditReport,
+    HypothesisGuardrailFinding,
+    HypothesisValidationReport,
+    run_hypothesis_guardrail_audit,
+    run_hypothesis_validation,
 )
 from molecule_ranker.validation.models import (
     ModelGuardrailAuditReport,
@@ -57,11 +71,17 @@ __all__ = [
     "GoldenValidationReport",
     "GoldenWorkflow",
     "GoldenWorkflowResult",
+    "CampaignGuardrailAuditReport",
+    "CampaignGuardrailFinding",
+    "CampaignValidationReport",
     "GuardrailAuditReport",
     "GuardrailFinding",
     "GraphGuardrailAuditReport",
     "GraphGuardrailFinding",
     "GraphValidationReport",
+    "HypothesisGuardrailAuditReport",
+    "HypothesisGuardrailFinding",
+    "HypothesisValidationReport",
     "DesignGuardrailAuditReport",
     "DesignGuardrailFinding",
     "DesignValidationReport",
@@ -79,6 +99,8 @@ __all__ = [
     "list_golden_workflows",
     "run_design_guardrail_audit",
     "run_design_validation",
+    "run_campaign_guardrail_audit",
+    "run_campaign_validation",
     "run_guardrail_audit",
     "run_model_guardrail_audit",
     "run_model_validation",
@@ -89,4 +111,6 @@ __all__ = [
     "run_golden_workflows",
     "run_graph_guardrail_audit",
     "run_graph_validation",
+    "run_hypothesis_guardrail_audit",
+    "run_hypothesis_validation",
 ]

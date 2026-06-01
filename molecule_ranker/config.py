@@ -127,6 +127,12 @@ class RankerConfig(BaseModel):
     enable_codex_backbone: bool = False
     strict_codex_backbone: bool = False
     enable_portfolio_optimization: bool = False
+    enable_hypothesis_generation: bool = False
+    use_codex_hypothesis_drafting: bool = False
+    max_hypotheses: int = Field(default=100, ge=1)
+    max_questions_per_hypothesis: int = Field(default=5, ge=1)
+    require_human_review_for_generated_hypotheses: bool = True
+    strict_hypothesis_guardrails: bool = True
     portfolio_algorithm: str = "greedy"
     portfolio_max_candidates: int = Field(default=10, ge=0)
     portfolio_max_generated_fraction: float = Field(default=0.4, ge=0.0, le=1.0)
@@ -135,6 +141,16 @@ class RankerConfig(BaseModel):
     portfolio_exclude_critical_risk: bool = True
     portfolio_scenarios: list[str] = Field(default_factory=list)
     portfolio_random_seed: int | None = None
+    enable_campaign_planning: bool = False
+    campaign_name: str | None = None
+    campaign_budget_assay_slots: int | None = Field(default=None, ge=0)
+    campaign_budget_review_hours: float | None = Field(default=None, ge=0.0)
+    campaign_budget_compute_units: float | None = Field(default=None, ge=0.0)
+    campaign_budget_cost: float | None = Field(default=None, ge=0.0)
+    require_campaign_approval: bool = True
+    require_generated_review_gate: bool = True
+    campaign_planning_strategy: str = "balanced"
+    max_campaign_work_packages: int = Field(default=50, ge=1)
     codex_tasks: list[str] = Field(
         default_factory=lambda: [
             "summarize_run",
@@ -280,6 +296,14 @@ class RankerConfig(BaseModel):
             "enable_codex_backbone": self.enable_codex_backbone,
             "strict_codex_backbone": self.strict_codex_backbone,
             "enable_portfolio_optimization": self.enable_portfolio_optimization,
+            "enable_hypothesis_generation": self.enable_hypothesis_generation,
+            "use_codex_hypothesis_drafting": self.use_codex_hypothesis_drafting,
+            "max_hypotheses": self.max_hypotheses,
+            "max_questions_per_hypothesis": self.max_questions_per_hypothesis,
+            "require_human_review_for_generated_hypotheses": (
+                self.require_human_review_for_generated_hypotheses
+            ),
+            "strict_hypothesis_guardrails": self.strict_hypothesis_guardrails,
             "portfolio_algorithm": self.portfolio_algorithm,
             "portfolio_max_candidates": self.portfolio_max_candidates,
             "portfolio_max_generated_fraction": self.portfolio_max_generated_fraction,
@@ -288,6 +312,16 @@ class RankerConfig(BaseModel):
             "portfolio_exclude_critical_risk": self.portfolio_exclude_critical_risk,
             "portfolio_scenarios": list(self.portfolio_scenarios),
             "portfolio_random_seed": self.portfolio_random_seed,
+            "enable_campaign_planning": self.enable_campaign_planning,
+            "campaign_name": self.campaign_name,
+            "campaign_budget_assay_slots": self.campaign_budget_assay_slots,
+            "campaign_budget_review_hours": self.campaign_budget_review_hours,
+            "campaign_budget_compute_units": self.campaign_budget_compute_units,
+            "campaign_budget_cost": self.campaign_budget_cost,
+            "require_campaign_approval": self.require_campaign_approval,
+            "require_generated_review_gate": self.require_generated_review_gate,
+            "campaign_planning_strategy": self.campaign_planning_strategy,
+            "max_campaign_work_packages": self.max_campaign_work_packages,
             "codex_tasks": list(self.codex_tasks),
             "codex_store_transcripts": self.codex_store_transcripts,
             "codex_max_tasks_per_run": self.codex_max_tasks_per_run,

@@ -31,6 +31,8 @@ ReleaseCategory = Literal[
     "packaging",
     "portfolio",
     "knowledge_graph",
+    "hypothesis",
+    "campaign",
 ]
 ReleaseCheckStatus = Literal["pass", "warn", "fail"]
 
@@ -287,6 +289,31 @@ V1_RELEASE_GATES: tuple[ReleaseGate, ...] = (
             "README.md",
         ),
     ),
+    ReleaseGate(
+        "v1-6-hypothesis-planning",
+        "hypothesis",
+        "V1.6 graph-backed hypothesis generation and research-question planning are guarded.",
+        (
+            "molecule_ranker/hypotheses/schemas.py",
+            "molecule_ranker/hypotheses/engine.py",
+            "molecule_ranker/hypotheses/planner.py",
+            "molecule_ranker/hypotheses/codex_assistant.py",
+            "tests/test_hypotheses_v16.py",
+            "README.md",
+        ),
+    ),
+    ReleaseGate(
+        "v1-7-campaign-planning",
+        "campaign",
+        "V1.7 closed-loop campaign planning and budget-aware execution management are guarded.",
+        (
+            "molecule_ranker/campaign/schemas.py",
+            "molecule_ranker/campaign/planner.py",
+            "molecule_ranker/campaign/reports.py",
+            "tests/test_campaign_planning_v17.py",
+            "README.md",
+        ),
+    ),
 )
 
 _CRITICAL_TODO_RE = re.compile(
@@ -376,13 +403,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "1.5.0":
-        return ReleaseCheck("version", "Version is 1.5.0", "pass", "Package version is 1.5.0.")
+    if __version__ == "1.7.0":
+        return ReleaseCheck("version", "Version is 1.7.0", "pass", "Package version is 1.7.0.")
     return ReleaseCheck(
         "version",
-        "Version is 1.5.0",
+        "Version is 1.7.0",
         "fail",
-        f"Package version is {__version__}, expected 1.5.0.",
+        f"Package version is {__version__}, expected 1.7.0.",
     )
 
 

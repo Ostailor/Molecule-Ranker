@@ -11,6 +11,7 @@ from typing import Any
 
 from sqlalchemy import insert, select, update
 
+from molecule_ranker.campaigns.schemas import contains_procedural_lab_detail
 from molecule_ranker.codex_backbone.guardrails import redact_secrets
 from molecule_ranker.platform.database import artifact_records, platform_jobs
 from molecule_ranker.platform.db import PlatformDatabase, PlatformDatabaseError
@@ -75,6 +76,16 @@ QUEUE_JOB_TYPES = {
     "graph_staleness_scan",
     "graph_recommendation",
     "graph_export",
+    "hypothesis_generate",
+    "hypothesis_rank",
+    "hypothesis_questions",
+    "hypothesis_report",
+    "hypothesis_review",
+    "campaign_create",
+    "campaign_plan",
+    "campaign_replan",
+    "campaign_memo",
+    "campaign_export",
 }
 
 JOB_PERMISSION: dict[str, str] = {
@@ -134,6 +145,16 @@ JOB_PERMISSION: dict[str, str] = {
     "graph_staleness_scan": "graph:query",
     "graph_recommendation": "graph:query",
     "graph_export": "graph:export",
+    "hypothesis_generate": "hypothesis:generate",
+    "hypothesis_rank": "hypothesis:read",
+    "hypothesis_questions": "hypothesis:read",
+    "hypothesis_report": "hypothesis:export",
+    "hypothesis_review": "hypothesis:review",
+    "campaign_create": "campaign:create",
+    "campaign_plan": "campaign:plan",
+    "campaign_replan": "campaign:plan",
+    "campaign_memo": "campaign:plan",
+    "campaign_export": "campaign:export",
 }
 
 PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
@@ -158,6 +179,20 @@ GRAPH_JOB_TYPES = {
     "graph_staleness_scan",
     "graph_recommendation",
     "graph_export",
+}
+HYPOTHESIS_JOB_TYPES = {
+    "hypothesis_generate",
+    "hypothesis_rank",
+    "hypothesis_questions",
+    "hypothesis_report",
+    "hypothesis_review",
+}
+CAMPAIGN_JOB_TYPES = {
+    "campaign_create",
+    "campaign_plan",
+    "campaign_replan",
+    "campaign_memo",
+    "campaign_export",
 }
 
 
@@ -229,6 +264,20 @@ class PlatformJobQueue:
             config_snapshot=config,
         )
         _enforce_hosted_graph_policy(
+            database=self.database,
+            requested_by=requested_by,
+            job_type=job_type,
+            project_id=project_id,
+            config_snapshot=config,
+        )
+        _enforce_hosted_hypothesis_policy(
+            database=self.database,
+            requested_by=requested_by,
+            job_type=job_type,
+            project_id=project_id,
+            config_snapshot=config,
+        )
+        _enforce_hosted_campaign_policy(
             database=self.database,
             requested_by=requested_by,
             job_type=job_type,
@@ -860,6 +909,198 @@ def _enforce_hosted_graph_policy(
             raise PlatformDatabaseError("Hosted graph run references must be run IDs, not paths.")
     if job_type == "graph_export":
         config_snapshot["graph_export_permission_checked"] = True
+
+
+def _enforce_hosted_hypothesis_policy(
+    *,
+    database: PlatformDatabase,
+    requested_by: UserAccount,
+    job_type: str,
+    project_id: str | None,
+    config_snapshot: dict[str, Any],
+) -> None:
+    if job_type not in HYPOTHESIS_JOB_TYPES:
+        return
+    if not requested_by.is_admin and project_id is not None and not has_permission(
+        requested_by,
+        "hypothesis:read",
+        project_id=project_id,
+        database=database,
+    ):
+        raise PermissionError(f"Missing permission hypothesis:read for project {project_id}.")
+    if bool(config_snapshot.get("use_codex_hypothesis_drafting")):
+        if config_snapshot.get("strict_hypothesis_guardrails") is False:
+            raise PermissionError(
+                "Codex-drafted hypotheses require strict deterministic validation."
+            )
+        config_snapshot["deterministic_hypothesis_validation_required"] = True
+        config_snapshot["codex_may_only_draft_wording"] = True
+    if bool(config_snapshot.get("codex_output_validated") is False):
+        raise PermissionError("Codex-drafted hypotheses require deterministic validation.")
+    if bool(config_snapshot.get("hypothesis_as_evidence")) or bool(
+        config_snapshot.get("review_decision_as_evidence")
+    ):
+        raise PermissionError("Hypotheses and review decisions must not be treated as evidence.")
+    if bool(config_snapshot.get("follow_up_planning")) and _generated_hypothesis_context(
+        config_snapshot
+    ) and not bool(config_snapshot.get("human_review_approved")):
+        raise PermissionError(
+            "Generated-molecule hypotheses require human review before follow-up planning."
+        )
+    if job_type == "hypothesis_review":
+        decision = str(config_snapshot.get("decision") or "")
+        reviewer_id = str(config_snapshot.get("reviewer_id") or requested_by.user_id)
+        if decision == "accept_for_planning" and _is_codex_actor(reviewer_id):
+            raise PermissionError("Codex cannot approve hypotheses.")
+        if (
+            decision == "accept_for_planning"
+            and _generated_hypothesis_context(config_snapshot)
+            and not bool(config_snapshot.get("human_review_approved"))
+        ):
+            raise PermissionError(
+                "Generated-molecule hypotheses require explicit human approval."
+            )
+    if job_type == "hypothesis_report":
+        config_snapshot["hypothesis_report_disclaimers_required"] = True
+
+
+def _generated_hypothesis_context(config_snapshot: dict[str, Any]) -> bool:
+    hypothesis_type = str(config_snapshot.get("hypothesis_type") or "")
+    if hypothesis_type == "generated_molecule":
+        return True
+    if bool(config_snapshot.get("generated_molecule")):
+        return True
+    entity_ids = config_snapshot.get("generated_molecule_entity_ids")
+    return isinstance(entity_ids, list) and bool(entity_ids)
+
+
+def _enforce_hosted_campaign_policy(
+    *,
+    database: PlatformDatabase,
+    requested_by: UserAccount,
+    job_type: str,
+    project_id: str | None,
+    config_snapshot: dict[str, Any],
+) -> None:
+    if job_type not in CAMPAIGN_JOB_TYPES:
+        return
+    if not requested_by.is_admin and project_id is not None and not has_permission(
+        requested_by,
+        "campaign:read",
+        project_id=project_id,
+        database=database,
+    ):
+        raise PermissionError(f"Missing permission campaign:read for project {project_id}.")
+    if _campaign_approval_requested(config_snapshot) and not _can_approve_campaign(
+        database=database,
+        requested_by=requested_by,
+        project_id=project_id,
+    ):
+        database.write_audit(
+            "campaign_approval_denied",
+            actor_user_id=requested_by.user_id,
+            project_id=project_id,
+            summary="Denied campaign or stage gate approval.",
+            object_type="campaign_job",
+            object_id=job_type,
+            metadata={"job_type": job_type, "permission": "campaign:approve"},
+        )
+        raise PermissionError("Campaign approval requires campaign:approve.")
+    if _generated_campaign_follow_up(config_snapshot) and not _generated_review_gate_present(
+        config_snapshot
+    ):
+        raise PermissionError(
+            "Generated molecule follow-up requires a generated molecule review gate."
+        )
+    if _campaign_config_contains_protocol_text(config_snapshot):
+        raise PermissionError("Campaign work packages are planning objects, not protocols.")
+    config_snapshot["campaign_plans_are_research_management_guidance"] = True
+    config_snapshot["campaign_work_packages_are_not_protocols"] = True
+    if job_type == "campaign_plan":
+        config_snapshot["deterministic_campaign_plan_required"] = True
+        config_snapshot["human_approval_required_by_default"] = True
+    if job_type == "campaign_memo":
+        if bool(config_snapshot.get("codex_memo_overwrites_plan")):
+            raise PermissionError(
+                "Codex campaign memos must remain separate from deterministic plans."
+            )
+        if bool(config_snapshot.get("use_codex")):
+            config_snapshot["codex_memo_label"] = "assistant_output"
+            config_snapshot["codex_memo_separate_from_deterministic_plan"] = True
+            config_snapshot["codex_may_only_draft_campaign_summary"] = True
+
+
+def _campaign_approval_requested(config_snapshot: dict[str, Any]) -> bool:
+    return any(
+        bool(config_snapshot.get(key))
+        for key in (
+            "campaign_approval",
+            "approve_campaign",
+            "stage_gate_approval",
+            "approve_stage_gate",
+        )
+    )
+
+
+def _can_approve_campaign(
+    *,
+    database: PlatformDatabase,
+    requested_by: UserAccount,
+    project_id: str | None,
+) -> bool:
+    return requested_by.is_admin or has_permission(
+        requested_by,
+        "campaign:approve",
+        project_id=project_id,
+        database=database,
+    )
+
+
+def _generated_campaign_follow_up(config_snapshot: dict[str, Any]) -> bool:
+    if any(
+        bool(config_snapshot.get(key))
+        for key in (
+            "generated_molecule_followup",
+            "generated_molecule_follow_up",
+            "generated_follow_up",
+        )
+    ):
+        return True
+    return bool(config_snapshot.get("follow_up_planning")) and bool(
+        config_snapshot.get("generated_molecule")
+    )
+
+
+def _generated_review_gate_present(config_snapshot: dict[str, Any]) -> bool:
+    return any(
+        bool(config_snapshot.get(key))
+        for key in (
+            "generated_review_gate_present",
+            "generated_molecule_review_gate_present",
+            "generated_review_gate_approved",
+            "generated_molecule_review_gate_approved",
+        )
+    )
+
+
+def _campaign_config_contains_protocol_text(config_snapshot: dict[str, Any]) -> bool:
+    for key, value in config_snapshot.items():
+        if "protocol" in key.lower() and bool(value):
+            return True
+        if isinstance(value, str) and contains_procedural_lab_detail(value):
+            return True
+        if isinstance(value, list) and any(
+            isinstance(item, str) and contains_procedural_lab_detail(item) for item in value
+        ):
+            return True
+        if isinstance(value, dict) and _campaign_config_contains_protocol_text(value):
+            return True
+    return False
+
+
+def _is_codex_actor(actor: str) -> bool:
+    normalized = actor.lower().replace("_", "-").replace(" ", "-")
+    return "codex" in normalized
 
 
 def _graph_scope_project_ids(

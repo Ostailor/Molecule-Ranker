@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
+from molecule_ranker.campaigns import CampaignExecutionEvent, CampaignStore
 from molecule_ranker.platform.auth import generate_opaque_token
 from molecule_ranker.platform.dashboard import render_hosted_dashboard
 from molecule_ranker.platform.db import PlatformDatabase, PlatformDatabaseError
@@ -129,6 +130,50 @@ class GraphJobRequest(BaseModel):
     included_project_ids: list[str] = Field(default_factory=list)
     project_ids: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class HypothesisJobRequest(BaseModel):
+    job_type: str
+    hypothesis_id: str | None = None
+    hypothesis_type: str | None = None
+    decision: str | None = None
+    reviewer_id: str | None = None
+    rationale: str | None = None
+    use_codex_drafting: bool = False
+    max_hypotheses: int | None = Field(default=None, ge=1)
+    human_review_approved: bool = False
+    follow_up_planning: bool = False
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class HypothesisReviewRequest(BaseModel):
+    decision: str
+    reviewer_id: str | None = None
+    rationale: str
+    human_review_approved: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CampaignJobRequest(BaseModel):
+    job_type: str
+    campaign_id: str | None = None
+    campaign_plan_id: str | None = None
+    work_package_id: str | None = None
+    stage_gate_id: str | None = None
+    event_artifact_id: str | None = None
+    strategy: str = "balanced"
+    use_codex: bool = False
+    campaign_approval: bool = False
+    stage_gate_approval: bool = False
+    generated_molecule_followup: bool = False
+    generated_review_gate_present: bool = False
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class CampaignStageGateApprovalRequest(BaseModel):
+    reviewer_id: str | None = None
+    decision: str = "approved"
+    rationale: str
 
 
 class DesignPlanApprovalRequest(BaseModel):
@@ -838,6 +883,262 @@ def enqueue_graph_job(
     }
 
 
+@router.post("/projects/{project_id}/hypothesis/jobs")
+def enqueue_hypothesis_job(
+    project_id: str,
+    request: HypothesisJobRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    hypothesis_job_types = {
+        "hypothesis_generate",
+        "hypothesis_rank",
+        "hypothesis_questions",
+        "hypothesis_report",
+        "hypothesis_review",
+    }
+    if request.job_type not in hypothesis_job_types:
+        raise HTTPException(status_code=400, detail="Unsupported hypothesis job type.")
+    config = dict(request.config)
+    for key, value in {
+        "hypothesis_id": request.hypothesis_id,
+        "hypothesis_type": request.hypothesis_type,
+        "decision": request.decision,
+        "reviewer_id": request.reviewer_id,
+        "rationale": request.rationale,
+        "max_hypotheses": request.max_hypotheses,
+    }.items():
+        if value is not None:
+            config[key] = value
+    config["use_codex_hypothesis_drafting"] = request.use_codex_drafting
+    config["strict_hypothesis_guardrails"] = True
+    config["deterministic_hypothesis_validation_required"] = True
+    config["human_review_approved"] = request.human_review_approved
+    config["follow_up_planning"] = request.follow_up_planning
+    config["hypotheses_are_not_evidence"] = True
+    try:
+        job = PlatformJobQueue(database).enqueue(
+            job_type=request.job_type,
+            requested_by=user,
+            project_id=project_id,
+            config_snapshot=config,
+            metadata={
+                "hypothesis_v1_6": True,
+                "hypotheses_are_not_evidence": True,
+                "codex_drafts_require_deterministic_validation": (
+                    request.use_codex_drafting
+                ),
+            },
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": job.status,
+        "job": job.model_dump(mode="json"),
+        "hypothesis_boundary": "hypotheses_are_not_evidence",
+        "codex_boundary": "codex_drafts_require_deterministic_validation",
+    }
+
+
+@router.post("/projects/{project_id}/campaign/jobs")
+def enqueue_campaign_job(
+    project_id: str,
+    request: CampaignJobRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    campaign_job_types = {
+        "campaign_create",
+        "campaign_plan",
+        "campaign_replan",
+        "campaign_memo",
+        "campaign_export",
+    }
+    if request.job_type not in campaign_job_types:
+        raise HTTPException(status_code=400, detail="Unsupported campaign job type.")
+    config = dict(request.config)
+    for key, value in {
+        "campaign_id": request.campaign_id,
+        "campaign_plan_id": request.campaign_plan_id,
+        "work_package_id": request.work_package_id,
+        "stage_gate_id": request.stage_gate_id,
+        "event_artifact_id": request.event_artifact_id,
+        "strategy": request.strategy,
+    }.items():
+        if value is not None:
+            config[key] = value
+    config["use_codex"] = request.use_codex
+    config["campaign_approval"] = request.campaign_approval
+    config["stage_gate_approval"] = request.stage_gate_approval
+    config["generated_molecule_followup"] = request.generated_molecule_followup
+    config["generated_review_gate_present"] = request.generated_review_gate_present
+    config["codex_memos_are_assistant_output"] = request.use_codex
+    config["campaign_plan_is_deterministic"] = request.job_type in {
+        "campaign_create",
+        "campaign_plan",
+        "campaign_replan",
+    }
+    try:
+        job = PlatformJobQueue(database).enqueue(
+            job_type=request.job_type,
+            requested_by=user,
+            project_id=project_id,
+            config_snapshot=config,
+            metadata={
+                "campaign_v1_7": True,
+                "research_management_guidance": True,
+                "work_packages_not_protocols": True,
+                "codex_memo_assistant_output": request.use_codex,
+            },
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": job.status,
+        "job": job.model_dump(mode="json"),
+        "campaign_boundary": "research_management_guidance_not_lab_protocol",
+        "memo_boundary": "codex_memos_are_assistant_output_not_deterministic_plans",
+    }
+
+
+@router.post("/projects/{project_id}/campaigns/{campaign_id}/stage-gates/{stage_gate_id}/approve")
+def approve_campaign_stage_gate(
+    project_id: str,
+    campaign_id: str,
+    stage_gate_id: str,
+    request: CampaignStageGateApprovalRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    if not user.is_admin and not has_permission(
+        user,
+        "campaign:approve",
+        project_id=project_id,
+        database=database,
+    ):
+        raise HTTPException(status_code=403, detail="Campaign approval requires permission.")
+    reviewer_id = request.reviewer_id or user.user_id
+    if reviewer_id.lower().startswith("codex"):
+        raise HTTPException(status_code=403, detail="Codex cannot approve campaign stage gates.")
+    store = _campaign_store(database, project_id)
+    try:
+        gate = store.get_stage_gate(stage_gate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Campaign stage gate not found.") from exc
+    if str(gate.get("campaign_id")) != campaign_id:
+        raise HTTPException(status_code=404, detail="Campaign stage gate not found.")
+    now = datetime.now(UTC)
+    updated = {
+        **gate,
+        "approval_status": request.decision,
+        "rationale": request.rationale,
+        "approved_by": reviewer_id,
+        "approved_at": now.isoformat(),
+    }
+    event = CampaignExecutionEvent(
+        event_id=f"campaign-stage-gate-{stage_gate_id}-{now.timestamp()}",
+        campaign_id=campaign_id,
+        work_package_id=gate.get("work_package_id"),
+        event_type="stage_gate_decided",
+        actor=reviewer_id,
+        timestamp=now,
+        summary=f"Hosted stage gate {stage_gate_id} decided as {request.decision}.",
+        before={"approval_status": gate.get("approval_status")},
+        after={"approval_status": request.decision, "rationale": request.rationale},
+        metadata={
+            "project_id": project_id,
+            "gate_id": stage_gate_id,
+            "permission": "campaign:approve",
+            "codex_approved": False,
+        },
+    )
+    updated["audit_event"] = event.model_dump(mode="json")
+    store.add_stage_gate_decision(updated)
+    store.add_execution_event(event)
+    audit = database.write_audit(
+        "campaign_stage_gate_approved",
+        actor_user_id=user.user_id,
+        project_id=project_id,
+        summary=f"Campaign stage gate {stage_gate_id} decided as {request.decision}.",
+        object_type="campaign_stage_gate",
+        object_id=stage_gate_id,
+        metadata={
+            "campaign_id": campaign_id,
+            "reviewer_id": reviewer_id,
+            "decision": request.decision,
+            "campaign_store_event_id": event.event_id,
+        },
+    )
+    return {
+        "stage_gate": updated,
+        "event": event.model_dump(mode="json"),
+        "audit_event": audit.model_dump(mode="json"),
+    }
+
+
+@router.post("/projects/{project_id}/hypotheses/{hypothesis_id}/review")
+def review_hypothesis(
+    project_id: str,
+    hypothesis_id: str,
+    request: HypothesisReviewRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    if not user.is_admin and not has_permission(
+        user,
+        "hypothesis:review",
+        project_id=project_id,
+        database=database,
+    ):
+        database.write_audit(
+            "hypothesis_review_denied",
+            actor_user_id=user.user_id,
+            project_id=project_id,
+            summary=f"Denied hypothesis review for {hypothesis_id}.",
+            object_type="hypothesis",
+            object_id=hypothesis_id,
+            metadata={"permission": "hypothesis:review"},
+        )
+        raise HTTPException(status_code=403, detail="Hypothesis review denied.")
+    from molecule_ranker.hypotheses.review import HypothesisReviewService
+    from molecule_ranker.hypotheses.store import HypothesisStore
+
+    store = HypothesisStore(_hosted_hypothesis_store_path(database.root_dir, project_id))
+    try:
+        decision = HypothesisReviewService(store).record_decision(
+            hypothesis_id,
+            reviewer_id=request.reviewer_id or user.user_id,
+            decision=request.decision,
+            rationale=request.rationale,
+            human_approval=request.human_review_approved,
+            metadata={"hosted_platform": True, **request.metadata},
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    database.write_audit(
+        "hypothesis_review_status_changed",
+        actor_user_id=user.user_id,
+        project_id=project_id,
+        summary=f"Recorded hypothesis review for {hypothesis_id}.",
+        object_type="hypothesis",
+        object_id=hypothesis_id,
+        metadata={
+            "decision": decision.decision,
+            "decision_id": decision.decision_id,
+            "review_decision_is_not_evidence": True,
+        },
+    )
+    return {
+        "review_decision": decision.model_dump(mode="json"),
+        "review_decision_is_not_evidence": True,
+        "status_changes_are_audited": True,
+    }
+
+
 @router.post("/projects/{project_id}/portfolio/stage-gates/approve")
 def approve_portfolio_stage_gate(
     project_id: str,
@@ -1015,3 +1316,19 @@ def public_user(user: UserAccount) -> dict[str, Any]:
     return user.model_dump(mode="json", exclude={"last_login_at"}) | {
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None
     }
+
+
+def _hosted_hypothesis_store_path(root_dir: Any, project_id: str) -> Any:
+    from pathlib import Path
+
+    return Path(root_dir) / ".molecule-ranker" / "hypotheses" / project_id / "hypotheses.sqlite"
+
+
+def _campaign_store(database: PlatformDatabase, project_id: str) -> CampaignStore:
+    return CampaignStore(_hosted_campaign_store_path(database.root_dir, project_id))
+
+
+def _hosted_campaign_store_path(root_dir: Any, project_id: str) -> Any:
+    from pathlib import Path
+
+    return Path(root_dir) / ".molecule-ranker" / "campaigns" / project_id / "campaigns.sqlite"

@@ -32,6 +32,13 @@ GRAPH_JOB_TYPES = {
     "graph_recommendation",
     "graph_export",
 }
+HYPOTHESIS_JOB_TYPES = {
+    "hypothesis_generate",
+    "hypothesis_rank",
+    "hypothesis_questions",
+    "hypothesis_report",
+    "hypothesis_review",
+}
 
 
 def default_pipeline_handlers(
@@ -58,6 +65,11 @@ def default_pipeline_handlers(
             raise ValueError("Graph jobs require a platform database.")
         return _run_graph_job(root_dir, database, job)
 
+    def hypothesis_handler(job: PlatformJob) -> JobResult:
+        if database is None:
+            raise ValueError("Hypothesis jobs require a platform database.")
+        return _run_hypothesis_job(root_dir, database, job)
+
     return {
         "ranking": placeholder,
         "generation": placeholder,
@@ -79,6 +91,11 @@ def default_pipeline_handlers(
         "graph_staleness_scan": graph_handler,
         "graph_recommendation": graph_handler,
         "graph_export": graph_handler,
+        "hypothesis_generate": hypothesis_handler,
+        "hypothesis_rank": hypothesis_handler,
+        "hypothesis_questions": hypothesis_handler,
+        "hypothesis_report": hypothesis_handler,
+        "hypothesis_review": hypothesis_handler,
     }
 
 
@@ -437,6 +454,321 @@ def _export_graph_for_job(output_dir: Path, job: PlatformJob, graph: Any) -> Job
     )
 
 
+def _run_hypothesis_job(root_dir: Path, database: PlatformDatabase, job: PlatformJob) -> JobResult:
+    from molecule_ranker.hypotheses.evidence_gap import analyze_evidence_gaps_for_hypotheses
+    from molecule_ranker.hypotheses.falsification import build_falsification_criteria_for_hypotheses
+    from molecule_ranker.hypotheses.generator import DeterministicHypothesisGenerator
+    from molecule_ranker.hypotheses.questions import plan_research_questions_for_hypotheses
+    from molecule_ranker.hypotheses.ranking import rank_research_hypotheses
+    from molecule_ranker.hypotheses.reports import render_hypothesis_report_markdown
+    from molecule_ranker.hypotheses.review import HypothesisReviewService
+    from molecule_ranker.hypotheses.schemas import HypothesisGenerationRun, ResearchHypothesis
+    from molecule_ranker.hypotheses.store import HypothesisStore
+    from molecule_ranker.knowledge_graph.store import KnowledgeGraphStore
+
+    output_dir = root_dir / ".molecule-ranker" / "job_outputs" / job.job_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    store = HypothesisStore(_hosted_hypothesis_store_path(root_dir, job.project_id))
+
+    if job.job_type == "hypothesis_generate":
+        graph = _load_graph_for_job(root_dir, database, job)
+        graph_store = KnowledgeGraphStore(output_dir / "graph_store")
+        graph_store.save(graph, actor=job.requested_by_user_id, reason="hosted hypothesis job")
+        generated = DeterministicHypothesisGenerator(graph_store).generate()
+        max_hypotheses = int(job.config_snapshot.get("max_hypotheses") or 100)
+        hypotheses = [
+            _with_hosted_hypothesis_metadata(hypothesis, job)
+            for hypothesis in generated[: max(1, max_hypotheses)]
+        ]
+        gaps = analyze_evidence_gaps_for_hypotheses(hypotheses, graph=graph)
+        criteria = build_falsification_criteria_for_hypotheses(hypotheses)
+        questions = plan_research_questions_for_hypotheses(
+            hypotheses,
+            evidence_gaps_by_hypothesis=gaps,
+            criteria_by_hypothesis=criteria,
+        )
+        ranked = rank_research_hypotheses(hypotheses, evidence_gaps_by_hypothesis=gaps)
+        run = HypothesisGenerationRun(
+            generation_run_id=f"hypothesis-run-{job.job_id}",
+            project_id=job.project_id,
+            program_id=_optional_text(job.config_snapshot.get("program_id")),
+            graph_build_id=_optional_text(job.config_snapshot.get("graph_build_id")),
+            input_artifact_ids=_string_list(job.config_snapshot.get("input_artifact_ids")),
+            hypothesis_count=len(ranked),
+            accepted_count=0,
+            rejected_count=0,
+            warnings=_hosted_hypothesis_warnings(ranked),
+            metadata={
+                "job_id": job.job_id,
+                "deterministic_validation": True,
+                "codex_drafting_used": bool(
+                    job.config_snapshot.get("use_codex_hypothesis_drafting")
+                ),
+            },
+        )
+        _persist_hosted_hypotheses(store, ranked, gaps, criteria, questions, run)
+        artifact_paths = _write_hypothesis_artifacts(
+            output_dir,
+            ranked,
+            gaps,
+            criteria,
+            questions,
+            store.list_lifecycle_events(),
+        )
+        return JobResult(
+            result={
+                "artifact_type": "hypothesis_generation",
+                "hypothesis_count": len(ranked),
+                "deterministic_validation": True,
+                "hypotheses_are_not_evidence": True,
+                "generated_hypothesis_ids_requiring_review": [
+                    hypothesis.hypothesis_id
+                    for hypothesis in ranked
+                    if hypothesis.hypothesis_type == "generated_molecule"
+                ],
+            },
+            artifact_paths=artifact_paths,
+        )
+
+    hypotheses = _hypotheses_for_job(store, job, ResearchHypothesis)
+    if job.job_type == "hypothesis_rank":
+        gaps = {
+            hypothesis.hypothesis_id: store.list_evidence_gaps(hypothesis.hypothesis_id)
+            for hypothesis in hypotheses
+        }
+        ranked = rank_research_hypotheses(hypotheses, evidence_gaps_by_hypothesis=gaps)
+        for hypothesis in ranked:
+            store.update_hypothesis(
+                hypothesis.hypothesis_id,
+                hypothesis.model_dump(),
+                actor="PipelineWorker",
+            )
+        output_path = output_dir / "ranked_hypotheses.json"
+        _write_json(output_path, {"hypotheses": ranked, "ranking_is_for_planning": True})
+        return JobResult(
+            result={"artifact_type": "ranked_hypotheses", "hypothesis_count": len(ranked)},
+            artifact_paths=[output_path],
+        )
+    if job.job_type == "hypothesis_questions":
+        gaps = {
+            hypothesis.hypothesis_id: store.list_evidence_gaps(hypothesis.hypothesis_id)
+            for hypothesis in hypotheses
+        }
+        criteria = {
+            hypothesis.hypothesis_id: store.list_falsification_criteria(
+                hypothesis.hypothesis_id
+            )
+            for hypothesis in hypotheses
+        }
+        questions = plan_research_questions_for_hypotheses(
+            hypotheses,
+            evidence_gaps_by_hypothesis=gaps,
+            criteria_by_hypothesis=criteria,
+        )
+        for items in questions.values():
+            for question in items:
+                store.add_research_question(question)
+        output_path = output_dir / "research_questions.json"
+        _write_json(
+            output_path,
+            {"questions": questions, "questions_are_not_protocols": True},
+        )
+        return JobResult(
+            result={
+                "artifact_type": "research_questions",
+                "question_count": sum(len(v) for v in questions.values()),
+            },
+            artifact_paths=[output_path],
+        )
+    if job.job_type == "hypothesis_report":
+        gaps = {
+            hypothesis.hypothesis_id: store.list_evidence_gaps(hypothesis.hypothesis_id)
+            for hypothesis in hypotheses
+        }
+        criteria = {
+            hypothesis.hypothesis_id: store.list_falsification_criteria(
+                hypothesis.hypothesis_id
+            )
+            for hypothesis in hypotheses
+        }
+        questions = {
+            hypothesis.hypothesis_id: store.list_research_questions(hypothesis.hypothesis_id)
+            for hypothesis in hypotheses
+        }
+        output_path = output_dir / "hypothesis_report.md"
+        output_path.write_text(
+            render_hypothesis_report_markdown(
+                hypotheses,
+                evidence_gaps_by_hypothesis=gaps,
+                criteria_by_hypothesis=criteria,
+                questions_by_hypothesis=questions,
+                lifecycle_events=store.list_lifecycle_events(),
+            ),
+            encoding="utf-8",
+        )
+        return JobResult(
+            result={"artifact_type": "hypothesis_report", "hypotheses_are_not_evidence": True},
+            artifact_paths=[output_path],
+        )
+    if job.job_type == "hypothesis_review":
+        decision = HypothesisReviewService(store).record_decision(
+            str(job.config_snapshot.get("hypothesis_id") or ""),
+            reviewer_id=str(job.config_snapshot.get("reviewer_id") or job.requested_by_user_id),
+            decision=str(job.config_snapshot.get("decision") or "hold"),
+            rationale=str(job.config_snapshot.get("rationale") or "Hosted hypothesis review."),
+            human_approval=bool(job.config_snapshot.get("human_review_approved")),
+            metadata={"job_id": job.job_id, "hosted_platform": True},
+        )
+        output_path = output_dir / "hypothesis_review.json"
+        _write_json(
+            output_path,
+            {
+                "review_decision": decision,
+                "review_decision_is_not_evidence": True,
+                "lifecycle_events": store.list_lifecycle_events(decision.hypothesis_id),
+            },
+        )
+        database.write_audit(
+            "hypothesis_review_status_changed",
+            actor_user_id=job.requested_by_user_id,
+            project_id=job.project_id,
+            summary=f"Recorded hypothesis review for {decision.hypothesis_id}.",
+            object_type="hypothesis",
+            object_id=decision.hypothesis_id,
+            metadata={
+                "decision": decision.decision,
+                "decision_id": decision.decision_id,
+                "review_decision_is_not_evidence": True,
+            },
+        )
+        return JobResult(
+            result={
+                "artifact_type": "hypothesis_review",
+                "hypothesis_id": decision.hypothesis_id,
+                "review_decision_is_not_evidence": True,
+            },
+            artifact_paths=[output_path],
+        )
+    raise ValueError(f"Unsupported hypothesis job type: {job.job_type}")
+
+
+def _with_hosted_hypothesis_metadata(hypothesis: Any, job: PlatformJob) -> Any:
+    metadata = {
+        **hypothesis.metadata,
+        "project_id": job.project_id,
+        "program_id": job.config_snapshot.get("program_id"),
+        "hosted_platform": True,
+        "job_id": job.job_id,
+        "deterministic_validation": True,
+        "hypothesis_is_not_evidence": True,
+    }
+    if job.config_snapshot.get("use_codex_hypothesis_drafting"):
+        metadata["codex_draft"] = {
+            "status": "not_used_by_hosted_worker",
+            "deterministic_validation_required": True,
+        }
+    return hypothesis.model_copy(update={"metadata": metadata})
+
+
+def _persist_hosted_hypotheses(
+    store: Any,
+    hypotheses: list[Any],
+    gaps: dict[str, list[Any]],
+    criteria: dict[str, list[Any]],
+    questions: dict[str, list[Any]],
+    run: Any,
+) -> None:
+    for hypothesis in hypotheses:
+        try:
+            store.create_hypothesis(hypothesis)
+        except ValueError:
+            store.update_hypothesis(
+                hypothesis.hypothesis_id,
+                hypothesis.model_dump(),
+                actor="PipelineWorker",
+            )
+        for gap in gaps.get(hypothesis.hypothesis_id, []):
+            store.add_evidence_gap(gap)
+        for criterion in criteria.get(hypothesis.hypothesis_id, []):
+            store.add_falsification_criterion(criterion)
+        for question in questions.get(hypothesis.hypothesis_id, []):
+            store.add_research_question(question)
+    store.add_generation_run(run)
+
+
+def _write_hypothesis_artifacts(
+    output_dir: Path,
+    hypotheses: list[Any],
+    gaps: dict[str, list[Any]],
+    criteria: dict[str, list[Any]],
+    questions: dict[str, list[Any]],
+    lifecycle_events: list[Any],
+) -> list[Path]:
+    from molecule_ranker.hypotheses.reports import render_hypothesis_report_markdown
+
+    paths = {
+        "hypotheses": output_dir / "hypotheses.json",
+        "research_questions": output_dir / "research_questions.json",
+        "falsification_criteria": output_dir / "falsification_criteria.json",
+        "evidence_gaps": output_dir / "evidence_gaps.json",
+        "hypothesis_lifecycle": output_dir / "hypothesis_lifecycle.json",
+        "hypothesis_report": output_dir / "hypothesis_report.md",
+    }
+    _write_json(
+        paths["hypotheses"],
+        {
+            "hypotheses": hypotheses,
+            "hypotheses_are_not_evidence": True,
+            "generated_molecules_remain_computational_hypotheses": True,
+        },
+    )
+    _write_json(paths["research_questions"], {"questions": questions})
+    _write_json(paths["falsification_criteria"], {"falsification_criteria": criteria})
+    _write_json(paths["evidence_gaps"], {"evidence_gaps": gaps})
+    _write_json(paths["hypothesis_lifecycle"], {"lifecycle_events": lifecycle_events})
+    paths["hypothesis_report"].write_text(
+        render_hypothesis_report_markdown(
+            hypotheses,
+            evidence_gaps_by_hypothesis=gaps,
+            criteria_by_hypothesis=criteria,
+            questions_by_hypothesis=questions,
+            lifecycle_events=lifecycle_events,
+        ),
+        encoding="utf-8",
+    )
+    return list(paths.values())
+
+
+def _hypotheses_for_job(store: Any, job: PlatformJob, model: Any) -> list[Any]:
+    configured = job.config_snapshot.get("hypotheses")
+    if isinstance(configured, list):
+        hypotheses = [model.model_validate(item) for item in configured if isinstance(item, dict)]
+        for hypothesis in hypotheses:
+            try:
+                store.create_hypothesis(hypothesis)
+            except ValueError:
+                pass
+        return hypotheses
+    hypothesis_id = job.config_snapshot.get("hypothesis_id")
+    if hypothesis_id:
+        return [store.get_hypothesis(str(hypothesis_id))]
+    return store.list_hypotheses(project_id=job.project_id)
+
+
+def _hosted_hypothesis_store_path(root_dir: Path, project_id: str | None) -> Path:
+    project = project_id or "global"
+    return root_dir / ".molecule-ranker" / "hypotheses" / project / "hypotheses.sqlite"
+
+
+def _hosted_hypothesis_warnings(hypotheses: list[Any]) -> list[str]:
+    warnings = ["Hypotheses are not evidence."]
+    if any(hypothesis.hypothesis_type == "generated_molecule" for hypothesis in hypotheses):
+        warnings.append(
+            "Generated-molecule hypotheses require human review before follow-up planning."
+        )
+    return warnings
+
+
 def _configured_artifact_paths(config: dict[str, Any]) -> list[str | Path] | dict[str, str | Path]:
     raw = config.get("artifact_paths")
     if isinstance(raw, dict):
@@ -575,5 +907,6 @@ class PipelineWorker(BaseWorker):
                 "dashboard_build",
                 *PORTFOLIO_JOB_TYPES,
                 *GRAPH_JOB_TYPES,
+                *HYPOTHESIS_JOB_TYPES,
             },
         )

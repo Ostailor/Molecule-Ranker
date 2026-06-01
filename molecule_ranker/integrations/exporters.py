@@ -25,6 +25,8 @@ ExportPackageType = Literal[
     "candidate_summary_package",
     "generated_molecule_package",
     "assay_result_summary_package",
+    "campaign_summary_package",
+    "campaign_work_package_list_package",
 ]
 ExportPackageFormat = Literal["json", "markdown", "csv_manifest", "zip"]
 
@@ -269,6 +271,11 @@ def _package_warnings(
         warnings.append(GENERATED_MOLECULE_WARNING)
     if package_type == "assay_result_summary_package":
         warnings.append("Experimental results include assay context and QC status when supplied.")
+    if package_type in {"campaign_summary_package", "campaign_work_package_list_package"}:
+        warnings.append(
+            "Campaign packages are research-management handoffs, not lab protocols or "
+            "synthesis instructions."
+        )
     return [_sanitize_text(warning) for warning in warnings]
 
 

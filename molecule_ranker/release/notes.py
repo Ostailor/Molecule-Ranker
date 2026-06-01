@@ -15,12 +15,13 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V1.5 upgrades the V1.4 validated internal research platform with "
-            "a cross-program knowledge graph and mechanism-level reasoning layer. "
+            "V1.7 upgrades the V1.6 validated internal research platform with "
+            "closed-loop campaign planning and budget-aware execution management. "
             "The validated internal research platform MVP boundary remains intact: "
-            "graph paths, portfolio recommendations, structure workflows, docking "
-            "scores, model predictions, and generated molecules are computational "
-            "prioritization signals, not biomedical claims.",
+            "campaign plans, hypotheses, research questions, graph paths, portfolio "
+            "recommendations, structure workflows, docking scores, model predictions, "
+            "and generated molecules are planning or prioritization signals, not "
+            "biomedical claims.",
             "",
             "## Included",
             "",
@@ -50,6 +51,12 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "review-outcome correlations, novelty checks, and prior-knowledge reuse.",
             "- Graph dashboard and Codex graph assistant with guardrails that prevent "
             "invented nodes, edges, mechanisms, citations, evidence, or assay results.",
+            "- Hypothesis schemas, deterministic hypothesis generation, evidence-gap "
+            "analysis, falsification criteria, ranking, lifecycle tracking, review "
+            "queues, dashboard rendering, and a guarded Codex hypothesis assistant.",
+            "- Campaign schemas, deterministic campaign planning, budget-fit calculation, "
+            "review-gated work packages, slot allocation, replan triggers, audit trails, "
+            "campaign memos, and campaign dashboard rendering for V1.7.",
             "- Deterministic multi-objective portfolio selection with diversity, "
             "learning-value, uncertainty, budget, and correlated-risk constraints.",
             "- Expert-review, assay-triage, learning-batch, deprioritization, "
@@ -78,8 +85,16 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- knowledge graph paths are memory and reasoning aids only",
             "- graph inference must not create EvidenceItem records or assay results",
             "- graph-inferred relationships are hypotheses unless source-backed",
+            "- automated hypotheses are planning artifacts, not evidence",
+            "- research questions and validation plans are not experimental procedures",
+            "- campaign plans are research-management artifacts, not lab protocols",
+            "- campaign priorities, budget fit, dependencies, and replan triggers are "
+            "computed deterministically",
             "- Codex must not create portfolio selections, scores, evidence, assay "
-            "results, citations, molecules, graph nodes, graph edges, or mechanisms",
+            "results, citations, molecules, graph nodes, graph edges, mechanisms, or "
+            "unvalidated hypotheses",
+            "- Codex must not create campaign metrics, costs, outcomes, or advancement "
+            "decisions",
             "- predicted structures are lower-confidence than suitable experimental structures",
             "- Codex outputs are assistant artifacts, not biomedical evidence",
             "",

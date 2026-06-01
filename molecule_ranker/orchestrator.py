@@ -4,11 +4,13 @@ from pathlib import Path
 from typing import Any
 
 from molecule_ranker.agents import (
+    CampaignPlanningAgent,
     CodexBackboneAgent,
     DevelopabilityAssessmentAgent,
     DiseaseResolverAgent,
     EvidenceScoringAgent,
     ExperimentalEvidenceAgent,
+    HypothesisGenerationAgent,
     LiteratureEvidenceAgent,
     MoleculeRetrievalAgent,
     NovelMoleculeAgent,
@@ -130,10 +132,12 @@ class MoleculeRankerOrchestrator:
                 metadata_source,
             )
         self.evidence_scoring = EvidenceScoringAgent()
+        self.hypothesis_generation = HypothesisGenerationAgent()
         self.codex_backbone = CodexBackboneAgent()
         self.experimental_evidence = ExperimentalEvidenceAgent()
         self.predictive_model = PredictiveModelAgent()
         self.portfolio_optimization = PortfolioOptimizationAgent()
+        self.campaign_planning = CampaignPlanningAgent()
         self.developability_assessment = DevelopabilityAssessmentAgent()
         self.review_workspace = ReviewWorkspaceAgent()
         self.report_writer = ReportWriterAgent()
@@ -146,7 +150,9 @@ class MoleculeRankerOrchestrator:
             self.experimental_evidence,
             self.predictive_model,
             self.evidence_scoring,
+            self.hypothesis_generation,
             self.portfolio_optimization,
+            self.campaign_planning,
             self.codex_backbone,
             self.review_workspace,
             self.report_writer,

@@ -1,9 +1,11 @@
 # molecule-ranker
 
 `molecule-ranker` is a validated internal research platform MVP for
-source-backed molecule ranking and research operations. V1.5 builds on the
-validated V1.4 platform with a cross-program knowledge graph and
-mechanism-level reasoning layer. V1.4 already added multi-objective portfolio
+source-backed molecule ranking and research operations. V1.7 builds on the
+validated V1.6 platform with closed-loop campaign planning and budget-aware
+execution management. V1.6 already added automated graph-backed hypothesis
+generation and testable research-question planning. V1.5 already added a cross-program
+knowledge graph and mechanism-level reasoning layer. V1.4 already added multi-objective portfolio
 optimization and program-level decision analytics. V1.3 already added conservative
 structure-based design and protein-ligand workflow hardening: auditable target structure selection,
 externally prepared receptor and ligand artifact tracking, docking
@@ -19,7 +21,7 @@ hypotheses, developability triage, literature evidence, experimental feedback,
 review workflows, Codex-backed orchestration, hosted platform mode, and guarded
 external integrations.
 
-V1.5 is for internal research use only. It is not a regulated clinical product.
+V1.7 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
 treat, are safe, bind, inhibit, activate, or are active. Docking scores are not
@@ -31,15 +33,21 @@ molecules are not claimed safe, active, effective, or synthesizable. The
 knowledge graph is a memory and reasoning layer, not a source of new biomedical
 truth; graph-inferred relationships are hypotheses unless backed by source
 evidence, and graph paths do not prove causality, efficacy, safety, binding, or
-activity. Codex is an
+activity. Automated hypotheses are planning artifacts, not evidence; research
+questions are not lab protocols, and validation plans are not experimental
+procedures. Campaign plans are research-management artifacts, not lab
+protocols, and budget-aware execution management does not provide synthesis
+routes, reagents, concentrations, incubation times, temperatures, animal dosing,
+human dosing, or patient treatment guidance. Codex is an
 orchestration and summarization layer, not scientific truth; it may not invent
 structures, poses, binding sites, docking scores, interactions, evidence, assay
-results, citations, molecules, mechanisms, graph nodes, graph edges, scores, or
-portfolio optimization outputs. Data
+results, citations, molecules, mechanisms, graph nodes, graph edges,
+hypotheses, scores, portfolio optimization outputs, campaign metrics, campaign
+costs, campaign outcomes, or advancement decisions. Data
 provenance, audit logs, deterministic validation, and guardrails are core design
 principles.
 
-Given a disease name, V1.5 resolves the disease through public biomedical data
+Given a disease name, V1.7 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -49,14 +57,19 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V1.5
+## Current Scope Through V1.7
 
-V1.5 implements existing-molecule ranking, opt-in generated hypotheses,
+V1.7 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V1.5 adds cross-program graph memory and
-mechanism-level reasoning over existing artifacts. V1.4 added deterministic portfolio analytics for
+external integration primitives. V1.7 adds deterministic closed-loop campaign
+plans, budget fit, review-gated work packages, high-level assay/review/compute
+slot allocation, replan triggers, expected learning value, opportunity cost,
+candidate-batch tracking, memos, dashboards, provenance, and campaign audit
+trails. V1.6 added automated hypothesis generation and testable research-question
+planning over graph-backed artifacts. V1.5 added
+cross-program graph memory and mechanism-level reasoning over existing artifacts. V1.4 added deterministic portfolio analytics for
 program-level decisions: balanced candidate selection, review versus assay
 triage queues, overrepresentation/underexploration summaries, learning-value
 batch selection, correlated-risk deprioritization, scenario robustness, and
@@ -154,6 +167,18 @@ benchmarking, and validation workflows.
 - Render a graph dashboard and provide a Codex graph assistant that summarizes
   graph-backed patterns without creating evidence, assay results, citations,
   graph records, mechanisms, or biomedical claims.
+- Generate graph-backed hypotheses across mechanism, molecule-target,
+  generated-molecule follow-up, developability risk, assay contradiction,
+  scaffold/series, evidence-gap, active-learning, portfolio decision, and
+  high-level validation-question categories.
+- Plan high-level research questions and validation plans that remain
+  reviewable planning artifacts, not lab protocols or experimental procedures.
+- Attach uncertainty, contradiction checks, evidence gaps, falsification
+  criteria, rank scores, lifecycle events, and review status to every generated
+  hypothesis.
+- Provide a guarded Codex hypothesis assistant whose outputs are withheld when
+  they invent evidence, assay results, citations, graph records, hypotheses, or
+  unsafe procedural content.
 - Register hosted model training, model validation, and model prediction jobs
   with guardrails that reject patient, clinical, and dosing data.
 - Register local runs in a `ProjectWorkspace`, track artifacts through an
@@ -196,7 +221,7 @@ benchmarking, and validation workflows.
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V1.5 does not:
+V1.7 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -207,7 +232,18 @@ V1.5 does not:
 - Promote docking scores, poses, or structure-based scores to evidence.
 - Let graph inference create `EvidenceItem` records or assay results.
 - Let graph paths prove causality, efficacy, safety, binding, or activity.
+- Treat campaign plans as lab protocols or experimental procedures.
+- Provide synthesis routes, reagents, concentrations, incubation times,
+  temperatures, animal dosing, human dosing, or patient treatment guidance.
+- Let Codex invent campaign metrics, assay results, costs, evidence, citations,
+  molecules, mechanisms, outcomes, priorities, budget fit, dependencies, or
+  replan triggers.
 - Let Codex invent graph nodes, graph edges, citations, results, or mechanisms.
+- Treat automated hypotheses as evidence.
+- Treat research questions as lab protocols.
+- Treat validation plans as experimental procedures.
+- Let Codex invent hypotheses without deterministic validation of every
+  referenced entity, relation, citation, result, and artifact.
 - Use LLMs to invent citations, paper claims, or biomedical relationships.
 - Create fake citations or placeholder papers.
 - Create synthesis protocols, retrosynthesis, synthesis planning, wet-lab,
@@ -261,7 +297,7 @@ uv sync --all-groups
 uv run molecule-ranker version
 ```
 
-Current release: `1.5.0`.
+Current release: `1.7.0`.
 
 Run a source-backed ranking workflow locally. Generation, docking, external
 writes, Codex, review workflows, and experimental evidence are disabled unless
@@ -652,6 +688,238 @@ The graph validation workflow builds synthetic artifacts for two projects,
 builds and deduplicates the graph, extracts mechanisms, detects contradictions
 and stale decisions, generates recommendations, exports RDF/Turtle, writes a
 dashboard, and verifies graph guardrails.
+
+## V1.6 Hypothesis Generation and Research-Question Planning
+
+V1.6 adds automated hypothesis generation and testable research-question
+planning. Hypotheses are generated from the provenance-aware knowledge graph,
+mechanism hypotheses, contradictions, evidence gaps, portfolio outputs, review
+decisions, and experimental results. The hypothesis engine produces reviewable
+planning records for mechanistic, molecule-target, generated-molecule
+follow-up, developability-risk, assay-contradiction, cross-program
+scaffold/series, evidence-gap, active-learning, portfolio-decision, and
+high-level validation-question use cases.
+
+Every generated hypothesis keeps cited entity IDs, relation IDs, provenance IDs,
+artifact IDs, uncertainty text, contradiction links, evidence gaps,
+falsification criteria, rank scores, lifecycle events, and review status. A
+hypothesis is not evidence. A research question is not a lab protocol. A
+validation plan is not an experimental procedure. Falsification criteria are
+high-level decision criteria, not procedures. Generated-molecule hypotheses
+require human review before follow-up planning.
+
+Codex can draft hypothesis language and research questions only from supplied
+graph-backed context. Deterministic validation must confirm every referenced
+entity, relation, citation, result, and artifact before output is accepted.
+Codex can draft wording but cannot invent facts: it cannot invent evidence,
+assay results, citations, graph records, mechanisms, or hypotheses, and it
+cannot provide synthesis routes, reagents, concentrations, temperatures,
+incubation times, dosing, step-by-step experimental instructions, medical
+advice, patient treatment guidance, or clinical claims.
+
+Generate hypotheses from a graph:
+
+```bash
+uv run molecule-ranker hypothesis generate \
+  --from-graph graph.json \
+  --max-hypotheses 25 \
+  --output hypotheses.json
+```
+
+Generate high-level research questions:
+
+```bash
+uv run molecule-ranker hypothesis questions \
+  --hypotheses hypotheses.json \
+  --output research_questions.json
+```
+
+List evidence gaps for hypothesis planning:
+
+```bash
+uv run molecule-ranker hypothesis gaps \
+  --hypotheses hypotheses.json \
+  --output evidence_gaps.json
+```
+
+Create falsification criteria:
+
+```bash
+uv run molecule-ranker hypothesis falsification \
+  --hypotheses hypotheses.json \
+  --output falsification_criteria.json
+```
+
+Rank hypotheses for research planning:
+
+```bash
+uv run molecule-ranker hypothesis rank \
+  --hypotheses hypotheses.json \
+  --output ranked_hypotheses.json
+```
+
+Record a human review decision:
+
+```bash
+uv run molecule-ranker hypothesis review \
+  --hypothesis-id hypothesis:example \
+  --decision needs_more_evidence \
+  --reviewer-id reviewer-123 \
+  --rationale "Needs additional source-backed context before planning."
+```
+
+Generate a hypothesis report:
+
+```bash
+uv run molecule-ranker hypothesis report \
+  --hypotheses ranked_hypotheses.json \
+  --output hypothesis_report.md
+```
+
+Queue a hosted hypothesis job. Hosted hypothesis jobs require hypothesis
+permissions, keep hypotheses separate from evidence, validate Codex-drafted
+wording deterministically, and require human review for generated-molecule
+hypotheses before follow-up planning.
+
+```bash
+curl -X POST "$MOLECULE_RANKER_HOST/projects/project-1/hypothesis/jobs" \
+  -H "Authorization: Bearer $MOLECULE_RANKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_type": "hypothesis_generate",
+    "graph_artifact_id": "artifact-knowledge-graph",
+    "max_hypotheses": 25,
+    "use_codex_drafting": false,
+    "require_human_review_for_generated_hypotheses": true,
+    "strict_hypothesis_guardrails": true
+  }'
+```
+
+Run deterministic V1.6 hypothesis validation:
+
+```bash
+uv run molecule-ranker validate hypotheses
+```
+
+## V1.7 Closed-Loop Campaign Planning
+
+V1.7 adds deterministic closed-loop campaign planning and budget-aware execution
+management. Campaigns convert hypotheses, portfolios, active-learning
+suggestions, review decisions, experimental evidence, and graph contradictions
+into high-level work packages for research teams. Campaign plans can include
+priority scores, review-gated work packages, assay/review/computation slot
+allocations, dependencies, decision gates, expected learning value, opportunity
+cost, replan triggers, audit trails, campaign memos, and campaign dashboards.
+
+Campaign plans are research-management artifacts, not lab protocols. They do
+not include procedural experimental instructions, synthesis instructions,
+reagents, concentrations, incubation times, temperatures, animal dosing, human
+dosing, patient guidance, medical advice, or clinical claims. Budget and
+resource estimates are planning estimates only; no real vendor, lab, or program
+cost is inferred unless it is imported from configured external data. Generated
+molecules remain computational hypotheses unless exact imported experimental
+evidence exists.
+
+Replanning is triggered deterministically by new results, review decisions,
+graph contradictions, model retraining, external sync updates, budget changes,
+failed work packages, and hypothesis status changes. Stage gates enforce human
+approval for configured campaign advancement, generated-molecule review,
+budget exceptions, safety review, contradiction resolution, replanning, and
+stop/continue decisions. Codex can draft memos, explain tradeoffs, summarize
+budget bottlenecks, draft review questions, and explain replan triggers from
+deterministic campaign artifacts. Codex cannot approve campaigns or gates,
+invent costs, invent evidence, invent assay results, create campaign plans
+without deterministic validation, or turn work packages into protocols.
+
+Create a draft campaign from hypothesis and portfolio artifacts:
+
+```bash
+uv run molecule-ranker campaign create \
+  --project-id project-1 \
+  --program-id program-1 \
+  --name "LRRK2 evidence-gap campaign" \
+  --description "High-level campaign planning for reviewed hypotheses." \
+  --from-hypotheses ranked_hypotheses.json \
+  --from-portfolio portfolio_optimization.json \
+  --output campaign.json
+```
+
+Plan the campaign under assay, review, and compute budgets:
+
+```bash
+uv run molecule-ranker campaign plan \
+  --campaign campaign.json \
+  --budget-assay-slots 4 \
+  --budget-review-hours 12 \
+  --budget-compute-units 20 \
+  --strategy balanced \
+  --output campaign_plan.json
+```
+
+Approve a stage gate as a human reviewer:
+
+```bash
+uv run molecule-ranker campaign approve \
+  --campaign-id campaign:example \
+  --stage-gate-id campaign-gate:example \
+  --reviewer-id reviewer-123 \
+  --rationale "Reviewed deterministic artifacts and approved this planning gate."
+```
+
+Update a work package and preserve the audit trail:
+
+```bash
+uv run molecule-ranker campaign update-work-package \
+  --work-package-id wp-generated-review-v17 \
+  --status completed \
+  --actor reviewer-123
+```
+
+Replan after importing a new result or review event artifact:
+
+```bash
+uv run molecule-ranker campaign replan \
+  --campaign-id campaign:example \
+  --event-artifact imported_result_event.json \
+  --output updated_campaign_plan.json
+```
+
+Generate a campaign memo from a deterministic campaign plan. `--use-codex`
+keeps the memo as assistant output and does not let Codex approve, price, or
+compute the plan.
+
+```bash
+uv run molecule-ranker campaign memo \
+  --campaign-plan campaign_plan.json \
+  --output campaign_memo.md
+
+uv run molecule-ranker campaign memo \
+  --campaign-plan campaign_plan.json \
+  --use-codex \
+  --output campaign_memo.md
+```
+
+Queue a hosted campaign job. Campaign jobs require campaign permissions,
+generated-molecule follow-up requires a review gate, and Codex memos are stored
+separately from deterministic campaign plans.
+
+```bash
+curl -X POST "$MOLECULE_RANKER_HOST/projects/project-1/campaign/jobs" \
+  -H "Authorization: Bearer $MOLECULE_RANKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_type": "campaign_plan",
+    "campaign_id": "campaign:example",
+    "strategy": "balanced",
+    "generated_molecule_followup": true,
+    "generated_review_gate_present": true,
+    "config": {
+      "budget_assay_slots": 4,
+      "budget_review_hours": 12,
+      "budget_compute_units": 20
+    }
+  }'
+```
 
 ## V1.4 Portfolio Optimization and Program Decision Analytics
 
@@ -2599,6 +2867,9 @@ does not write a normal `report.md` that looks successful.
 - V1.5: cross-program knowledge graph and mechanism-level reasoning.
 - V1.6: automated hypothesis generation and testable research-question
   planning.
+- V1.7: closed-loop campaign planning and budget-aware execution management.
+- V1.8: scientific evaluation benchmark suite and prospective validation
+  analytics.
 - V2.0: validated enterprise discovery operating system.
 
 ## Development

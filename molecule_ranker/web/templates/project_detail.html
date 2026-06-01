@@ -43,6 +43,34 @@
   </div>
 </section>
 <section class="section">
+  <h2>Hypothesis planning</h2>
+  <p class="muted">Hypotheses are planning records, not evidence, and generated-molecule hypotheses require human review before follow-up planning.</p>
+  <div class="panel nav">
+    <a href="/dashboard/projects/{{ project.workspace_id }}/hypotheses">Hypothesis overview</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/hypotheses/evidence-gaps">Evidence gaps</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/hypotheses/research-questions">Research questions</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/hypotheses/falsification-criteria">Falsification criteria</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/hypotheses/contradictions">Contradictions</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/hypotheses/review-queue">Review queue</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/hypotheses/lifecycle">Lifecycle timeline</a>
+  </div>
+</section>
+<section class="section">
+  <h2>Campaign planning</h2>
+  <p class="muted">Campaign plans are research-management guidance, not lab protocols, and generated-molecule follow-up requires review gates.</p>
+  <div class="panel nav">
+    <a href="/dashboard/projects/{{ project.workspace_id }}/campaigns">Campaign list</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/campaigns/plan">Campaign plan</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/campaigns/work-packages">Work packages</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/campaigns/budget">Budget/resource view</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/campaigns/dependencies">Dependency graph</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/campaigns/stage-gates">Stage gates</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/campaigns/replan-triggers">Replan triggers</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/campaigns/memo">Campaign memo</a>
+    <a href="/dashboard/projects/{{ project.workspace_id }}/campaigns/audit">Campaign audit timeline</a>
+  </div>
+</section>
+<section class="section">
   <h2>Structure workflows</h2>
   <p class="muted">Structure reports are computational prioritization artifacts and cannot be interpreted as binding evidence.</p>
   <div class="panel nav">

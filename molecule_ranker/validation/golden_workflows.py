@@ -350,6 +350,45 @@ GOLDEN_WORKFLOWS: tuple[GoldenWorkflow, ...] = (
         ],
         metadata={"release": "1.1.0", "live_validation": "opt_in_only"},
     ),
+    GoldenWorkflow(
+        workflow_id="v1_7_campaign_planning_workflow",
+        name="V1.7 Campaign Planning Workflow",
+        description=(
+            "Synthetic hypotheses and portfolio selection to campaign plan, gates, memo, "
+            "replan trigger, export, and guardrail audit."
+        ),
+        inputs={
+            "hypotheses": "synthetic_v1_7_hypotheses",
+            "portfolio": "synthetic_v1_7_portfolio",
+            "external_services": "mocked",
+        },
+        expected_artifacts=[
+            "hypotheses.json",
+            "portfolio_optimization.json",
+            "campaign.json",
+            "campaign_budget.json",
+            "campaign_plan.json",
+            "campaign_stage_gates.json",
+            "campaign_replan_triggers.json",
+            "campaign_memo.md",
+            "campaign_export.json",
+            "campaign_guardrail_audit.json",
+        ],
+        required_checks=[
+            "campaign plan is deterministic and advisory",
+            "generated candidates have review gates",
+            "failed quality-control result does not become a false conclusion",
+            "external status update remains separate from assay-result evidence",
+            "campaign guardrail audit passes",
+        ],
+        forbidden_outputs=COMMON_FORBIDDEN_OUTPUTS,
+        success_criteria=[
+            "V1.7 campaign workflow completes under configured synthetic budget",
+            "stage gates preserve human approval boundaries",
+            "memo is derived from deterministic campaign artifacts",
+        ],
+        metadata={"release": "1.7.0", "live_validation": "opt_in_only"},
+    ),
 )
 
 
