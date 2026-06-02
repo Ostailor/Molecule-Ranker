@@ -1,9 +1,10 @@
 # molecule-ranker
 
 `molecule-ranker` is a validated internal research platform MVP for
-source-backed molecule ranking and research operations. V1.7 builds on the
-validated V1.6 platform with closed-loop campaign planning and budget-aware
-execution management. V1.6 already added automated graph-backed hypothesis
+source-backed molecule ranking and research operations. V1.8 builds on the
+validated V1.7 platform with scientific evaluation benchmark suites and
+prospective validation analytics. V1.7 already added closed-loop campaign
+planning and budget-aware execution management. V1.6 already added automated graph-backed hypothesis
 generation and testable research-question planning. V1.5 already added a cross-program
 knowledge graph and mechanism-level reasoning layer. V1.4 already added multi-objective portfolio
 optimization and program-level decision analytics. V1.3 already added conservative
@@ -21,7 +22,7 @@ hypotheses, developability triage, literature evidence, experimental feedback,
 review workflows, Codex-backed orchestration, hosted platform mode, and guarded
 external integrations.
 
-V1.7 is for internal research use only. It is not a regulated clinical product.
+V1.8 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
 treat, are safe, bind, inhibit, activate, or are active. Docking scores are not
@@ -38,16 +39,19 @@ questions are not lab protocols, and validation plans are not experimental
 procedures. Campaign plans are research-management artifacts, not lab
 protocols, and budget-aware execution management does not provide synthesis
 routes, reagents, concentrations, incubation times, temperatures, animal dosing,
-human dosing, or patient treatment guidance. Codex is an
+human dosing, or patient treatment guidance. Benchmark results are evaluation
+artifacts, not biomedical evidence, and prospective validation analytics are not
+clinical validation. Codex is an
 orchestration and summarization layer, not scientific truth; it may not invent
 structures, poses, binding sites, docking scores, interactions, evidence, assay
 results, citations, molecules, mechanisms, graph nodes, graph edges,
 hypotheses, scores, portfolio optimization outputs, campaign metrics, campaign
-costs, campaign outcomes, or advancement decisions. Data
+costs, campaign outcomes, benchmark results, labels, metrics, conclusions, or
+advancement decisions. Data
 provenance, audit logs, deterministic validation, and guardrails are core design
 principles.
 
-Given a disease name, V1.7 resolves the disease through public biomedical data
+Given a disease name, V1.8 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -57,13 +61,16 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V1.7
+## Current Scope Through V1.8
 
-V1.7 implements existing-molecule ranking, opt-in generated hypotheses,
+V1.8 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V1.7 adds deterministic closed-loop campaign
+external integration primitives. V1.8 adds scientific evaluation benchmarks,
+prospective validation analytics, decision-quality reports, guardrail benchmark
+runs, longitudinal performance trends, and reproducibility manifests. V1.7 added
+deterministic closed-loop campaign
 plans, budget fit, review-gated work packages, high-level assay/review/compute
 slot allocation, replan triggers, expected learning value, opportunity cost,
 candidate-batch tracking, memos, dashboards, provenance, and campaign audit
@@ -221,7 +228,7 @@ benchmarking, and validation workflows.
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V1.7 does not:
+V1.8 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -265,6 +272,10 @@ V1.7 does not:
 - Train surrogate models across unrelated assay endpoints unless endpoint
   pooling is explicitly configured and labeled.
 - Let Codex invent model metrics or prediction values.
+- Let Codex invent evaluation metrics, outcomes, labels, benchmark results,
+  assay results, or conclusions.
+- Let Codex alter benchmark results, hide guardrail failures, claim clinical
+  validation, or create evidence.
 - Treat Codex CLI as a biomedical source of truth.
 - Let Codex invent targets, molecules, assay results, citations, evidence, or
   scores.
@@ -297,7 +308,7 @@ uv sync --all-groups
 uv run molecule-ranker version
 ```
 
-Current release: `1.7.0`.
+Current release: `1.8.0`.
 
 Run a source-backed ranking workflow locally. Generation, docking, external
 writes, Codex, review workflows, and experimental evidence are disabled unless
@@ -921,6 +932,144 @@ curl -X POST "$MOLECULE_RANKER_HOST/projects/project-1/campaign/jobs" \
   }'
 ```
 
+## V1.8 Scientific Evaluation Benchmarks and Prospective Analytics
+
+V1.8 adds a scientific evaluation benchmark suite and prospective validation
+analytics for measuring molecule-ranker platform behavior over time. Evaluation
+artifacts measure platform performance; they are not biomedical evidence, not
+clinical validation, and not proof that molecules are active, safe, effective,
+or synthesizable.
+
+Benchmark labels come only from imported assay results or explicit synthetic
+fixtures. Model predictions, docking scores, structure scores, portfolio
+decisions, Codex summaries, and graph inferences are not outcome labels.
+Generated molecules require exact linked imported results for hit metrics; seed
+molecule results do not count as generated analog success.
+
+Prospective validation freezes candidate rankings, predictions, portfolio
+selections, or campaign decisions before outcomes are imported. Outcomes
+imported before a prediction freeze do not count as prospective, modified
+prediction artifacts invalidate the prospective run, and failed-QC outcomes are
+not treated as positive or negative evidence.
+
+Guardrail benchmarks test medical advice, synthesis instructions, lab
+protocols, dosing or patient guidance, fake citations, fake assay results, fake
+molecule evidence, generated-molecule overclaims, docking overclaims, model
+prediction overclaims, graph-causality overclaims, unsupported Codex claims,
+unsafe external-integration writes, and secret leakage.
+
+Reproducibility manifests track code version, artifact contract version, config
+hashes, input and output artifact hashes, random seeds, dependency summaries,
+model artifact hashes, Codex transcript presence when used, and external
+integration payload hashes.
+
+Codex can summarize evaluation reports, explain metric changes, draft benchmark
+limitations, summarize prospective validation analytics, explain guardrail
+failures, and draft decision-quality lessons. Codex cannot invent metrics,
+outcomes, labels, assay results, benchmark results, or conclusions; every
+evaluation Codex output must cite the evaluation ID, task ID, dataset ID, split
+ID, metric IDs, and artifact IDs it used.
+
+Create a benchmark suite:
+
+```bash
+uv run molecule-ranker eval suite create \
+  --name "Example V1.8 benchmark suite" \
+  --task candidate_ranking \
+  --task surrogate_prediction \
+  --output results/<disease-slug>/benchmark_suite.json
+```
+
+Build a benchmark dataset from a completed run. The builder preserves source
+artifact IDs and row provenance, excludes failed-QC labels unless the task is
+explicitly evaluating QC handling, and does not use model predictions as
+outcome labels.
+
+```bash
+uv run molecule-ranker eval dataset build \
+  --from-run results/<disease-slug>/ \
+  --task-type candidate_ranking \
+  --output results/<disease-slug>/benchmark_dataset.json
+```
+
+Create a split:
+
+```bash
+uv run molecule-ranker eval split \
+  --dataset results/<disease-slug>/benchmark_dataset.json \
+  --split-type scaffold \
+  --output results/<disease-slug>/benchmark_split.json
+```
+
+Run an evaluation with baseline comparison:
+
+```bash
+uv run molecule-ranker eval run \
+  --suite results/<disease-slug>/benchmark_suite.json \
+  --dataset results/<disease-slug>/benchmark_dataset.json \
+  --split results/<disease-slug>/benchmark_split.json \
+  --output results/<disease-slug>/evaluation_report.json
+```
+
+Freeze prospective predictions before future outcomes are imported:
+
+```bash
+uv run molecule-ranker eval prospective freeze \
+  --predictions results/<disease-slug>/model_predictions.json \
+  --output-dir results/<disease-slug>/prospective_run \
+  --task-id surrogate_prediction \
+  --model-or-pipeline-version 1.8.0
+```
+
+Import outcomes after the freeze:
+
+```bash
+uv run molecule-ranker eval prospective import-outcomes \
+  --run-dir results/<disease-slug>/prospective_run \
+  --outcomes results/<disease-slug>/imported_assay_results.json
+```
+
+Evaluate the prospective run:
+
+```bash
+uv run molecule-ranker eval prospective evaluate \
+  --run-dir results/<disease-slug>/prospective_run
+```
+
+Run the guardrail benchmark:
+
+```bash
+uv run molecule-ranker eval guardrails \
+  --from-run results/<disease-slug>/ \
+  --output results/<disease-slug>/guardrail_benchmark_report.json
+```
+
+Run a reproducibility check:
+
+```bash
+uv run molecule-ranker eval reproducibility \
+  --from-run results/<disease-slug>/
+```
+
+Queue a hosted evaluation job. Hosted evaluation jobs require
+`evaluation:run`, keep evaluation reports separate from evidence, and preserve
+the boundary that prospective validation analytics are not clinical validation.
+
+```bash
+curl -X POST "$MOLECULE_RANKER_HOST/projects/project-1/evaluation/jobs" \
+  -H "Authorization: Bearer $MOLECULE_RANKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_type": "eval_benchmark_run",
+    "suite_id": "suite-example-v18",
+    "dataset_id": "dataset-example-v18",
+    "split_id": "split-example-v18",
+    "config": {
+      "acknowledge_not_evidence": true
+    }
+  }'
+```
+
 ## V1.4 Portfolio Optimization and Program Decision Analytics
 
 V1.4 adds a deterministic portfolio layer for program-level research
@@ -1328,6 +1477,7 @@ external writes require explicit write-enabled configuration and permission.
 - Active learning: `docs/user/active_learning.md`
 - Integrations: `docs/user/integrations.md`
 - Codex assistant: `docs/user/codex_assistant.md`
+- Evaluation benchmarks: `docs/user/evaluation_benchmarks.md`
 - Dashboard: `docs/user/dashboard.md`
 - Knowledge graph: `docs/user/knowledge_graph.md`
 - Limitations: `docs/user/limitations.md`
@@ -2870,6 +3020,8 @@ does not write a normal `report.md` that looks successful.
 - V1.7: closed-loop campaign planning and budget-aware execution management.
 - V1.8: scientific evaluation benchmark suite and prospective validation
   analytics.
+- V1.9: usability, performance, and reliability hardening for enterprise
+  pilots.
 - V2.0: validated enterprise discovery operating system.
 
 ## Development

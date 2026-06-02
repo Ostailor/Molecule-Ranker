@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from molecule_ranker.codex_backbone.schemas import CodexBackboneConfig, CodexTask, CodexTaskResult
+from molecule_ranker.evaluation.codex_explanations import validate_evaluation_codex_output
 
 STRUCTURE_CODEX_TASK_TYPES = {
     "suggest_structure_selection_review_questions",
@@ -404,6 +405,15 @@ def check_output(
         *detect_structure_artifact_violations(result, allowed_artifact_refs),
         *detect_portfolio_artifact_violations(result, allowed_artifact_refs),
     ]
+    evaluation_checked = validate_evaluation_codex_output(
+        result,
+        allowed_artifact_refs=allowed_artifact_refs,
+    )
+    warnings.extend(
+        warning
+        for warning in evaluation_checked.guardrail_warnings
+        if warning not in result.guardrail_warnings
+    )
     if not warnings:
         return result
     existing = list(result.guardrail_warnings)
@@ -556,6 +566,10 @@ def output_guardrail_warnings(
             *detect_model_artifact_violations(result, allowed_artifact_refs or set()),
             *detect_structure_artifact_violations(result, allowed_artifact_refs or set()),
             *detect_portfolio_artifact_violations(result, allowed_artifact_refs or set()),
+            *validate_evaluation_codex_output(
+                result,
+                allowed_artifact_refs=allowed_artifact_refs or set(),
+            ).guardrail_warnings,
         ]
     )
 
@@ -862,6 +876,9 @@ def _collect_json_refs(value: Any, refs: set[str]) -> None:
                 "sync_record_id",
                 "citation_id",
                 "result_id",
+                "task_id",
+                "split_id",
+                "metric_id",
                 "molecule_id",
                 "generated_id",
                 "candidate_name",
@@ -901,6 +918,30 @@ def _collect_json_refs(value: Any, refs: set[str]) -> None:
                     if item not in (None, ""):
                         refs.add(str(item))
                         refs.add(f"artifact_id:{str(item)}")
+            if lowered == "metric_ids" and isinstance(raw, list):
+                for item in raw:
+                    if item not in (None, ""):
+                        refs.add(str(item))
+                        refs.add(f"metric_id:{str(item)}")
+            if lowered == "warnings" and isinstance(raw, list):
+                for item in raw:
+                    lowered_item = str(item).lower()
+                    if "guardrail" in lowered_item and (
+                        "fail" in lowered_item or "violation" in lowered_item
+                    ):
+                        refs.add("evaluation_guardrail_failure:recorded")
+            if lowered == "metrics" and isinstance(raw, list):
+                for metric in raw:
+                    if not isinstance(metric, dict):
+                        continue
+                    metric_id = metric.get("metric_id")
+                    if metric_id not in (None, ""):
+                        refs.add(str(metric_id))
+                        refs.add(f"metric_id:{str(metric_id)}")
+                    metric_type = str(metric.get("metric_type") or "").lower()
+                    metric_value = metric.get("value")
+                    if metric_type == "guardrail" and _is_guardrail_failure_value(metric_value):
+                        refs.add("evaluation_guardrail_failure:recorded")
             if lowered in {
                 "candidate_ids",
                 "selected_candidate_ids",
@@ -1020,6 +1061,17 @@ def _normalize_model_key(key: str) -> str:
 
 def _normalize_portfolio_key(key: str) -> str:
     return key.lower().replace(" ", "_")
+
+
+def _is_guardrail_failure_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, (int, float)):
+        return float(value) < 1.0
+    if isinstance(value, str):
+        lowered = value.lower()
+        return lowered in {"false", "fail", "failed", "failure", "guardrail_failed"}
+    return False
 
 
 def _normalize_numeric_string(value: str) -> str:

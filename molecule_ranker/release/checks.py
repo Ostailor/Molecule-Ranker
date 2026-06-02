@@ -33,6 +33,7 @@ ReleaseCategory = Literal[
     "knowledge_graph",
     "hypothesis",
     "campaign",
+    "evaluation",
 ]
 ReleaseCheckStatus = Literal["pass", "warn", "fail"]
 
@@ -314,6 +315,18 @@ V1_RELEASE_GATES: tuple[ReleaseGate, ...] = (
             "README.md",
         ),
     ),
+    ReleaseGate(
+        "v1-8-evaluation-benchmarks",
+        "evaluation",
+        "V1.8 scientific evaluation benchmarks and prospective analytics are guarded.",
+        (
+            "molecule_ranker/evaluation/schemas.py",
+            "molecule_ranker/evaluation/metrics.py",
+            "molecule_ranker/evaluation/reports.py",
+            "tests/test_evaluation_v18.py",
+            "README.md",
+        ),
+    ),
 )
 
 _CRITICAL_TODO_RE = re.compile(
@@ -403,13 +416,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "1.7.0":
-        return ReleaseCheck("version", "Version is 1.7.0", "pass", "Package version is 1.7.0.")
+    if __version__ == "1.8.0":
+        return ReleaseCheck("version", "Version is 1.8.0", "pass", "Package version is 1.8.0.")
     return ReleaseCheck(
         "version",
-        "Version is 1.7.0",
+        "Version is 1.8.0",
         "fail",
-        f"Package version is {__version__}, expected 1.7.0.",
+        f"Package version is {__version__}, expected 1.8.0.",
     )
 
 

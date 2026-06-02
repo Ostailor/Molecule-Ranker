@@ -534,6 +534,53 @@ def project_activity_page(
     )
 
 
+@router.get("/dashboard/projects/{project_id}/evaluation", response_class=HTMLResponse)
+def evaluation_overview_page(
+    project_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _project_or_404(store=store, project_id=project_id)
+    require_project_access(database, user, project_id=project_id, action="read")
+    return _evaluation_dashboard_html(
+        request,
+        user=user,
+        workspace=workspace,
+        database=database,
+        section="overview",
+    )
+
+
+@router.get("/dashboard/projects/{project_id}/evaluation/{section}", response_class=HTMLResponse)
+def evaluation_section_page(
+    project_id: str,
+    section: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> Response:
+    workspace = _project_or_404(store=store, project_id=project_id)
+    require_project_access(database, user, project_id=project_id, action="read")
+    if section == "prospective-validation-runs" and not (
+        user.is_admin
+        or has_permission(user, "evaluation:admin", project_id=project_id, database=database)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only authorized users can view imported outcomes.",
+        )
+    return _evaluation_dashboard_html(
+        request,
+        user=user,
+        workspace=workspace,
+        database=database,
+        section=section,
+    )
+
+
 @router.get("/dashboard/projects/{project_id}/runs", response_class=HTMLResponse)
 def run_list_page(
     project_id: str,
@@ -2536,9 +2583,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.7</div>"
+        "<div class=\"brand\">molecule-ranker V1.8</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2681,9 +2728,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.7</div>"
+        "<div class=\"brand\">molecule-ranker V1.8</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2716,9 +2763,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.7</div>"
+        "<div class=\"brand\">molecule-ranker V1.8</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2768,9 +2815,9 @@ def _campaign_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.7</div>"
+        "<div class=\"brand\">molecule-ranker V1.8</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3211,9 +3258,9 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.7</div>"
+        "<div class=\"brand\">molecule-ranker V1.8</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3722,6 +3769,148 @@ def _platform_portfolio_artifacts(
     return artifacts
 
 
+def _evaluation_dashboard_html(
+    request: Request,
+    *,
+    user: UserAccount,
+    workspace: ProjectWorkspace,
+    database: PlatformDatabase,
+    section: str,
+) -> Response:
+    del request, user
+    quoted = quote(workspace.workspace_id)
+    sections = {
+        "overview": "Evaluation overview",
+        "benchmark-suites": "Benchmark suites",
+        "benchmark-tasks": "Benchmark tasks",
+        "prospective-validation-runs": "Prospective validation runs",
+        "frozen-prediction-sets": "Frozen prediction sets",
+        "guardrail-benchmark-reports": "Guardrail benchmark reports",
+        "reproducibility-reports": "Reproducibility reports",
+        "longitudinal-trends": "Longitudinal trends",
+        "decision-quality": "Decision quality",
+    }
+    title = sections.get(section, "Evaluation overview")
+    nav = " ".join(
+        _link(f"/dashboard/projects/{quoted}/evaluation/{slug}", label)
+        if slug != "overview"
+        else _link(f"/dashboard/projects/{quoted}/evaluation", label)
+        for slug, label in sections.items()
+    )
+    artifacts = _evaluation_artifacts(database, project_id=workspace.workspace_id)
+    artifact_rows = [
+        [
+            artifact["artifact_id"],
+            artifact["artifact_type"],
+            _link(
+                f"/dashboard/projects/{quoted}/artifacts/"
+                f"{quote(artifact['artifact_id'])}/download",
+                "Download",
+            ),
+        ]
+        for artifact in artifacts
+    ]
+    if not artifact_rows:
+        artifact_rows = [["No evaluation artifacts are available yet.", "", ""]]
+    body = (
+        f"<p>{_link(f'/dashboard/projects/{quoted}', 'Project')} "
+        f"{_link(f'/dashboard/projects/{quoted}/evaluation', 'Evaluation')}</p>"
+        "<p class=\"notice\">Evaluation reports are not evidence. Benchmark results are "
+        "evaluation artifacts, not clinical validation or proof of efficacy, safety, "
+        "activity, or synthesizability.</p>"
+        "<p class=\"notice\">Only authorized users can view imported outcomes.</p>"
+        f"<nav class=\"nav\">{nav}</nav>"
+        f"{_evaluation_section_summary(section)}"
+        + _table(["Artifact", "Type", "Download"], artifact_rows)
+    )
+    return _evaluation_dashboard_shell(title, workspace, body)
+
+
+def _evaluation_dashboard_shell(
+    title: str,
+    workspace: ProjectWorkspace,
+    body: str,
+) -> HTMLResponse:
+    project_id = quote(workspace.workspace_id)
+    html = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
+        "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
+        "<div class=\"brand\">molecule-ranker V1.8</div>"
+        "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        f"{_link('/dashboard', 'Projects')}"
+        f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
+        f"{_link(f'/dashboard/projects/{project_id}/evaluation', 'Evaluation')}"
+        f"{_link(f'/dashboard/projects/{project_id}/campaigns', 'Campaigns')}"
+        "</nav></div></header><main class=\"content\">"
+        f"<header class=\"page-heading\"><h1>{_h(title)}</h1>"
+        f"<p class=\"muted\">Project: {_h(workspace.name)}</p></header>"
+        f"{body}</main></div></body></html>\n"
+    )
+    return HTMLResponse(html)
+
+
+def _evaluation_section_summary(section: str) -> str:
+    summaries = {
+        "overview": "Evaluation overview for benchmark and validation artifacts.",
+        "benchmark-suites": "Benchmark suites organize frozen evaluation tasks.",
+        "benchmark-tasks": "Benchmark tasks define objectives, inputs, labels, and metrics.",
+        "prospective-validation-runs": (
+            "Prospective validation runs show freeze/outcome status for authorized users."
+        ),
+        "frozen-prediction-sets": "Frozen prediction sets are immutable after creation.",
+        "guardrail-benchmark-reports": "Guardrail benchmark reports surface failures.",
+        "reproducibility-reports": "Reproducibility reports summarize hashes and seeds.",
+        "longitudinal-trends": "Longitudinal trends compare metrics across versions.",
+        "decision-quality": "Decision quality summarizes selections and outcomes.",
+    }
+    return f"<section><h2>{_h(summaries.get(section, summaries['overview']))}</h2></section>"
+
+
+def _evaluation_artifacts(
+    database: PlatformDatabase,
+    *,
+    project_id: str,
+) -> list[dict[str, str]]:
+    with database.engine.connect() as connection:
+        rows = (
+            connection.execute(
+                select(artifact_records)
+                .where(artifact_records.c.project_id == project_id)
+                .order_by(artifact_records.c.created_at.desc())
+            )
+            .mappings()
+            .all()
+        )
+    artifacts: list[dict[str, str]] = []
+    for row in rows:
+        artifact_type = str(row["artifact_type"])
+        artifact_id = str(row["artifact_id"])
+        if not _evaluation_artifact_matches(artifact_id, artifact_type):
+            continue
+        artifacts.append({"artifact_id": artifact_id, "artifact_type": artifact_type})
+    return artifacts
+
+
+def _evaluation_artifact_matches(artifact_id: str, artifact_type: str) -> bool:
+    haystack = f"{artifact_id} {artifact_type}".lower()
+    return any(
+        marker in haystack
+        for marker in (
+            "evaluation",
+            "benchmark",
+            "prospective",
+            "frozen_prediction",
+            "guardrail",
+            "reproducibility",
+            "trend",
+            "decision_quality",
+        )
+    )
+
+
 def _portfolio_artifact_matches(
     *,
     artifact_id: str,
@@ -3890,9 +4079,9 @@ def _hypothesis_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.7.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.7</div>"
+        "<div class=\"brand\">molecule-ranker V1.8</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"

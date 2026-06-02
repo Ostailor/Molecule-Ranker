@@ -71,6 +71,23 @@ PORTFOLIO_CODEX_SAFETY_CONSTRAINTS = [
     "artifact IDs, and scenario IDs where relevant from supplied artifacts.",
 ]
 
+EVALUATION_CODEX_SAFETY_CONSTRAINTS = [
+    "For evaluation tasks, Codex is limited to evaluation explanation.",
+    "Codex can summarize reports, explain metric changes, draft limitations, summarize "
+    "prospective validation analytics, explain guardrail failures, and draft decision-quality "
+    "lessons.",
+    "Codex cannot invent metrics, outcomes, labels, benchmark results, assay results, or "
+    "conclusions.",
+    "Codex cannot hide guardrail failures.",
+    "Codex cannot alter benchmark results, hide guardrail failures, claim clinical validation, "
+    "create evidence, or treat evaluation artifacts as biomedical evidence.",
+    "Benchmark results are evaluation artifacts, not biomedical evidence.",
+    "Prospective validation analytics are not clinical validation.",
+    "Do not claim efficacy, safety, activity, binding, treatment, cure, or synthesizability.",
+    "Every evaluation explanation must cite evaluation_id, task_id, dataset_id, split_id, "
+    "metric IDs, and artifact IDs from supplied artifacts.",
+]
+
 TEMPLATE_ALIASES = {
     "draft_dossier": "draft_dossier_summary",
 }
@@ -662,6 +679,137 @@ TASK_TEMPLATES: dict[str, dict[str, Any]] = {
             ],
             "limitations": ["limitation strings"],
             "artifact_refs": ["artifact IDs used"],
+        },
+    },
+    "summarize_evaluation_report": {
+        "description": "Summarize an existing benchmark evaluation report.",
+        "required_inputs": ["evaluation report JSON or Markdown"],
+        "optional_inputs": ["benchmark suite", "dataset", "split", "baseline artifacts"],
+        "instructions": [
+            *EVALUATION_CODEX_SAFETY_CONSTRAINTS,
+            "Summarize only metrics, baselines, warnings, and limitations present in artifacts.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "summary": "string",
+            "evaluation_id": "string",
+            "task_id": "string",
+            "dataset_id": "string",
+            "split_id": "string",
+            "metric_ids": ["metric IDs used"],
+            "artifact_ids": ["artifact IDs used"],
+            "limitations": ["artifact-backed limitation strings"],
+        },
+    },
+    "explain_metric_changes": {
+        "description": "Explain existing longitudinal metric changes.",
+        "required_inputs": ["evaluation reports or longitudinal trend artifacts"],
+        "optional_inputs": ["previous-version frozen artifacts"],
+        "instructions": [
+            *EVALUATION_CODEX_SAFETY_CONSTRAINTS,
+            "Explain deltas only when the supplied artifacts contain the underlying metrics.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "change_explanation": "string",
+            "evaluation_id": "string",
+            "task_id": "string",
+            "dataset_id": "string",
+            "split_id": "string",
+            "metric_ids": ["metric IDs used"],
+            "artifact_ids": ["artifact IDs used"],
+            "limitations": ["artifact-backed limitation strings"],
+        },
+    },
+    "draft_benchmark_limitations": {
+        "description": "Draft limitations text from benchmark artifacts.",
+        "required_inputs": ["evaluation report", "dataset provenance", "split manifest"],
+        "optional_inputs": ["guardrail benchmark report"],
+        "instructions": [
+            *EVALUATION_CODEX_SAFETY_CONSTRAINTS,
+            "Draft limitations only from supplied warnings, provenance, splits, and metrics.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "draft_limitations": ["artifact-backed limitation strings"],
+            "evaluation_id": "string",
+            "task_id": "string",
+            "dataset_id": "string",
+            "split_id": "string",
+            "metric_ids": ["metric IDs used"],
+            "artifact_ids": ["artifact IDs used"],
+        },
+    },
+    "summarize_prospective_validation": {
+        "description": (
+            "Summarize prospective validation analytics from frozen predictions and outcomes."
+        ),
+        "required_inputs": [
+            "prospective validation run",
+            "frozen prediction set",
+            "evaluation report",
+        ],
+        "optional_inputs": ["outcome import manifest"],
+        "instructions": [
+            *EVALUATION_CODEX_SAFETY_CONSTRAINTS,
+            (
+                "State whether predictions were frozen before outcomes and do not call this "
+                "clinical validation."
+            ),
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "summary": "string",
+            "evaluation_id": "string",
+            "task_id": "string",
+            "dataset_id": "string",
+            "split_id": "string",
+            "metric_ids": ["metric IDs used"],
+            "artifact_ids": ["artifact IDs used"],
+            "limitations": ["artifact-backed limitation strings"],
+        },
+    },
+    "explain_guardrail_failures": {
+        "description": "Explain recorded evaluation guardrail failures without hiding them.",
+        "required_inputs": ["guardrail benchmark report or evaluation report warnings"],
+        "optional_inputs": ["Codex transcript artifacts"],
+        "instructions": [
+            *EVALUATION_CODEX_SAFETY_CONSTRAINTS,
+            (
+                "Surface every recorded guardrail failure and explain its consequence for "
+                "evaluation interpretation."
+            ),
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "failure_summary": "string",
+            "evaluation_id": "string",
+            "task_id": "string",
+            "dataset_id": "string",
+            "split_id": "string",
+            "metric_ids": ["metric IDs used"],
+            "artifact_ids": ["artifact IDs used"],
+            "limitations": ["artifact-backed limitation strings"],
+        },
+    },
+    "draft_decision_quality_lessons": {
+        "description": "Draft decision-quality lessons from existing decision-quality reports.",
+        "required_inputs": ["decision quality report", "evaluation report"],
+        "optional_inputs": ["campaign artifacts", "portfolio artifacts"],
+        "instructions": [
+            *EVALUATION_CODEX_SAFETY_CONSTRAINTS,
+            "Lessons must describe decision process learning, not biomedical success.",
+        ],
+        "output_json_schema": {
+            "status": "string",
+            "lessons": ["artifact-backed lesson strings"],
+            "evaluation_id": "string",
+            "task_id": "string",
+            "dataset_id": "string",
+            "split_id": "string",
+            "metric_ids": ["metric IDs used"],
+            "artifact_ids": ["artifact IDs used"],
+            "limitations": ["artifact-backed limitation strings"],
         },
     },
 }

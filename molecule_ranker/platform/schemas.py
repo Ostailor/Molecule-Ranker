@@ -81,6 +81,14 @@ PlatformJobType = Literal[
     "campaign_replan",
     "campaign_memo",
     "campaign_export",
+    "eval_dataset_build",
+    "eval_split",
+    "eval_benchmark_run",
+    "eval_prospective_freeze",
+    "eval_prospective_evaluate",
+    "eval_guardrail_benchmark",
+    "eval_reproducibility",
+    "eval_trend_report",
 ]
 PlatformJobStatus = Literal[
     "queued",

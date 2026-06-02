@@ -152,7 +152,7 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V1.7 is for internal research use only and is not a clinical product.",
+        "V1.8 is for internal research use only and is not a clinical product.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
         "Generated molecules are computational hypotheses and require independent validation.",
         "Portfolio recommendations are research prioritization aids, not clinical or "
@@ -166,6 +166,9 @@ def _known_limitations() -> list[str]:
         "experimental procedures.",
         "Campaign priorities, budget fit, dependencies, and replan triggers must be "
         "computed by deterministic modules, not Codex.",
+        "Benchmark results are evaluation artifacts, not biomedical evidence.",
+        "Prospective validation analytics are not clinical validation.",
+        "Codex must not invent benchmark results, labels, metrics, or conclusions.",
         "Graph paths do not prove causality, efficacy, safety, binding, or activity.",
         "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
         "Docking scores, poses, and structure-derived interactions are computational "

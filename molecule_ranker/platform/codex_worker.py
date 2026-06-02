@@ -27,6 +27,7 @@ from molecule_ranker.codex_backbone.guardrails import (
     output_guardrail_warnings,
     redact_secrets,
 )
+from molecule_ranker.evaluation.codex_explanations import EVALUATION_CODEX_TASK_TYPES
 from molecule_ranker.platform.database import codex_worker_jobs
 from molecule_ranker.platform.db import PlatformDatabase
 from molecule_ranker.platform.jobs import JobResult, PlatformJobQueue
@@ -54,6 +55,7 @@ SAFE_CODEX_TASK_TYPES = {
     "explain_pose_qc_failure",
     "draft_structure_report_summary",
     "plan_followup_structure_workflow",
+    *EVALUATION_CODEX_TASK_TYPES,
 }
 CACHE_PATH_MARKERS = {".cache", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
 DEFAULT_FORBIDDEN_COMMANDS = [
@@ -419,6 +421,40 @@ class CodexWorker:
                     "pose_id": {"type": "string"},
                     "interaction_profile_id": {"type": "string"},
                     "artifact_ids": {"type": "array"},
+                },
+            }
+        elif task_type in EVALUATION_CODEX_TASK_TYPES:
+            prompt_sections["evaluation_boundaries"] = [
+                "Codex is limited to evaluation explanation.",
+                "Do not invent metrics, outcomes, labels, benchmark results, assay results, "
+                "or conclusions.",
+                "Do not alter benchmark results, hide guardrail failures, claim clinical "
+                "validation, or create evidence.",
+                "Benchmark results are evaluation artifacts, not biomedical evidence.",
+                "Prospective validation analytics are not clinical validation.",
+                "Cite evaluation_id, task_id, dataset_id, split_id, metric IDs, and artifact IDs.",
+            ]
+            expected_schema = {
+                "type": "object",
+                "required": [
+                    "status",
+                    "evaluation_id",
+                    "task_id",
+                    "dataset_id",
+                    "split_id",
+                    "metric_ids",
+                    "artifact_ids",
+                ],
+                "properties": {
+                    "status": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "evaluation_id": {"type": "string"},
+                    "task_id": {"type": "string"},
+                    "dataset_id": {"type": "string"},
+                    "split_id": {"type": "string"},
+                    "metric_ids": {"type": "array"},
+                    "artifact_ids": {"type": "array"},
+                    "limitations": {"type": "array"},
                 },
             }
         else:

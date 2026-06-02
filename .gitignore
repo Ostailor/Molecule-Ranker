@@ -3,6 +3,7 @@
 .cache/
 .pytest_cache/
 .ruff_cache/
+.molecule-ranker/
 __pycache__/
 *.py[cod]
 results/*

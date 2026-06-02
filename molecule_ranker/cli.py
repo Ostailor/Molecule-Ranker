@@ -287,6 +287,22 @@ validate_app = typer.Typer(
     help="Run molecule-ranker validation suites.",
     no_args_is_help=True,
 )
+eval_app = typer.Typer(
+    help="Run V1.8 evaluation benchmark and prospective validation workflows.",
+    no_args_is_help=True,
+)
+eval_suite_app = typer.Typer(
+    help="Create and inspect benchmark suites.",
+    no_args_is_help=True,
+)
+eval_dataset_app = typer.Typer(
+    help="Build benchmark datasets from run artifacts.",
+    no_args_is_help=True,
+)
+eval_prospective_app = typer.Typer(
+    help="Freeze predictions, import future outcomes, and evaluate prospective validation runs.",
+    no_args_is_help=True,
+)
 api_app = typer.Typer(
     help="Inspect and export frozen V1.0 hosted API contracts.",
     no_args_is_help=True,
@@ -394,6 +410,7 @@ app.add_typer(user_app, name="user")
 app.add_typer(auth_cli_app, name="auth")
 app.add_typer(config_app, name="config")
 app.add_typer(validate_app, name="validate")
+app.add_typer(eval_app, name="eval")
 app.add_typer(api_app, name="api")
 app.add_typer(worker_app, name="worker")
 app.add_typer(job_app, name="job")
@@ -410,6 +427,9 @@ app.add_typer(hypothesis_app, name="hypothesis")
 app.add_typer(campaign_app, name="campaign")
 model_app.add_typer(model_dataset_app, name="dataset")
 model_app.add_typer(model_registry_app, name="registry")
+eval_app.add_typer(eval_suite_app, name="suite")
+eval_app.add_typer(eval_dataset_app, name="dataset")
+eval_app.add_typer(eval_prospective_app, name="prospective")
 codex_app.add_typer(codex_assist_app, name="assist")
 codex_app.add_typer(codex_engineering_app, name="engineering")
 auth_cli_app.add_typer(auth_token_app, name="token")
@@ -872,6 +892,650 @@ def validate_campaign_command(
         typer.echo(f"Markdown: {output_dir / 'campaign_guardrail_audit.md'}")
     if report.status != "pass":
         raise typer.Exit(code=1)
+
+
+@validate_app.command("evaluation")
+def validate_evaluation_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V1.8 evaluation benchmark fixture."""
+    from molecule_ranker.evaluation import (
+        BenchmarkDataset,
+        EvaluationMetric,
+        EvaluationReport,
+        ensure_baseline_comparison,
+        write_evaluation_report,
+    )
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "evaluation"
+    dataset = BenchmarkDataset(
+        dataset_id="synthetic-validation-fixture",
+        name="Synthetic evaluation validation fixture",
+        dataset_type="synthetic_validation",
+        source_artifact_ids=["synthetic-evaluation-fixture"],
+        row_count=1,
+        candidate_count=1,
+        label_count=0,
+        created_at=datetime.now(UTC),
+        data_contract_version="data-contracts.v1",
+        metadata={
+            "task_type": "candidate_ranking",
+            "synthetic_fixture": True,
+            "rows": [
+                {
+                    "row_id": "synthetic-row-1",
+                    "entity_id": "synthetic-candidate-1",
+                    "candidate_id": "synthetic-candidate-1",
+                    "record": {"candidate_id": "synthetic-candidate-1"},
+                    "labels": [],
+                    "provenance": {"source_artifact_id": "synthetic-evaluation-fixture"},
+                }
+            ],
+        },
+    )
+    report = EvaluationReport(
+        evaluation_id="v1-8-synthetic-evaluation",
+        suite_id="v1-8-synthetic-fixture",
+        task_id="v1-8-schema-contract",
+        dataset_id=dataset.dataset_id,
+        metrics=[
+            EvaluationMetric(
+                metric_id="guardrail-schema-contract",
+                name="schema_contract_available",
+                metric_type="reproducibility",
+                value=True,
+                higher_is_better=True,
+            )
+        ],
+        warnings=[],
+        limitations=[
+            "Benchmark results are evaluation artifacts, not biomedical evidence.",
+            "Prospective validation analytics are not clinical validation.",
+        ],
+        created_at=datetime.now(UTC),
+        metadata={"status": "pass", "synthetic_fixture": True},
+    )
+    report = ensure_baseline_comparison(report, dataset)
+    write_evaluation_report(report, output_dir)
+    payload = report.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Evaluation benchmark: {report.metadata.get('status', 'unknown')}")
+        typer.echo(f"Suite: {report.suite_id}")
+        typer.echo(f"Metrics: {len(report.metrics)}")
+        typer.echo(f"JSON: {output_dir / 'evaluation_report.json'}")
+        typer.echo(f"Markdown: {output_dir / 'evaluation_report.md'}")
+    if report.metadata.get("status") == "fail":
+        raise typer.Exit(code=1)
+
+
+@eval_suite_app.command("create")
+def eval_suite_create_command(
+    name: Annotated[str, typer.Option("--name", help="Benchmark suite name.")],
+    tasks: Annotated[
+        list[str] | None,
+        typer.Option("--task", help="Benchmark task ID or task type. Repeatable."),
+    ] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output benchmark suite JSON."),
+    ] = Path("benchmark_suite.json"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Create a benchmark suite artifact."""
+    from molecule_ranker.evaluation import create_benchmark_suite
+
+    suite = create_benchmark_suite(
+        suite_id=f"suite-{slugify(name)}",
+        name=name,
+        version=__version__,
+        description="Evaluation benchmark suite artifact.",
+        tasks=tasks or [],
+    )
+    _write_cli_json(output, suite.model_dump(mode="json"))
+    payload = {"suite": suite.model_dump(mode="json"), "output": str(output)}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Benchmark suite: {suite.suite_id}")
+    typer.echo(f"Output: {output}")
+
+
+@eval_dataset_app.command("build")
+def eval_dataset_build_command(
+    from_run: Annotated[
+        Path,
+        typer.Option(
+            "--from-run",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            help="Run directory containing benchmark source artifacts.",
+        ),
+    ],
+    task_type: Annotated[
+        str,
+        typer.Option("--task-type", help="Benchmark task type."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output benchmark dataset JSON."),
+    ] = Path("benchmark_dataset.json"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Build a benchmark dataset from a run directory."""
+    from molecule_ranker.evaluation.datasets import build_benchmark_dataset
+
+    sources = _evaluation_sources_from_run(from_run)
+    if not sources:
+        typer.echo(f"Error: no JSON or CSV artifacts found under {from_run}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        dataset = build_benchmark_dataset(
+            task_type=task_type,  # type: ignore[arg-type]
+            sources=sources,
+            dataset_id=f"{slugify(from_run.name)}-{task_type}-dataset",
+            metadata={"from_run": str(from_run)},
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _write_cli_json(output, dataset.model_dump(mode="json"))
+    payload = {"dataset": dataset.model_dump(mode="json"), "output": str(output)}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Benchmark dataset: {dataset.dataset_id}")
+    typer.echo(f"Rows: {dataset.row_count}")
+    typer.echo(f"Output: {output}")
+
+
+@eval_app.command("split")
+def eval_split_command(
+    dataset_path: Annotated[
+        Path,
+        typer.Option(
+            "--dataset",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Benchmark dataset JSON.",
+        ),
+    ],
+    split_type: Annotated[
+        str,
+        typer.Option("--split-type", help="Split type: scaffold, time_based, random, prospective."),
+    ] = "random",
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output benchmark split JSON."),
+    ] = Path("benchmark_split.json"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Create a benchmark split artifact."""
+    from molecule_ranker.evaluation.schemas import BenchmarkDataset
+    from molecule_ranker.evaluation.splits import build_benchmark_split
+
+    dataset = BenchmarkDataset.model_validate(_read_cli_json(dataset_path))
+    try:
+        kwargs: dict[str, Any] = {}
+        if split_type == "prospective":
+            kwargs["frozen_prediction_artifact_ids"] = ["cli-frozen-predictions"]
+        split = build_benchmark_split(
+            dataset,
+            strategy=split_type,  # type: ignore[arg-type]
+            **kwargs,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _write_cli_json(output, split.model_dump(mode="json"))
+    payload = {"split": split.model_dump(mode="json"), "output": str(output)}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Benchmark split: {split.split_id}")
+    typer.echo(f"Type: {split.split_type}")
+    typer.echo(f"Output: {output}")
+
+
+@eval_app.command("run")
+def eval_run_command(
+    suite_path: Annotated[
+        Path,
+        typer.Option(
+            "--suite",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Benchmark suite JSON.",
+        ),
+    ],
+    dataset_path: Annotated[
+        Path,
+        typer.Option(
+            "--dataset",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Benchmark dataset JSON.",
+        ),
+    ],
+    split_path: Annotated[
+        Path,
+        typer.Option(
+            "--split",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Benchmark split JSON.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output evaluation report JSON."),
+    ] = Path("evaluation_report.json"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Run a synthetic-safe benchmark evaluation from frozen artifacts."""
+    from molecule_ranker.evaluation import ensure_baseline_comparison
+    from molecule_ranker.evaluation.metrics import top_k_hit_rate
+    from molecule_ranker.evaluation.reports import render_benchmark_suite_report
+    from molecule_ranker.evaluation.schemas import (
+        BenchmarkDataset,
+        BenchmarkSplit,
+        BenchmarkSuite,
+        EvaluationReport,
+    )
+
+    suite = BenchmarkSuite.model_validate(_read_cli_json(suite_path))
+    dataset = BenchmarkDataset.model_validate(_read_cli_json(dataset_path))
+    split = BenchmarkSplit.model_validate(_read_cli_json(split_path))
+    rows = _evaluation_dataset_rows(dataset, split)
+    labels = [1 if _evaluation_row_positive(row) else 0 for row in rows]
+    scores = [
+        _evaluation_row_score(row, fallback=len(rows) - index)
+        for index, row in enumerate(rows)
+    ]
+    metric = top_k_hit_rate(labels, scores, k=min(1, len(labels) or 1))
+    task_id = str(dataset.metadata.get("task_type") or (suite.tasks[0] if suite.tasks else "eval"))
+    report = EvaluationReport(
+        evaluation_id=f"{dataset.metadata.get('task_type', dataset.dataset_id)}-evaluation",
+        suite_id=suite.suite_id,
+        task_id=task_id,
+        dataset_id=dataset.dataset_id,
+        split_id=split.split_id,
+        prediction_set_id=None,
+        metrics=[metric],
+        baseline_metrics=[],
+        comparisons=[],
+        warnings=list(dataset.metadata.get("warnings", [])),
+        limitations=[
+            "Benchmark results are evaluation artifacts, not biomedical evidence.",
+            "Prospective validation analytics are not clinical validation.",
+            "Outcome labels are limited to imported results or benchmark fixtures.",
+        ],
+        created_at=datetime.now(UTC),
+        metadata={
+            "task_definition": {
+                "suite_name": suite.name,
+                "suite_tasks": suite.tasks,
+                "objective": "Synthetic-safe CLI benchmark evaluation.",
+            },
+            "dataset_provenance": {
+                "source_artifact_ids": dataset.source_artifact_ids,
+                "dataset_type": dataset.dataset_type,
+            },
+            "split": split.model_dump(mode="json"),
+            "evaluated_row_count": len(rows),
+        },
+    )
+    report = ensure_baseline_comparison(report, dataset)
+    _write_cli_json(output, report.model_dump(mode="json"))
+    markdown_path = output.with_suffix(".md")
+    markdown_path.write_text(
+        render_benchmark_suite_report(report, dataset=dataset, split=split),
+        encoding="utf-8",
+    )
+    payload = {
+        "report": report.model_dump(mode="json"),
+        "output": str(output),
+        "markdown": str(markdown_path),
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Evaluation report: {output}")
+    typer.echo(f"Markdown: {markdown_path}")
+
+
+@eval_prospective_app.command("freeze")
+def eval_prospective_freeze_command(
+    predictions: Annotated[
+        Path,
+        typer.Option(
+            "--predictions",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Prediction, ranking, portfolio, or campaign decision artifact to freeze.",
+        ),
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", help="Directory where the prospective run will be stored."),
+    ] = Path(".molecule-ranker/evaluation/prospective"),
+    task_id: Annotated[str, typer.Option("--task-id", help="Evaluation task identifier.")] = (
+        "prospective-validation"
+    ),
+    model_or_pipeline_version: Annotated[
+        str,
+        typer.Option("--model-or-pipeline-version", help="Model or pipeline version being frozen."),
+    ] = "unknown",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    campaign_id: Annotated[str | None, typer.Option("--campaign-id")] = None,
+    frozen_at: Annotated[
+        str | None,
+        typer.Option(
+            "--frozen-at",
+            help="Timezone-aware ISO timestamp for deterministic fixtures.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Freeze predictions before future outcomes are imported."""
+    from molecule_ranker.evaluation.prospective import freeze_prospective_run
+
+    try:
+        run, frozen_set = freeze_prospective_run(
+            task_id=task_id,
+            predictions=predictions,
+            output_dir=output_dir,
+            model_or_pipeline_version=model_or_pipeline_version,
+            project_id=project_id,
+            campaign_id=campaign_id,
+            frozen_at=_parse_cli_datetime(frozen_at) if frozen_at else None,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "run_dir": str(output_dir),
+        "run": run.model_dump(mode="json"),
+        "frozen_prediction_set": frozen_set.model_dump(mode="json"),
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Prospective run: {run.prospective_run_id}")
+    typer.echo(f"Status: {run.status}")
+    typer.echo(f"Frozen prediction set: {output_dir / 'frozen_prediction_set.json'}")
+
+
+@eval_prospective_app.command("import-outcomes")
+def eval_prospective_import_outcomes_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", help="Directory containing a frozen prospective run."),
+    ] = Path(".molecule-ranker/evaluation/prospective"),
+    outcomes: Annotated[
+        Path,
+        typer.Option(
+            "--outcomes",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Imported assay outcome artifact.",
+        ),
+    ] = Path("assay_results.json"),
+    outcome_imported_at: Annotated[
+        str | None,
+        typer.Option("--outcome-imported-at", help="Timezone-aware ISO import timestamp."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Import future assay outcomes for a frozen prospective run."""
+    from molecule_ranker.evaluation.prospective import import_prospective_outcomes
+
+    try:
+        run = import_prospective_outcomes(
+            run_dir,
+            outcomes=outcomes,
+            outcome_imported_at=(
+                _parse_cli_datetime(outcome_imported_at) if outcome_imported_at else None
+            ),
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {"run_dir": str(run_dir), "run": run.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Prospective run: {run.prospective_run_id}")
+    typer.echo(f"Status: {run.status}")
+    if run.warnings:
+        typer.echo("Warnings:")
+        for warning in run.warnings:
+            typer.echo(f"- {warning}")
+
+
+@eval_prospective_app.command("evaluate")
+def eval_prospective_evaluate_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", help="Directory containing an outcome-imported prospective run."),
+    ] = Path(".molecule-ranker/evaluation/prospective"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Evaluate frozen predictions against imported prospective outcomes."""
+    from molecule_ranker.evaluation.prospective import evaluate_prospective_run
+
+    try:
+        report = evaluate_prospective_run(run_dir)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "run_dir": str(run_dir),
+        "report_path": str(run_dir / "prospective_validation_report.json"),
+        "report": report.model_dump(mode="json"),
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Evaluation report: {run_dir / 'prospective_validation_report.json'}")
+    typer.echo(f"Status: {report.metadata.get('prospective_status')}")
+
+
+@eval_app.command("reproducibility")
+def eval_reproducibility_command(
+    from_run: Annotated[
+        Path,
+        typer.Option(
+            "--from-run",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            help="Completed run directory, for example results/<disease_slug>/.",
+        ),
+    ],
+    expected_config_hash: Annotated[
+        str | None,
+        typer.Option("--expected-config-hash", help="Optional expected config hash."),
+    ] = None,
+    rerun_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--rerun-dir",
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            help="Optional deterministic rerun directory to compare.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Build a V1.8 reproducibility manifest and report for a run directory."""
+    from molecule_ranker.evaluation.reproducibility import (
+        check_reproducibility,
+        load_reproducibility_manifest,
+    )
+
+    try:
+        report = check_reproducibility(
+            from_run=from_run,
+            expected_config_hash=expected_config_hash,
+            rerun_dir=rerun_dir,
+        )
+        manifest = load_reproducibility_manifest(from_run)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "manifest_path": str(from_run / "reproducibility_manifest.json"),
+        "report_path": str(from_run / "reproducibility_report.md"),
+        "manifest": manifest.model_dump(mode="json"),
+        "report": report.model_dump(mode="json"),
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Reproducibility: {report.status}")
+    typer.echo(f"Manifest: {from_run / 'reproducibility_manifest.json'}")
+    typer.echo(f"Report: {from_run / 'reproducibility_report.md'}")
+    for warning in report.warnings:
+        typer.echo(f"- {warning}")
+
+
+@eval_app.command("guardrails")
+def eval_guardrails_command(
+    from_run: Annotated[
+        Path,
+        typer.Option(
+            "--from-run",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            help="Run directory containing guardrail fixtures or outputs.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output guardrail report JSON."),
+    ] = Path("guardrail_benchmark_report.json"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Run the guardrail benchmark against run fixtures and outputs."""
+    from molecule_ranker.evaluation.guardrail_benchmark import run_guardrail_benchmark
+
+    fixtures = _evaluation_guardrail_fixtures_from_run(from_run)
+    try:
+        report = run_guardrail_benchmark(fixtures=fixtures, output_dir=output.parent)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    default_json = output.parent / "guardrail_benchmark_report.json"
+    default_md = output.parent / "guardrail_benchmark_report.md"
+    if default_json != output:
+        shutil.copyfile(default_json, output)
+        if default_md.exists():
+            shutil.copyfile(default_md, output.with_suffix(".md"))
+    payload = {
+        "report": report.model_dump(mode="json"),
+        "output": str(output),
+        "markdown": str(output.with_suffix(".md")),
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Guardrail benchmark report: {output}")
+    typer.echo(f"Markdown: {output.with_suffix('.md')}")
+
+
+@eval_app.command("trends")
+def eval_trends_command(
+    project_id: Annotated[str, typer.Option("--project-id", help="Project identifier.")],
+    metric: Annotated[
+        str,
+        typer.Option("--metric", help="Metric to trend, for example selected_hit_rate."),
+    ] = "selected_hit_rate",
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output trend report Markdown."),
+    ] = Path("longitudinal_trend_report.md"),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Generate a placeholder longitudinal trend report shell for a project metric."""
+    from molecule_ranker.evaluation.reports import render_longitudinal_trend_report
+
+    trend = {
+        "trend_id": f"{slugify(project_id)}-{slugify(metric)}",
+        "project_id": project_id,
+        "task_definition": {
+            "project_id": project_id,
+            "metric": metric,
+            "objective": "Track benchmark metric changes across frozen evaluations.",
+        },
+        "metrics": [{"name": metric, "value": None, "status": "not_computed"}],
+        "baselines": [],
+        "limitations": ["Trend report requires comparable frozen evaluation artifacts."],
+        "guardrail_results": {},
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(render_longitudinal_trend_report(trend), encoding="utf-8")
+    json_path = output.with_suffix(".json")
+    _write_cli_json(json_path, trend)
+    payload = {"trend": trend, "output": str(output), "json": str(json_path)}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Longitudinal trend report: {output}")
+    typer.echo(f"JSON: {json_path}")
 
 
 @validate_app.command("security")
@@ -11618,6 +12282,114 @@ def _run_engineering_command(command: list[str], *, cwd: Path) -> dict[str, Any]
 
 def _echo_json(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _parse_cli_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return parsed
+
+
+def _read_cli_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_cli_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _evaluation_sources_from_run(run_dir: Path) -> dict[str, Path]:
+    sources: dict[str, Path] = {}
+    for path in sorted(run_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in {".json", ".csv"}:
+            continue
+        if path.name.startswith(("benchmark_", "evaluation_", "reproducibility_")):
+            continue
+        sources[path.stem] = path
+    return sources
+
+
+def _evaluation_dataset_rows(dataset: Any, split: Any) -> list[dict[str, Any]]:
+    rows = dataset.metadata.get("rows", [])
+    if not isinstance(rows, list):
+        return []
+    resolved = [dict(row) for row in rows if isinstance(row, dict)]
+    selected_ids = set(split.test_ids or split.validation_ids or split.train_ids)
+    if not selected_ids:
+        return resolved
+    return [row for row in resolved if str(row.get("row_id")) in selected_ids]
+
+
+def _evaluation_row_positive(row: dict[str, Any]) -> bool:
+    labels = row.get("labels", [])
+    if not isinstance(labels, list):
+        return False
+    return any(_evaluation_label_positive(label) for label in labels if isinstance(label, dict))
+
+
+def _evaluation_label_positive(label: dict[str, Any]) -> bool:
+    for key in ("outcome_label", "label", "result", "status", "active", "is_hit"):
+        value = label.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {
+            "positive",
+            "active",
+            "hit",
+            "supported",
+            "pass",
+            "passed",
+            "true",
+        }
+    return False
+
+
+def _evaluation_row_score(row: dict[str, Any], *, fallback: int) -> float:
+    record = row.get("record")
+    record = record if isinstance(record, dict) else row
+    for key in ("score", "ranking_score", "prediction_score", "probability"):
+        value = record.get(key)
+        try:
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    rank = record.get("rank")
+    try:
+        if rank is not None:
+            return -float(rank)
+    except (TypeError, ValueError):
+        pass
+    return float(fallback)
+
+
+def _evaluation_guardrail_fixtures_from_run(run_dir: Path) -> dict[str, Any]:
+    fixtures: dict[str, Any] = {
+        "adversarial_text_fixtures": [],
+        "codex_task_outputs": [],
+        "report_artifacts": [],
+        "dashboard_snippets": [],
+        "export_packages": [],
+    }
+    for path in sorted(run_dir.glob("*.json")):
+        payload = _read_cli_json(path)
+        if isinstance(payload, dict):
+            for key in fixtures:
+                value = payload.get(key)
+                if isinstance(value, list):
+                    fixtures[key].extend(value)
+            if any(key in payload for key in ("text", "output_text", "content")):
+                fixtures["adversarial_text_fixtures"].append(payload)
+        elif isinstance(payload, list):
+            fixtures["adversarial_text_fixtures"].extend(payload)
+    return fixtures
 
 
 def _json_ready(value: Any) -> Any:

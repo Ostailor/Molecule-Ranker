@@ -86,6 +86,14 @@ QUEUE_JOB_TYPES = {
     "campaign_replan",
     "campaign_memo",
     "campaign_export",
+    "eval_dataset_build",
+    "eval_split",
+    "eval_benchmark_run",
+    "eval_prospective_freeze",
+    "eval_prospective_evaluate",
+    "eval_guardrail_benchmark",
+    "eval_reproducibility",
+    "eval_trend_report",
 }
 
 JOB_PERMISSION: dict[str, str] = {
@@ -155,6 +163,14 @@ JOB_PERMISSION: dict[str, str] = {
     "campaign_replan": "campaign:plan",
     "campaign_memo": "campaign:plan",
     "campaign_export": "campaign:export",
+    "eval_dataset_build": "evaluation:run",
+    "eval_split": "evaluation:run",
+    "eval_benchmark_run": "evaluation:run",
+    "eval_prospective_freeze": "evaluation:run",
+    "eval_prospective_evaluate": "evaluation:run",
+    "eval_guardrail_benchmark": "evaluation:run",
+    "eval_reproducibility": "evaluation:run",
+    "eval_trend_report": "evaluation:run",
 }
 
 PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
@@ -193,6 +209,16 @@ CAMPAIGN_JOB_TYPES = {
     "campaign_replan",
     "campaign_memo",
     "campaign_export",
+}
+EVALUATION_JOB_TYPES = {
+    "eval_dataset_build",
+    "eval_split",
+    "eval_benchmark_run",
+    "eval_prospective_freeze",
+    "eval_prospective_evaluate",
+    "eval_guardrail_benchmark",
+    "eval_reproducibility",
+    "eval_trend_report",
 }
 
 
@@ -284,6 +310,15 @@ class PlatformJobQueue:
             project_id=project_id,
             config_snapshot=config,
         )
+        _enforce_hosted_evaluation_policy(job_type=job_type, config_snapshot=config)
+        job_metadata = metadata or {}
+        if job_type in EVALUATION_JOB_TYPES:
+            job_metadata = {
+                **job_metadata,
+                "evaluation_v1_8": True,
+                "evaluation_reports_are_not_evidence": True,
+                "not_clinical_validation": True,
+            }
         now = _now()
         job = PlatformJob(
             job_id=f"job-{uuid.uuid4().hex[:16]}",
@@ -295,7 +330,7 @@ class PlatformJobQueue:
             priority=priority,  # type: ignore[arg-type]
             config_snapshot=config,
             created_at=now,
-            metadata=metadata or {},
+            metadata=job_metadata,
         )
         with self.database.engine.begin() as connection:
             connection.execute(
@@ -1028,6 +1063,24 @@ def _enforce_hosted_campaign_policy(
             config_snapshot["codex_memo_label"] = "assistant_output"
             config_snapshot["codex_memo_separate_from_deterministic_plan"] = True
             config_snapshot["codex_may_only_draft_campaign_summary"] = True
+
+
+def _enforce_hosted_evaluation_policy(
+    *,
+    job_type: str,
+    config_snapshot: dict[str, Any],
+) -> None:
+    if job_type not in EVALUATION_JOB_TYPES:
+        return
+    if job_type == "eval_prospective_freeze" and (
+        bool(config_snapshot.get("edit_existing"))
+        or bool(config_snapshot.get("update_existing"))
+        or bool(config_snapshot.get("frozen_prediction_set_id"))
+    ):
+        raise PlatformDatabaseError("Prospective freeze cannot be edited after creation.")
+    config_snapshot["evaluation_reports_are_not_evidence"] = True
+    config_snapshot["evaluation_is_not_clinical_validation"] = True
+    config_snapshot["no_efficacy_safety_activity_claims"] = True
 
 
 def _campaign_approval_requested(config_snapshot: dict[str, Any]) -> bool:

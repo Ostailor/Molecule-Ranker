@@ -170,6 +170,20 @@ class CampaignJobRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class EvaluationJobRequest(BaseModel):
+    job_type: str
+    suite_id: str | None = None
+    dataset_id: str | None = None
+    split_id: str | None = None
+    prospective_run_id: str | None = None
+    frozen_prediction_set_id: str | None = None
+    report_id: str | None = None
+    metric: str | None = None
+    from_run: str | None = None
+    output_artifact_id: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 class CampaignStageGateApprovalRequest(BaseModel):
     reviewer_id: str | None = None
     decision: str = "approved"
@@ -1002,6 +1016,63 @@ def enqueue_campaign_job(
         "job": job.model_dump(mode="json"),
         "campaign_boundary": "research_management_guidance_not_lab_protocol",
         "memo_boundary": "codex_memos_are_assistant_output_not_deterministic_plans",
+    }
+
+
+@router.post("/projects/{project_id}/evaluation/jobs")
+def enqueue_evaluation_job(
+    project_id: str,
+    request: EvaluationJobRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    evaluation_job_types = {
+        "eval_dataset_build",
+        "eval_split",
+        "eval_benchmark_run",
+        "eval_prospective_freeze",
+        "eval_prospective_evaluate",
+        "eval_guardrail_benchmark",
+        "eval_reproducibility",
+        "eval_trend_report",
+    }
+    if request.job_type not in evaluation_job_types:
+        raise HTTPException(status_code=400, detail="Unsupported evaluation job type.")
+    config = dict(request.config)
+    for key, value in {
+        "suite_id": request.suite_id,
+        "dataset_id": request.dataset_id,
+        "split_id": request.split_id,
+        "prospective_run_id": request.prospective_run_id,
+        "frozen_prediction_set_id": request.frozen_prediction_set_id,
+        "report_id": request.report_id,
+        "metric": request.metric,
+        "from_run": request.from_run,
+        "output_artifact_id": request.output_artifact_id,
+    }.items():
+        if value is not None:
+            config[key] = value
+    try:
+        job = PlatformJobQueue(database).enqueue(
+            job_type=request.job_type,
+            requested_by=user,
+            project_id=project_id,
+            config_snapshot=config,
+            metadata={
+                "evaluation_v1_8": True,
+                "evaluation_reports_are_not_evidence": True,
+                "not_clinical_validation": True,
+            },
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": job.status,
+        "job": job.model_dump(mode="json"),
+        "evaluation_boundary": "evaluation_reports_are_not_evidence",
+        "validation_boundary": "not_clinical_validation",
     }
 
 

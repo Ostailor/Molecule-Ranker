@@ -15,8 +15,8 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V1.7 upgrades the V1.6 validated internal research platform with "
-            "closed-loop campaign planning and budget-aware execution management. "
+            "V1.8 upgrades the V1.7 validated internal research platform with "
+            "scientific evaluation benchmark suites and prospective validation analytics. "
             "The validated internal research platform MVP boundary remains intact: "
             "campaign plans, hypotheses, research questions, graph paths, portfolio "
             "recommendations, structure workflows, docking scores, model predictions, "
@@ -57,6 +57,13 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- Campaign schemas, deterministic campaign planning, budget-fit calculation, "
             "review-gated work packages, slot allocation, replan triggers, audit trails, "
             "campaign memos, and campaign dashboard rendering for V1.7.",
+            "- BenchmarkSuite, BenchmarkTask, BenchmarkDataset, BenchmarkSplit, "
+            "FrozenPredictionSet, ProspectiveValidationRun, EvaluationMetric, "
+            "EvaluationReport, DecisionQualityReport, and ReproducibilityManifest "
+            "schemas for V1.8.",
+            "- Deterministic evaluation metrics for ranking, generated experiment-worthiness, "
+            "surrogate calibration, portfolio baselines, campaign learning, hypothesis "
+            "lifecycle, integration provenance, guardrail failures, and reproducibility.",
             "- Deterministic multi-objective portfolio selection with diversity, "
             "learning-value, uncertainty, budget, and correlated-risk constraints.",
             "- Expert-review, assay-triage, learning-batch, deprioritization, "
@@ -90,6 +97,9 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- campaign plans are research-management artifacts, not lab protocols",
             "- campaign priorities, budget fit, dependencies, and replan triggers are "
             "computed deterministically",
+            "- benchmark results are evaluation artifacts, not biomedical evidence",
+            "- prospective validation analytics are not clinical validation",
+            "- Codex must not invent benchmark results, labels, metrics, or conclusions",
             "- Codex must not create portfolio selections, scores, evidence, assay "
             "results, citations, molecules, graph nodes, graph edges, mechanisms, or "
             "unvalidated hypotheses",
