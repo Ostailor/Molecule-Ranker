@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from pathlib import Path
+from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from molecule_ranker.campaigns import CampaignExecutionEvent, CampaignStore
+from molecule_ranker.codex_backbone.guardrails import redact_secrets
 from molecule_ranker.platform.auth import generate_opaque_token
 from molecule_ranker.platform.dashboard import render_hosted_dashboard
 from molecule_ranker.platform.db import PlatformDatabase, PlatformDatabaseError
@@ -16,8 +19,10 @@ from molecule_ranker.platform.rbac import (
     require_platform_admin,
     require_project_access,
 )
-from molecule_ranker.platform.schemas import RetentionPolicy, UserAccount
+from molecule_ranker.platform.schemas import PlatformJob, RetentionPolicy, UserAccount
 from molecule_ranker.server.dependencies import current_user, platform_database, workspace_store
+from molecule_ranker.server.security import reject_suspicious_identifier, safe_artifact_path
+from molecule_ranker.utils.pagination import normalize_limit_offset
 from molecule_ranker.workspace.store import ProjectWorkspaceStore
 
 router = APIRouter(tags=["platform"])
@@ -233,6 +238,52 @@ class PlatformSettingsRequest(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
+class GenericJobRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "job_type": "ranking",
+                    "config": {"run_id": "pilot-demo-run"},
+                    "priority": "normal",
+                    "idempotency_key": "pilot-demo-run-ranking",
+                }
+            ]
+        }
+    )
+
+    job_type: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    priority: str = "normal"
+    idempotency_key: str | None = None
+
+
+class PilotFeedbackApiRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "project_id": "pilot-project",
+                    "page_or_command": "dashboard/jobs",
+                    "feedback_type": "workflow_friction",
+                    "severity": "medium",
+                    "text": "The retry action needs clearer context.",
+                    "artifact_refs": [],
+                    "metadata": {"source": "sdk"},
+                }
+            ]
+        }
+    )
+
+    project_id: str | None = None
+    page_or_command: str
+    feedback_type: str
+    severity: str = "medium"
+    text: str
+    artifact_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 @router.post("/admin/users")
 def create_user(
     request: UserCreateRequest,
@@ -427,12 +478,189 @@ def admin_jobs(
     user: Annotated[UserAccount, Depends(current_user)],
     database: Annotated[PlatformDatabase, Depends(platform_database)],
     status: str | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    sort: str = Query(default="-created_at"),
 ) -> dict[str, Any]:
     require_platform_admin(user)
-    jobs = PlatformJobQueue(database).list_jobs(status=status)
+    page = normalize_limit_offset(limit=limit, offset=offset, max_limit=200)
+    jobs = PlatformJobQueue(database).list_jobs(
+        status=status,
+        limit=page.limit,
+        offset=page.offset,
+    )
+    page = page.__class__(limit=page.limit, offset=page.offset, count=len(jobs))
     return {
-        "jobs": [job.model_dump(mode="json") for job in jobs],
+        "jobs": [_job_payload(job) for job in _sort_jobs(jobs, sort=sort)],
         "failed_jobs": database.list_failed_jobs(),
+        "pagination": page.model_dump(),
+    }
+
+
+@router.post("/projects/{project_id}/jobs", tags=["jobs"])
+def enqueue_project_job(
+    project_id: str,
+    request: GenericJobRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    config = dict(request.config)
+    metadata: dict[str, Any] = {
+        "sdk_endpoint": True,
+        "scientific_outputs_require_existing_guardrails": True,
+    }
+    if request.idempotency_key:
+        metadata["idempotency_key"] = request.idempotency_key
+    try:
+        job = PlatformJobQueue(database).enqueue(
+            job_type=request.job_type,
+            requested_by=user,
+            project_id=project_id,
+            config_snapshot=config,
+            priority=request.priority,
+            metadata=metadata,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": job.status, "job": _job_payload(job)}
+
+
+@router.get("/projects/{project_id}/jobs", tags=["jobs"])
+def list_project_jobs(
+    project_id: str,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    status: str | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    sort: str = Query(default="-created_at"),
+) -> dict[str, Any]:
+    if not user.is_admin:
+        require_project_access(database, user, project_id=project_id, action="read")
+    page = normalize_limit_offset(limit=limit, offset=offset, max_limit=200)
+    jobs = PlatformJobQueue(database).list_jobs(
+        status=status,
+        project_id=project_id,
+        limit=page.limit,
+        offset=page.offset,
+    )
+    page = page.__class__(limit=page.limit, offset=page.offset, count=len(jobs))
+    return {
+        "jobs": [_job_payload(job) for job in _sort_jobs(jobs, sort=sort)],
+        "pagination": page.model_dump(),
+    }
+
+
+@router.get("/platform/jobs/{job_id}", tags=["jobs"])
+def get_platform_job(
+    job_id: str,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    job = PlatformJobQueue(database).get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if not user.is_admin and job.requested_by_user_id != user.user_id:
+        if job.project_id is None:
+            raise HTTPException(status_code=403, detail="Missing permission project:read.")
+        require_project_access(database, user, project_id=job.project_id, action="read")
+    return {"job": _job_payload(job)}
+
+
+@router.post("/pilot/readiness", tags=["platform"])
+def run_pilot_readiness(
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    from molecule_ranker.pilot.readiness import PilotReadinessConfig, run_pilot_readiness_audit
+
+    require_platform_admin(user)
+    report = run_pilot_readiness_audit(
+        PilotReadinessConfig(
+            root_dir=database.root_dir,
+            environment="production",
+            database_url=database.database_url,
+        )
+    )
+    return {"report": report.model_dump(mode="json")}
+
+
+@router.post("/feedback", tags=["platform"])
+def submit_pilot_feedback_api(
+    request: PilotFeedbackApiRequest,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    from molecule_ranker.pilot.feedback import FeedbackSeverity, FeedbackType, submit_feedback
+
+    if request.feedback_type not in {
+        "usability_issue",
+        "feature_request",
+        "bug_report",
+        "workflow_friction",
+    }:
+        raise HTTPException(status_code=422, detail="Unsupported feedback_type.")
+    if request.severity not in {"low", "medium", "high", "critical"}:
+        raise HTTPException(status_code=422, detail="Unsupported severity.")
+    feedback = submit_feedback(
+        root_dir=database.root_dir,
+        user_id=user.user_id,
+        project_id=request.project_id,
+        page_or_command=request.page_or_command,
+        feedback_type=cast(FeedbackType, request.feedback_type),
+        severity=cast(FeedbackSeverity, request.severity),
+        text=request.text,
+        artifact_refs=request.artifact_refs,
+        metadata={**request.metadata, "source": request.metadata.get("source", "api")},
+    )
+    return {"feedback": feedback.model_dump(mode="json")}
+
+
+@router.get("/projects/{project_id}/evaluation/reports/{report_id}", tags=["platform"])
+def get_evaluation_report(
+    project_id: str,
+    report_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(current_user)],
+    store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+) -> dict[str, Any]:
+    reject_suspicious_identifier(report_id, label="report ID")
+    workspace = store.load_or_create()
+    if workspace.workspace_id != project_id:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    if bool(request.app.state.hosted_mode):
+        require_project_access(
+            request.app.state.platform_database,
+            user,
+            project_id=project_id,
+            action="read",
+        )
+    artifact = next(
+        (
+            item
+            for item in workspace.artifacts
+            if item.artifact_id == report_id or item.metadata.get("report_id") == report_id
+        ),
+        None,
+    )
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Evaluation report not found.")
+    normalized_type = artifact.artifact_type.lower().replace("-", "_")
+    if "evaluation" not in normalized_type and "benchmark" not in normalized_type:
+        raise HTTPException(status_code=404, detail="Evaluation report not found.")
+    path = safe_artifact_path(Path(artifact.path), root_dir=store.root_dir)
+    if path.suffix.lower() != ".json":
+        raise HTTPException(status_code=400, detail="Evaluation report is not a JSON artifact.")
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Evaluation report JSON is invalid.") from exc
+    return {
+        "artifact_id": artifact.artifact_id,
+        "report": report,
+        "evaluation_boundary": "evaluation_reports_are_not_biomedical_evidence",
     }
 
 
@@ -466,6 +694,117 @@ def admin_codex_status(
 ) -> dict[str, Any]:
     require_platform_admin(user)
     return database.codex_worker_status()
+
+
+@router.get("/admin/support-console")
+def admin_support_console(
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import build_admin_support_console
+
+    return build_admin_support_console(database, root_dir=database.root_dir)
+
+
+@router.post("/admin/support/jobs/{job_id}/retry")
+def admin_support_retry_job(
+    job_id: str,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import retry_failed_job
+
+    try:
+        return retry_failed_job(database, job_id=job_id, actor=user)
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/admin/support/jobs/{job_id}/cancel")
+def admin_support_cancel_job(
+    job_id: str,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import cancel_job
+
+    try:
+        return cancel_job(database, job_id=job_id, actor=user)
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/admin/support/jobs/{job_id}/requeue-dead-letter")
+def admin_support_requeue_dead_letter_job(
+    job_id: str,
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import requeue_dead_letter_job
+
+    try:
+        return requeue_dead_letter_job(database, job_id=job_id, actor=user)
+    except PlatformDatabaseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/admin/support/support-bundle")
+def admin_support_generate_bundle(
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import generate_admin_support_bundle
+
+    return generate_admin_support_bundle(database, root_dir=database.root_dir, actor=user)
+
+
+@router.post("/admin/support/readiness-check")
+def admin_support_readiness_check(
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import run_admin_readiness_check
+
+    return run_admin_readiness_check(database, root_dir=database.root_dir, actor=user)
+
+
+@router.post("/admin/support/migration-dry-run")
+def admin_support_migration_dry_run(
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import run_admin_migration_dry_run
+
+    return run_admin_migration_dry_run(database, root_dir=database.root_dir, actor=user)
+
+
+@router.post("/admin/support/backup-verify")
+def admin_support_backup_verify(
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import run_admin_backup_verification
+
+    return run_admin_backup_verification(database, root_dir=database.root_dir, actor=user)
+
+
+@router.get("/admin/support/redacted-logs")
+def admin_support_redacted_logs(
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import view_redacted_logs
+
+    return view_redacted_logs(database, root_dir=database.root_dir, actor=user)
 
 
 @router.put("/admin/settings")
@@ -1387,6 +1726,56 @@ def public_user(user: UserAccount) -> dict[str, Any]:
     return user.model_dump(mode="json", exclude={"last_login_at"}) | {
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None
     }
+
+
+def _job_payload(job: PlatformJob) -> dict[str, Any]:
+    payload = job.model_dump(mode="json")
+    payload["config_snapshot"] = _redact_json(payload.get("config_snapshot") or {})
+    payload["metadata"] = _redact_json(payload.get("metadata") or {})
+    return payload
+
+
+def _sort_jobs(jobs: list[PlatformJob], *, sort: str) -> list[PlatformJob]:
+    reverse = sort.startswith("-")
+    sort_key = sort.removeprefix("-")
+    if sort_key not in {"created_at", "completed_at", "status", "job_type", "priority"}:
+        return jobs
+    return sorted(
+        jobs,
+        key=lambda job: str(getattr(job, sort_key) or ""),
+        reverse=reverse,
+    )
+
+
+def _redact_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            redacted[key_text] = "[REDACTED]" if _is_sensitive_key(key_text) else _redact_json(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_json(item) for item in value]
+    if isinstance(value, str):
+        return redact_secrets(value)
+    return value
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.lower().replace("-", "_")
+    return any(
+        marker in lowered
+        for marker in (
+            "api_key",
+            "apikey",
+            "authorization",
+            "credential",
+            "password",
+            "secret",
+            "service_token",
+            "token",
+        )
+    )
 
 
 def _hosted_hypothesis_store_path(root_dir: Any, project_id: str) -> Any:

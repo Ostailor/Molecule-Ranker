@@ -74,6 +74,61 @@ def test_failed_job_records_error_summary(tmp_path: Path) -> None:
     assert "mock worker failed" in (finished.error_summary or "")
 
 
+def test_failed_job_can_be_retried_from_redacted_snapshot(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+    job = queue.enqueue(
+        job_type="ranking",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={
+            "disease": "Parkinson disease",
+            "api_key": "secret-token-value",
+        },
+    )
+    failed = queue.fail(job, RuntimeError("worker failed with api_key=secret-token-value"))
+
+    retry = queue.retry_failed(failed.job_id, requested_by=user)
+
+    assert retry.status == "queued"
+    assert retry.job_id != failed.job_id
+    assert retry.metadata["retry_of_job_id"] == failed.job_id
+    assert retry.metadata["retry_attempt"] == 2
+    assert retry.config_snapshot["disease"] == "Parkinson disease"
+    assert retry.config_snapshot["api_key"] == "[REDACTED]"
+    assert "secret-token-value" not in str(retry.config_snapshot)
+
+
+def test_running_job_resume_summary_redacts_checkpoint_and_cancel_state(
+    tmp_path: Path,
+) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+    queue.enqueue(
+        job_type="generation",
+        requested_by=user,
+        project_id="project-1",
+        metadata={
+            "checkpoint_id": "batch-4",
+            "resume_token": "resume-secret-token-value",
+        },
+    )
+    running = queue.claim_next()
+    assert running is not None
+    queue.cancel(running.job_id, actor_user_id=user.user_id)
+
+    summary = queue.resume_summary(running.job_id)
+
+    assert summary == {
+        "job_id": running.job_id,
+        "status": "running",
+        "resumable": True,
+        "cancel_requested": True,
+        "checkpoint_id": "batch-4",
+        "resume_token": "[REDACTED]",
+    }
+
+
 def test_cancelled_queued_job_does_not_run(tmp_path: Path) -> None:
     database, user = _database_with_project_user(tmp_path)
     queue = PlatformJobQueue(database)
@@ -647,6 +702,148 @@ def test_design_generation_budget_limit_enforced(tmp_path: Path) -> None:
         assert "budget_limit" in str(exc)
     else:
         raise AssertionError("Expected budget limit guardrail.")
+
+
+def test_retry_transient_failure_requeues_with_backoff(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+    job = queue.enqueue(
+        job_type="ranking",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"idempotency_key": "rank-1", "retry_backoff_seconds": 0},
+    )
+    attempts = 0
+
+    def handler(_job):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TimeoutError("temporary worker timeout")
+        return JobResult(result={"ok": True})
+
+    first = PipelineWorker(database=database, handlers={"ranking": handler}).run_once()
+    retry = queue.get(job.job_id)
+    second = PipelineWorker(database=database, handlers={"ranking": handler}).run_once()
+
+    assert first is not None
+    assert first.status == "retrying"
+    assert retry is not None
+    assert retry.status == "retrying"
+    assert retry.metadata["retry"]["attempt"] == 1
+    assert retry.metadata["retry"]["next_retry_at"]
+    assert second is not None
+    assert second.status == "succeeded"
+    assert attempts == 2
+
+
+def test_non_idempotent_external_write_is_not_retried(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    job = PlatformJobQueue(database).enqueue(
+        job_type="external_export",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={
+            "generated_molecule_warning_acknowledged": True,
+            "external_write": True,
+        },
+    )
+
+    def handler(_job):
+        raise TimeoutError("temporary export timeout")
+
+    finished = PipelineWorker(database=database, handlers={"external_export": handler}).run_once()
+
+    assert finished is not None
+    assert finished.job_id == job.job_id
+    assert finished.status == "failed"
+    assert finished.metadata["retry"]["reason"] == "external_write_not_idempotent"
+
+
+def test_stale_running_job_recovery_requeues_idempotent_job(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+    queued = queue.enqueue(
+        job_type="ranking",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"idempotency_key": "rank-stale"},
+    )
+    running = queue.claim_next()
+    assert running is not None
+
+    recovered = queue.recover_stale_running_jobs(stale_after_seconds=0)
+    refreshed = queue.get(queued.job_id)
+
+    assert recovered == [queued.job_id]
+    assert refreshed is not None
+    assert refreshed.status == "retrying"
+    assert refreshed.metadata["recovered_from_stale_running"] is True
+
+
+def test_running_cancellation_is_cooperative(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+    queue.enqueue(job_type="generation", requested_by=user, project_id="project-1")
+    running = queue.claim_next()
+    assert running is not None
+    queue.cancel(running.job_id, actor_user_id=user.user_id)
+
+    refreshed = queue.get(running.job_id)
+    assert refreshed is not None
+    finished = PipelineWorker(
+        database=database,
+        handlers={"generation": lambda _job: JobResult()},
+    ).run_job(refreshed)
+
+    assert finished is not None
+    assert finished.status == "cancelled"
+
+
+def test_job_timeout_enforcement_marks_timed_out(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+    job = queue.enqueue(
+        job_type="developability",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={"timeout_seconds": 0, "idempotency_key": "dev-timeout"},
+    )
+
+    finished = PipelineWorker(
+        database=database,
+        handlers={"developability": lambda _job: JobResult()},
+    ).run_once()
+
+    assert finished is not None
+    assert finished.job_id == job.job_id
+    assert finished.status == "timed_out"
+    assert "timed out" in (finished.error_summary or "")
+
+
+def test_dead_letter_transition_after_max_attempts(tmp_path: Path) -> None:
+    database, user = _database_with_project_user(tmp_path)
+    queue = PlatformJobQueue(database)
+    job = queue.enqueue(
+        job_type="ranking",
+        requested_by=user,
+        project_id="project-1",
+        config_snapshot={
+            "idempotency_key": "rank-dead-letter",
+            "max_attempts": 1,
+            "retry_backoff_seconds": 0,
+        },
+    )
+
+    def handler(_job):
+        raise TimeoutError("temporary worker timeout")
+
+    finished = PipelineWorker(database=database, handlers={"ranking": handler}).run_once()
+
+    assert finished is not None
+    assert finished.job_id == job.job_id
+    assert finished.status == "dead_lettered"
+    assert finished.metadata["dead_letter"]["reason"] == "max_attempts_exceeded"
 
 
 def _database_with_project_user(tmp_path: Path):

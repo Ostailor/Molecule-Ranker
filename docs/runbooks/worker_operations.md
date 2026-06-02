@@ -37,6 +37,17 @@ molecule-ranker admin jobs --database-url "$MOLECULE_RANKER_DATABASE_URL" --json
 - Codex jobs fail guardrails.
 - Integration jobs remain dry-run when write mode was expected.
 
+## V1.9 Job Control
+
+- Queued jobs cancel immediately.
+- Running jobs mark `cancel_requested` and stop at the next worker checkpoint
+  when the handler supports cooperative cancellation.
+- Failed and guardrail-failed jobs can be retried from redacted config
+  snapshots after an operator confirms the failure cause.
+- Resume summaries expose checkpoint state and cancel state, but redact resume
+  tokens and sensitive metadata.
+- Retry, cancel, success, failure, and guardrail-failure events remain auditable.
+
 ## Rollback Steps
 
 1. Stop the worker process.

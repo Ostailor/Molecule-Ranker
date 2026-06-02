@@ -5,11 +5,11 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import case, insert, select, update
 
 from molecule_ranker.campaigns.schemas import contains_procedural_lab_detail
 from molecule_ranker.codex_backbone.guardrails import redact_secrets
@@ -17,6 +17,11 @@ from molecule_ranker.platform.database import artifact_records, platform_jobs
 from molecule_ranker.platform.db import PlatformDatabase, PlatformDatabaseError
 from molecule_ranker.platform.observability import log_event, metrics
 from molecule_ranker.platform.rbac import has_permission
+from molecule_ranker.platform.retry_policy import (
+    build_auto_idempotency_key,
+    codex_context_hash,
+    retry_decision,
+)
 from molecule_ranker.platform.schemas import PlatformJob, UserAccount
 
 QUEUE_JOB_TYPES = {
@@ -312,6 +317,16 @@ class PlatformJobQueue:
         )
         _enforce_hosted_evaluation_policy(job_type=job_type, config_snapshot=config)
         job_metadata = metadata or {}
+        explicit_idempotency_key = config.get("idempotency_key") or job_metadata.get(
+            "idempotency_key"
+        )
+        job_metadata = {**job_metadata}
+        if explicit_idempotency_key:
+            job_metadata["idempotency_key"] = str(explicit_idempotency_key)
+        else:
+            job_metadata["auto_idempotency_key"] = build_auto_idempotency_key(job_type, config)
+        if job_type == "codex_task":
+            job_metadata.setdefault("codex_context_hash", codex_context_hash(config))
         if job_type in EVALUATION_JOB_TYPES:
             job_metadata = {
                 **job_metadata,
@@ -382,13 +397,18 @@ class PlatformJobQueue:
         status: str | None = None,
         project_id: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[PlatformJob]:
         statement = select(platform_jobs)
         if status is not None:
             statement = statement.where(platform_jobs.c.status == status)
         if project_id is not None:
             statement = statement.where(platform_jobs.c.project_id == project_id)
-        statement = statement.order_by(platform_jobs.c.created_at.desc()).limit(limit)
+        statement = (
+            statement.order_by(platform_jobs.c.created_at.desc())
+            .limit(max(1, limit))
+            .offset(max(0, offset))
+        )
         with self.database.engine.connect() as connection:
             rows = connection.execute(statement).mappings().fetchall()
         return [_platform_job(row) for row in rows]
@@ -403,32 +423,49 @@ class PlatformJobQueue:
         return _platform_job(row) if row else None
 
     def claim_next(self, *, job_types: set[str] | None = None) -> PlatformJob | None:
-        statement = select(platform_jobs).where(platform_jobs.c.status == "queued")
+        now = _now()
+        statement = select(platform_jobs).where(platform_jobs.c.status.in_(["queued", "retrying"]))
         if job_types is not None:
             statement = statement.where(platform_jobs.c.job_type.in_(job_types))
+        priority_order = case(
+            (platform_jobs.c.priority == "high", 0),
+            (platform_jobs.c.priority == "normal", 1),
+            (platform_jobs.c.priority == "low", 2),
+            else_=1,
+        )
+        statement = statement.order_by(priority_order, platform_jobs.c.created_at).limit(25)
         with self.database.engine.begin() as connection:
             rows = connection.execute(statement).mappings().fetchall()
-            if not rows:
-                return None
-            row = min(
-                rows,
-                key=lambda item: (
-                    PRIORITY_RANK.get(str(item["priority"]), 1),
-                    _aware(item["created_at"]),
+            row = next(
+                (
+                    item
+                    for item in rows
+                    if _retry_due(dict(item["metadata_json"] or {}), now=now)
                 ),
+                None,
             )
-            now = _now()
+            if row is None:
+                return None
+            metadata = dict(row["metadata_json"] or {})
+            next_attempt = int(row["attempts"] or 0) + 1
+            metadata["queue_wait_ms"] = int(
+                (now - _aware(row["created_at"])).total_seconds() * 1000
+            )
+            metadata.setdefault("progress", {"completed": 0, "total": None})
+            metadata["heartbeat_at"] = now.isoformat()
+            metadata["attempts"] = next_attempt
             result = connection.execute(
                 update(platform_jobs)
                 .where(
                     (platform_jobs.c.job_id == row["job_id"])
-                    & (platform_jobs.c.status == "queued")
+                    & (platform_jobs.c.status.in_(["queued", "retrying"]))
                 )
                 .values(
                     status="running",
                     started_at=now,
                     updated_at=now,
-                    attempts=int(row["attempts"] or 0) + 1,
+                    attempts=next_attempt,
+                    metadata_json=metadata,
                 )
             )
             if result.rowcount != 1:
@@ -442,29 +479,124 @@ class PlatformJobQueue:
             )
         return _platform_job(refreshed)
 
+    def heartbeat(self, job_id: str, *, worker_id: str | None = None) -> PlatformJob:
+        job = self.get(job_id)
+        if job is None:
+            raise PlatformDatabaseError("Job not found.")
+        now = _now()
+        metadata = {
+            **job.metadata,
+            "heartbeat_at": now.isoformat(),
+            "worker_id": worker_id or job.metadata.get("worker_id"),
+        }
+        with self.database.engine.begin() as connection:
+            connection.execute(
+                update(platform_jobs)
+                .where(platform_jobs.c.job_id == job_id)
+                .values(metadata_json=metadata, updated_at=now)
+            )
+        refreshed = self.get(job_id)
+        if refreshed is None:
+            raise PlatformDatabaseError("Job disappeared after heartbeat.")
+        return refreshed
+
+    def save_checkpoint(
+        self,
+        job_id: str,
+        *,
+        checkpoint_id: str,
+        payload: dict[str, Any] | None = None,
+    ) -> PlatformJob:
+        job = self.get(job_id)
+        if job is None:
+            raise PlatformDatabaseError("Job not found.")
+        metadata = {
+            **job.metadata,
+            "checkpoint_id": redact_secrets(checkpoint_id),
+            "checkpoint_payload": _redact_snapshot(payload or {}),
+            "checkpoint_saved_at": _now().isoformat(),
+        }
+        with self.database.engine.begin() as connection:
+            connection.execute(
+                update(platform_jobs)
+                .where(platform_jobs.c.job_id == job_id)
+                .values(metadata_json=metadata, updated_at=_now())
+            )
+        refreshed = self.get(job_id)
+        if refreshed is None:
+            raise PlatformDatabaseError("Job disappeared after checkpoint.")
+        return refreshed
+
+    def update_progress(
+        self,
+        job_id: str,
+        *,
+        completed: int,
+        total: int | None = None,
+        message: str | None = None,
+    ) -> PlatformJob:
+        job = self.get(job_id)
+        if job is None:
+            raise PlatformDatabaseError("Job not found.")
+        progress = {
+            "completed": max(0, int(completed)),
+            "total": max(0, int(total)) if total is not None else None,
+            "message": redact_secrets(message or ""),
+            "updated_at": _now().isoformat(),
+        }
+        metadata = {**job.metadata, "progress": progress}
+        with self.database.engine.begin() as connection:
+            connection.execute(
+                update(platform_jobs)
+                .where(platform_jobs.c.job_id == job_id)
+                .values(metadata_json=metadata, updated_at=_now())
+            )
+        refreshed = self.get(job_id)
+        if refreshed is None:
+            raise PlatformDatabaseError("Job disappeared after progress update.")
+        return refreshed
+
     def cancel(self, job_id: str, *, actor_user_id: str) -> PlatformJob:
         job = self.get(job_id)
         if job is None:
             raise PlatformDatabaseError("Job not found.")
         now = _now()
-        if job.status == "queued":
+        if job.status in {"queued", "retrying", "waiting_for_approval"}:
             with self.database.engine.begin() as connection:
                 connection.execute(
                     update(platform_jobs)
                     .where(
                         (platform_jobs.c.job_id == job_id)
-                        & (platform_jobs.c.status == "queued")
+                        & (
+                            platform_jobs.c.status.in_(
+                                ["queued", "retrying", "waiting_for_approval"]
+                            )
+                        )
                     )
                     .values(status="cancelled", completed_at=now, updated_at=now)
                 )
         elif job.status == "running":
-            metadata = {**job.metadata, "cancel_requested": True, "cancelled_by": actor_user_id}
-            with self.database.engine.begin() as connection:
-                connection.execute(
-                    update(platform_jobs)
-                    .where(platform_jobs.c.job_id == job_id)
-                    .values(metadata_json=metadata, updated_at=now)
-                )
+            if job.metadata.get("cancel_requested"):
+                metadata = {**job.metadata, "cancelled_by": actor_user_id}
+                with self.database.engine.begin() as connection:
+                    connection.execute(
+                        update(platform_jobs)
+                        .where(platform_jobs.c.job_id == job_id)
+                        .values(
+                            status="cancelled",
+                            completed_at=now,
+                            metadata_json=metadata,
+                            updated_at=now,
+                        )
+                    )
+            else:
+                metadata = {**job.metadata, "cancel_requested": True, "cancelled_by": actor_user_id}
+                with self.database.engine.begin() as connection:
+                    connection.execute(
+                        update(platform_jobs)
+                        .where(platform_jobs.c.job_id == job_id)
+                        .values(metadata_json=metadata, updated_at=now)
+                    )
         else:
             return job
         self.database.write_audit(
@@ -481,6 +613,199 @@ class PlatformJobQueue:
         if refreshed is None:
             raise PlatformDatabaseError("Job disappeared after cancellation.")
         return refreshed
+
+    def retry_failed(
+        self,
+        job_id: str,
+        *,
+        requested_by: UserAccount,
+        priority: str | None = None,
+    ) -> PlatformJob:
+        job = self.get(job_id)
+        if job is None:
+            raise PlatformDatabaseError("Job not found.")
+        if job.status not in {"failed", "guardrail_failed"}:
+            raise PlatformDatabaseError("Only failed jobs can be retried.")
+        retry_metadata = {
+            **_redact_snapshot(job.metadata),
+            "retry_of_job_id": job.job_id,
+            "retry_attempt": int(job.metadata.get("retry_attempt") or 1) + 1,
+            "previous_status": job.status,
+            "previous_error_summary": redact_secrets(job.error_summary or ""),
+        }
+        retry_metadata.pop("cancel_requested", None)
+        retry_metadata.pop("cancelled_by", None)
+        retry = self.enqueue(
+            job_type=job.job_type,
+            requested_by=requested_by,
+            org_id=job.org_id,
+            project_id=job.project_id,
+            config_snapshot=_redact_snapshot(job.config_snapshot),
+            priority=priority or job.priority,
+            metadata=retry_metadata,
+        )
+        self.database.write_audit(
+            "job_retry_enqueued",
+            actor_user_id=requested_by.user_id,
+            org_id=job.org_id,
+            project_id=job.project_id,
+            summary=f"Retry enqueued for job {job_id}.",
+            object_type="platform_job",
+            object_id=retry.job_id,
+            metadata={"retry_of_job_id": job.job_id, "retry_job_id": retry.job_id},
+        )
+        return retry
+
+    def resume_summary(self, job_id: str) -> dict[str, Any]:
+        job = self.get(job_id)
+        if job is None:
+            raise PlatformDatabaseError("Job not found.")
+        checkpoint_id = job.metadata.get("checkpoint_id")
+        resume_token = job.metadata.get("resume_token")
+        return {
+            "job_id": job.job_id,
+            "status": job.status,
+            "resumable": job.status == "running" and checkpoint_id is not None,
+            "cancel_requested": bool(job.metadata.get("cancel_requested")),
+            "checkpoint_id": redact_secrets(str(checkpoint_id)) if checkpoint_id else None,
+            "resume_token": "[REDACTED]" if resume_token else None,
+        }
+
+    def handle_failure(self, job: PlatformJob, exc: Exception) -> PlatformJob:
+        if _job_timed_out(job):
+            return self.mark_timed_out(job, summary=f"Job {job.job_id} timed out.")
+        attempts = _attempt_count(job)
+        decision = retry_decision(
+            job_type=job.job_type,
+            config_snapshot=job.config_snapshot,
+            metadata=job.metadata,
+            attempts=attempts,
+            exc=exc,
+        )
+        if decision.dead_letter:
+            return self.dead_letter(job, exc, reason=decision.reason)
+        if decision.should_retry:
+            return self.schedule_retry(job, exc, decision=decision)
+        return self.fail(job, exc, retry_metadata={"reason": decision.reason})
+
+    def schedule_retry(self, job: PlatformJob, exc: Exception, *, decision: Any) -> PlatformJob:
+        now = _now()
+        next_retry_at = now + timedelta(seconds=float(decision.delay_seconds))
+        retry_metadata = {
+            **job.metadata,
+            "retry": {
+                "attempt": _attempt_count(job),
+                "reason": decision.reason,
+                "error_summary": redact_secrets(str(exc))[:2000],
+                "delay_seconds": decision.delay_seconds,
+                "next_retry_at": next_retry_at.isoformat(),
+                "max_attempts": decision.policy.max_attempts,
+            },
+            "next_retry_at": next_retry_at.isoformat(),
+        }
+        with self.database.engine.begin() as connection:
+            connection.execute(
+                update(platform_jobs)
+                .where(platform_jobs.c.job_id == job.job_id)
+                .values(
+                    status="retrying",
+                    updated_at=now,
+                    error_summary=redact_secrets(str(exc))[:2000],
+                    metadata_json=retry_metadata,
+                )
+            )
+        self.database.write_audit(
+            "job_retry_scheduled",
+            actor_user_id=job.requested_by_user_id,
+            org_id=job.org_id,
+            project_id=job.project_id,
+            summary=f"Retry scheduled for job {job.job_id}.",
+            object_type="platform_job",
+            object_id=job.job_id,
+            metadata=retry_metadata["retry"],
+        )
+        refreshed = self.get(job.job_id)
+        if refreshed is None:
+            raise PlatformDatabaseError("Job disappeared after retry scheduling.")
+        return refreshed
+
+    def mark_timed_out(self, job: PlatformJob, *, summary: str) -> PlatformJob:
+        return self._terminal_failure(
+            job,
+            status="timed_out",
+            error_summary=summary,
+            event_type="job_timed_out",
+            metadata={"reason": "timeout"},
+        )
+
+    def dead_letter(self, job: PlatformJob, exc: Exception, *, reason: str) -> PlatformJob:
+        error_summary = redact_secrets(str(exc))[:2000]
+        metadata = {
+            **job.metadata,
+            "dead_letter": {
+                "reason": reason,
+                "error_summary": error_summary,
+                "attempts": _attempt_count(job),
+            },
+            "partial_artifacts": _mark_partial_artifacts(job.metadata),
+        }
+        return self._terminal_failure(
+            job,
+            status="dead_lettered",
+            error_summary=error_summary,
+            event_type="job_dead_lettered",
+            metadata=metadata,
+        )
+
+    def recover_stale_running_jobs(self, *, stale_after_seconds: int = 300) -> list[str]:
+        now = _now()
+        cutoff = now - timedelta(seconds=max(0, stale_after_seconds))
+        recovered: list[str] = []
+        with self.database.engine.connect() as connection:
+            rows = (
+                connection.execute(
+                    select(platform_jobs).where(platform_jobs.c.status == "running")
+                )
+                .mappings()
+                .fetchall()
+            )
+        for row in rows:
+            metadata = dict(row["metadata_json"] or {})
+            heartbeat = _metadata_datetime(metadata.get("heartbeat_at"))
+            updated = _aware(row["updated_at"])
+            marker = heartbeat or updated
+            if marker > cutoff:
+                continue
+            job = _platform_job(row)
+            stale_exc = TimeoutError("worker heartbeat stale")
+            stale_job = job.model_copy(
+                update={
+                    "metadata": {
+                        **job.metadata,
+                        "recovered_from_stale_running": True,
+                        "attempts": max(int(row["attempts"] or 1), 1),
+                    }
+                }
+            )
+            decision = retry_decision(
+                job_type=job.job_type,
+                config_snapshot=job.config_snapshot,
+                metadata=stale_job.metadata,
+                attempts=max(int(row["attempts"] or 1), 1),
+                exc=stale_exc,
+            )
+            if decision.dead_letter:
+                recovered_job = self.dead_letter(stale_job, stale_exc, reason=decision.reason)
+            elif decision.should_retry:
+                recovered_job = self.schedule_retry(stale_job, stale_exc, decision=decision)
+            else:
+                recovered_job = self.fail(
+                    stale_job,
+                    stale_exc,
+                    retry_metadata={"reason": decision.reason},
+                )
+            recovered.append(recovered_job.job_id)
+        return recovered
 
     def succeed(self, job: PlatformJob, result: JobResult) -> PlatformJob:
         artifact_ids = [*result.artifact_ids]
@@ -532,9 +857,20 @@ class PlatformJobQueue:
             raise PlatformDatabaseError("Job disappeared after success.")
         return refreshed
 
-    def fail(self, job: PlatformJob, exc: Exception) -> PlatformJob:
+    def fail(
+        self,
+        job: PlatformJob,
+        exc: Exception,
+        *,
+        retry_metadata: dict[str, Any] | None = None,
+    ) -> PlatformJob:
         now = _now()
         error_summary = redact_secrets(str(exc))[:2000]
+        metadata = {
+            **job.metadata,
+            "retry": retry_metadata or {"reason": "not_retried"},
+            "partial_artifacts": _mark_partial_artifacts(job.metadata),
+        }
         with self.database.engine.begin() as connection:
             connection.execute(
                 update(platform_jobs)
@@ -544,6 +880,7 @@ class PlatformJobQueue:
                     completed_at=now,
                     updated_at=now,
                     error_summary=error_summary,
+                    metadata_json=metadata,
                 )
             )
         self.database.write_audit(
@@ -572,6 +909,45 @@ class PlatformJobQueue:
         refreshed = self.get(job.job_id)
         if refreshed is None:
             raise PlatformDatabaseError("Job disappeared after failure.")
+        return refreshed
+
+    def _terminal_failure(
+        self,
+        job: PlatformJob,
+        *,
+        status: str,
+        error_summary: str,
+        event_type: str,
+        metadata: dict[str, Any],
+    ) -> PlatformJob:
+        now = _now()
+        clean_error = redact_secrets(error_summary)[:2000]
+        with self.database.engine.begin() as connection:
+            connection.execute(
+                update(platform_jobs)
+                .where(platform_jobs.c.job_id == job.job_id)
+                .values(
+                    status=status,
+                    completed_at=now,
+                    updated_at=now,
+                    error_summary=clean_error,
+                    metadata_json=metadata,
+                )
+            )
+        self.database.write_audit(
+            event_type,
+            actor_user_id=job.requested_by_user_id,
+            org_id=job.org_id,
+            project_id=job.project_id,
+            summary=f"Job {job.job_id} {status}.",
+            object_type="platform_job",
+            object_id=job.job_id,
+            metadata={"error_summary": clean_error},
+        )
+        metrics.increment("jobs_failed_total")
+        refreshed = self.get(job.job_id)
+        if refreshed is None:
+            raise PlatformDatabaseError("Job disappeared after terminal failure.")
         return refreshed
 
     def guardrail_fail(
@@ -1278,6 +1654,55 @@ def _exports_generated_molecules(config_snapshot: dict[str, Any]) -> bool:
     )
 
 
+def _retry_due(metadata: dict[str, Any], *, now: datetime) -> bool:
+    raw_next_retry = metadata.get("next_retry_at")
+    if raw_next_retry is None:
+        return True
+    next_retry = _metadata_datetime(raw_next_retry)
+    return next_retry is None or next_retry <= now
+
+
+def _metadata_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return _aware(parsed)
+
+
+def _attempt_count(job: PlatformJob) -> int:
+    try:
+        return int(job.metadata.get("attempts") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _job_timed_out(job: PlatformJob) -> bool:
+    timeout = job.config_snapshot.get("timeout_seconds")
+    if timeout is None:
+        return False
+    try:
+        timeout_seconds = float(timeout)
+    except (TypeError, ValueError):
+        return False
+    if timeout_seconds <= 0:
+        return True
+    started_at = job.started_at or datetime.now(UTC)
+    return (datetime.now(UTC) - started_at).total_seconds() > timeout_seconds
+
+
+def _mark_partial_artifacts(metadata: dict[str, Any]) -> list[dict[str, str]]:
+    raw_paths = metadata.get("partial_artifact_paths") or []
+    if not isinstance(raw_paths, list):
+        return []
+    return [
+        {"path": redact_secrets(str(path)), "status": "partial_unregistered"}
+        for path in raw_paths
+    ]
+
+
 class RedisJobQueueAdapter:
     """Placeholder for future Redis/RQ/Celery queue integration.
 
@@ -1332,14 +1757,44 @@ def _redact_result(value: dict[str, Any]) -> dict[str, Any]:
     return _redact_json(value)
 
 
-def _redact_json(value: Any) -> Any:
+def _redact_snapshot(value: dict[str, Any]) -> dict[str, Any]:
+    return _redact_json(value, redact_sensitive_keys=True)
+
+
+def _redact_json(value: Any, *, redact_sensitive_keys: bool = False) -> Any:
     if isinstance(value, dict):
-        return {str(key): _redact_json(item) for key, item in value.items()}
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if redact_sensitive_keys and _is_sensitive_snapshot_key(key_text):
+                redacted[key_text] = "[REDACTED]"
+            else:
+                redacted[key_text] = _redact_json(
+                    item,
+                    redact_sensitive_keys=redact_sensitive_keys,
+                )
+        return redacted
     if isinstance(value, list):
-        return [_redact_json(item) for item in value]
+        return [_redact_json(item, redact_sensitive_keys=redact_sensitive_keys) for item in value]
     if isinstance(value, str):
         return redact_secrets(value)
     return value
+
+
+def _is_sensitive_snapshot_key(key: str) -> bool:
+    lowered = key.lower().replace("-", "_")
+    return any(
+        marker in lowered
+        for marker in (
+            "api_key",
+            "apikey",
+            "authorization",
+            "credential",
+            "password",
+            "secret",
+            "token",
+        )
+    )
 
 
 def _aware(value: Any) -> datetime:

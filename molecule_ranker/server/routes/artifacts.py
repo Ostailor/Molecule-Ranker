@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from molecule_ranker.codex_backbone.guardrails import is_secret_path
@@ -11,6 +11,7 @@ from molecule_ranker.platform.rbac import has_permission, require_project_access
 from molecule_ranker.platform.schemas import UserAccount
 from molecule_ranker.server.dependencies import current_user, workspace_store
 from molecule_ranker.server.security import reject_suspicious_identifier, safe_artifact_path
+from molecule_ranker.utils.pagination import normalize_limit_offset
 from molecule_ranker.workspace.store import ProjectWorkspaceStore
 
 router = APIRouter(tags=["artifacts"])
@@ -24,6 +25,8 @@ def get_project_artifacts(
     request: Request,
     user: Annotated[UserAccount, Depends(current_user)],
     store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> dict[str, object]:
     workspace = store.load_or_create()
     if workspace.workspace_id != project_id:
@@ -35,12 +38,19 @@ def get_project_artifacts(
             project_id=project_id,
             action="read",
         )
-    artifacts = [
+    all_artifacts = [
         artifact
         for artifact in store.artifact_manifest(workspace)
         if _safe_artifact_path(Path(str(artifact["path"])))
     ]
-    return {"workspace_id": workspace.workspace_id, "artifacts": artifacts}
+    page = normalize_limit_offset(limit=limit, offset=offset, max_limit=500)
+    artifacts = all_artifacts[page.offset : page.offset + page.limit]
+    page = page.__class__(limit=page.limit, offset=page.offset, count=len(artifacts))
+    return {
+        "workspace_id": workspace.workspace_id,
+        "artifacts": artifacts,
+        "pagination": page.model_dump(),
+    }
 
 
 @router.get("/projects/{project_id}/artifacts/{artifact_id}/download")

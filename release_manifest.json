@@ -1,11 +1,12 @@
 {
   "api_contract_version": "api.v1",
   "artifact_contract_version": "1.0",
-  "build_timestamp": "2026-06-01T19:20:05Z",
-  "dependency_lock_hash": "45ede442936d732c30b7d838cd59218026392837513177fceb9dfc82ed84740b",
-  "git_commit": "6e6e0d8eb3da1309aaf8b4cdbe874ba739003f23",
+  "build_timestamp": "2026-06-02T18:06:01Z",
+  "dependency_lock_hash": "6343425d061c91772814e8e5c4e0b643f278cd958a37757a0b3ff74ba6240291",
+  "git_commit": "f0af3526a633a41e660d5cf7de033d04acd2d2ec",
   "known_limitations": [
-    "V1.7 is for internal research use only and is not a clinical product.",
+    "V1.9 is for internal research use only and is not a clinical product.",
+    "V1.9 prepares enterprise/internal pilots through operational hardening, not new science capability.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules are computational hypotheses and require independent validation.",
     "Portfolio recommendations are research prioritization aids, not clinical or experimental instructions.",
@@ -14,6 +15,9 @@
     "Automated hypotheses and research questions are planning artifacts, not evidence or experimental procedures.",
     "Campaign plans are research-management artifacts, not lab protocols or experimental procedures.",
     "Campaign priorities, budget fit, dependencies, and replan triggers must be computed by deterministic modules, not Codex.",
+    "Benchmark results are evaluation artifacts, not biomedical evidence.",
+    "Prospective validation analytics are not clinical validation.",
+    "Codex must not invent benchmark results, labels, metrics, or conclusions.",
     "Graph paths do not prove causality, efficacy, safety, binding, or activity.",
     "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
     "Docking scores, poses, and structure-derived interactions are computational heuristics, not proof of binding or activity.",
@@ -23,7 +27,7 @@
   ],
   "name": "molecule-ranker",
   "readiness": {
-    "gate_count": 17,
+    "gate_count": 33,
     "missing_gates": [],
     "status": "pass"
   },
@@ -35,5 +39,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "1.7.0"
+  "version": "1.9.0"
 }

@@ -14,6 +14,10 @@ from molecule_ranker.contracts import (
 from molecule_ranker.contracts import (
     ARTIFACT_CONTRACT_VERSION as ARTIFACT_CONTRACT_REGISTRY_VERSION,
 )
+from molecule_ranker.platform.pilot_readiness import (
+    PILOT_READINESS_VERSION,
+    build_pilot_readiness_report,
+)
 from molecule_ranker.release.checks import (
     API_CONTRACT_VERSION,
     ARTIFACT_CONTRACT_VERSION,
@@ -32,10 +36,15 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
         {
             "name": "molecule-ranker",
             "stage": RELEASE_STAGE,
-            "scope": "closed_loop_campaign_planning_and_budget_aware_execution_management",
+            "scope": "enterprise_internal_pilot_readiness",
             "non_goals": [
                 "unvalidated model-provider execution",
                 "new external integration families",
+                "new molecule generation capabilities",
+                "new docking capabilities",
+                "new ADMET capabilities",
+                "new external connector families",
+                "new predictive modeling capabilities",
                 "biomedical truth claims from Codex",
                 "generated activity, safety, or synthesizability claims without direct evidence",
                 "model predictions promoted to evidence or assay results",
@@ -55,6 +64,8 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
                 "data_contracts": DATA_CONTRACT_VERSION,
                 "warehouse": WAREHOUSE_CONTRACT_VERSION,
             },
+            "pilot_readiness_version": PILOT_READINESS_VERSION,
+            "pilot_readiness": build_pilot_readiness_report(root_dir),
             "release_gates": [gate.as_dict() for gate in V1_RELEASE_GATES],
         }
     )
@@ -152,7 +163,9 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V1.8 is for internal research use only and is not a clinical product.",
+        "V1.9 is for internal research use only and is not a clinical product.",
+        "V1.9 prepares enterprise/internal pilots through operational hardening, "
+        "not new science capability.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
         "Generated molecules are computational hypotheses and require independent validation.",
         "Portfolio recommendations are research prioritization aids, not clinical or "

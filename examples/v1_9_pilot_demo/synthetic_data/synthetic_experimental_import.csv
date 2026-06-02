@@ -1,0 +1,3 @@
+candidate_name,assay_name,result,source_file_name,not_biomedical_evidence
+Candidate Alpha,synthetic_demo_measurement,synthetic_label_only,synthetic_experimental_import.csv,true
+Candidate Beta,synthetic_demo_measurement,synthetic_label_only,synthetic_experimental_import.csv,true

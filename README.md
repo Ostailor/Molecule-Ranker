@@ -1,8 +1,13 @@
 # molecule-ranker
 
 `molecule-ranker` is a validated internal research platform MVP for
-source-backed molecule ranking and research operations. V1.8 builds on the
-validated V1.7 platform with scientific evaluation benchmark suites and
+source-backed molecule ranking and research operations. V1.9 is an enterprise
+pilot hardening release: it prepares the validated V1.8 platform for
+enterprise/internal pilot use with usability polish, performance optimization,
+reliability hardening, operational readiness, supportability, migration safety,
+observability, pilot onboarding, and pre-V2.0 readiness validation. It does not
+add major new science capabilities, and it keeps all scientific guardrails
+intact. V1.8 already added scientific evaluation benchmark suites and
 prospective validation analytics. V1.7 already added closed-loop campaign
 planning and budget-aware execution management. V1.6 already added automated graph-backed hypothesis
 generation and testable research-question planning. V1.5 already added a cross-program
@@ -22,7 +27,7 @@ hypotheses, developability triage, literature evidence, experimental feedback,
 review workflows, Codex-backed orchestration, hosted platform mode, and guarded
 external integrations.
 
-V1.8 is for internal research use only. It is not a regulated clinical product.
+V1.9 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
 treat, are safe, bind, inhibit, activate, or are active. Docking scores are not
@@ -51,7 +56,7 @@ advancement decisions. Data
 provenance, audit logs, deterministic validation, and guardrails are core design
 principles.
 
-Given a disease name, V1.8 resolves the disease through public biomedical data
+Given a disease name, V1.9 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -61,13 +66,22 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V1.8
+## Current Scope Through V1.9
 
-V1.8 implements existing-molecule ranking, opt-in generated hypotheses,
+V1.9 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V1.8 adds scientific evaluation benchmarks,
+external integration primitives. V1.9 adds enterprise/internal pilot hardening:
+usability polish, performance optimization, reliability hardening, operational
+readiness, supportability, pilot onboarding, admin/support workflows, better
+error messages, job retry/resume/cancel robustness, dashboard workflow
+improvements, dataset/artifact migration safety, deployment diagnostics,
+monitoring and alerting, pilot feedback capture, support bundle generation, and
+pre-V2.0 readiness validation. V1.9 does not add major new science
+capabilities, does not expand molecule generation, docking, ADMET, connectors,
+or predictive modeling except for stability and usability work, and preserves
+all scientific guardrails. V1.8 added scientific evaluation benchmarks,
 prospective validation analytics, decision-quality reports, guardrail benchmark
 runs, longitudinal performance trends, and reproducibility manifests. V1.7 added
 deterministic closed-loop campaign
@@ -228,7 +242,7 @@ benchmarking, and validation workflows.
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V1.8 does not:
+V1.9 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -308,7 +322,7 @@ uv sync --all-groups
 uv run molecule-ranker version
 ```
 
-Current release: `1.8.0`.
+Current release: `1.9.0`.
 
 Run a source-backed ranking workflow locally. Generation, docking, external
 writes, Codex, review workflows, and experimental evidence are disabled unless
@@ -345,6 +359,93 @@ The demo uses clearly fake names such as `ExampleCandidateA`,
 `ExampleTargetA`, and `ExampleDiseaseA`. It does not contain fake real-world
 biomedical claims, fake citations, fake assay outcomes, lab protocols, dosing,
 or synthesis instructions.
+
+## V1.9 Enterprise Pilot Hardening
+
+V1.9 prepares molecule-ranker for enterprise/internal pilot use. The release
+focuses on usability, performance, reliability, operational readiness,
+supportability, migrations, observability, pilot onboarding, admin workflows,
+support workflows, and release readiness. It does not introduce major new
+science capabilities, and it does not weaken scientific guardrails. Generated
+molecules remain computational hypotheses, model predictions remain
+prioritization artifacts, benchmark outputs remain evaluation artifacts, and
+Codex output remains separate from evidence, assay results, molecules, scores,
+benchmark results, or decisions.
+
+V1.9 is also the bridge to V2.0. The release adds pilot readiness audits,
+support bundles, migration dry-runs, performance baselines, operational alerts,
+feedback capture, and a release gate so teams can validate whether the platform
+is ready for V2.0 enterprise evaluation.
+
+Run the pilot readiness audit:
+
+```bash
+uv run molecule-ranker pilot readiness --json
+uv run molecule-ranker pilot readiness --output pilot_readiness_report.md
+```
+
+Generate a redacted support bundle:
+
+```bash
+uv run molecule-ranker support bundle \
+  --output support_bundle.zip
+```
+
+Run a synthetic baseline performance profile:
+
+```bash
+uv run molecule-ranker performance profile \
+  --workflow golden \
+  --output-dir results/performance
+```
+
+Run an artifact migration dry-run with backup-aware manifest generation:
+
+```bash
+uv run molecule-ranker migrate artifacts \
+  --path results/ \
+  --target-version 1.9 \
+  --dry-run
+```
+
+Run the V1.9 release gate:
+
+```bash
+uv run molecule-ranker pilot release-gate --json
+```
+
+Start the synthetic pilot demo environment:
+
+```bash
+cd examples/v1_9_pilot_demo
+./scripts/bootstrap.sh
+docker compose up
+```
+
+Submit pilot feedback. Feedback is operational input, not scientific evidence:
+
+```bash
+uv run molecule-ranker feedback submit \
+  --project-id synthetic-demo-project \
+  --page-or-command dashboard \
+  --type usability_issue \
+  --severity medium \
+  "The failed-job remediation panel needs a clearer next action."
+```
+
+Run operational alert checks:
+
+```bash
+uv run molecule-ranker ops alerts
+```
+
+Retry a failed job from the admin support API. This requires an admin token and
+writes an audit event:
+
+```bash
+curl -X POST "$MOLECULE_RANKER_HOST/admin/support/jobs/$FAILED_JOB_ID/retry" \
+  -H "Authorization: Bearer $MOLECULE_RANKER_TOKEN"
+```
 
 ## V1.1 Agentic Design Optimization
 
@@ -2956,8 +3057,8 @@ does not write a normal `report.md` that looks successful.
 - Source records may use inconsistent identifiers and terminology.
 - Scores are heuristic and not experimentally validated.
 - No wet-lab validation is performed by this software.
-- V1.1 is for internal research use only.
-- V1.1 is not a regulated clinical product.
+- V1.9 is for internal research use only.
+- V1.9 is not a regulated clinical product.
 - Codex is an orchestration and summarization layer, not scientific truth.
 - No clinical recommendation, diagnosis, prescription, dosage, or treatment
   guidance is provided.
@@ -3020,8 +3121,7 @@ does not write a normal `report.md` that looks successful.
 - V1.7: closed-loop campaign planning and budget-aware execution management.
 - V1.8: scientific evaluation benchmark suite and prospective validation
   analytics.
-- V1.9: usability, performance, and reliability hardening for enterprise
-  pilots.
+- V1.9: usability, performance, reliability, and enterprise pilot hardening.
 - V2.0: validated enterprise discovery operating system.
 
 ## Development

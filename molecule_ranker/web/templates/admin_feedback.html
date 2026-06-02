@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Pilot feedback admin</h1>
+  <p class="muted">Pilot feedback is operational product input, not scientific evidence.</p>
+</header>
+
+<section class="section">
+  <h2>Export</h2>
+  <div class="panel">
+    <p><a class="button small-button" href="/dashboard/admin/feedback/export">Export redacted feedback</a></p>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Feedback queue</h2>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>User</th><th>Project</th><th>Type</th><th>Severity</th><th>Status</th><th>Text</th></tr>
+    </thead>
+    <tbody>
+      {% for item in feedback %}
+        <tr>
+          <td>{{ item.feedback_id }}</td>
+          <td>{{ item.user_id }}</td>
+          <td>{{ item.project_id or "" }}</td>
+          <td>{{ item.feedback_type }}</td>
+          <td>{{ item.severity }}</td>
+          <td>{{ item.status }}</td>
+          <td>{{ item.text }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7">No pilot feedback submitted yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

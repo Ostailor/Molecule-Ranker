@@ -7,6 +7,7 @@ from typing import Any
 
 from molecule_ranker.codex_backbone.schemas import CodexTask
 from molecule_ranker.utils import slugify
+from molecule_ranker.utils.json_io import load_json_file
 from molecule_ranker.workspace.artifact_registry import ArtifactRegistry
 from molecule_ranker.workspace.schemas import ProjectRun, ProjectWorkspace
 
@@ -36,7 +37,7 @@ def load_project_run(
     candidates_path = run_dir / "candidates.json"
     if not candidates_path.exists():
         raise ValueError(f"Missing candidates.json in run directory: {run_dir}")
-    payload = json.loads(candidates_path.read_text())
+    payload = load_json_file(candidates_path)
     if not isinstance(payload, dict):
         raise ValueError("candidates.json must contain a JSON object.")
     raw_disease = payload.get("disease")

@@ -49,6 +49,13 @@ class GraphReasoner:
     def __init__(self, graph: KnowledgeGraph) -> None:
         self.graph = graph
         self.entities = graph.entity_map()
+        self.relations_by_id = {relation.relation_id: relation for relation in graph.relations}
+        self.relations_by_subject: dict[str, list[GraphRelation]] = defaultdict(list)
+        self.relations_by_entity: dict[str, list[GraphRelation]] = defaultdict(list)
+        for relation in graph.relations:
+            self.relations_by_subject[relation.subject_entity_id].append(relation)
+            self.relations_by_entity[relation.subject_entity_id].append(relation)
+            self.relations_by_entity[relation.object_entity_id].append(relation)
 
     def candidates_for_target(self, target_symbol: str) -> list[GraphQueryResult]:
         targets = self._matching_entities("target", target_symbol)
@@ -113,9 +120,8 @@ class GraphReasoner:
             direct_experimental = self._has_direct_experimental_result(entity.entity_id)
             no_evidence_relations = [
                 relation
-                for relation in self.graph.relations
+                for relation in self.relations_by_entity.get(entity.entity_id, [])
                 if relation.predicate == "has_no_direct_evidence"
-                and entity.entity_id in {relation.subject_entity_id, relation.object_entity_id}
             ]
             if direct_experimental or not no_evidence_relations:
                 continue
@@ -471,15 +477,10 @@ class GraphReasoner:
         ]
 
     def _relations_from(self, entity_id: str) -> list[GraphRelation]:
-        return [
-            relation for relation in self.graph.relations if relation.subject_entity_id == entity_id
-        ]
+        return list(self.relations_by_subject.get(entity_id, []))
 
     def _relation_by_id(self, relation_id: str) -> GraphRelation | None:
-        for relation in self.graph.relations:
-            if relation.relation_id == relation_id:
-                return relation
-        return None
+        return self.relations_by_id.get(relation_id)
 
     def _candidate_for_relation(self, relation: GraphRelation) -> GraphEntity | None:
         for entity_id in (relation.subject_entity_id, relation.object_entity_id):
@@ -491,9 +492,8 @@ class GraphReasoner:
     def _has_direct_experimental_result(self, entity_id: str) -> bool:
         return any(
             relation.relation_type == "experimental"
-            and entity_id in {relation.subject_entity_id, relation.object_entity_id}
             and relation.predicate in {"supports", "contradicts", "validated_by", "contradicted_by"}
-            for relation in self.graph.relations
+            for relation in self.relations_by_entity.get(entity_id, [])
         )
 
     def _candidate_scaffold_links(self) -> dict[str, list[GraphRelation]]:

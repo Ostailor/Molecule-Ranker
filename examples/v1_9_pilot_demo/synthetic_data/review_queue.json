@@ -1,0 +1,18 @@
+{
+  "review_items": [
+    {
+      "item_id": "review-syn-001",
+      "candidate_name": "Candidate Alpha",
+      "origin": "source_backed_synthetic",
+      "status": "pending_review",
+      "review_boundary": "Review comments are operational workflow records, not scientific evidence."
+    },
+    {
+      "item_id": "review-syn-002",
+      "candidate_name": "Generated Hypothesis One",
+      "origin": "generated",
+      "status": "pending_review",
+      "review_boundary": "Generated molecules are computational hypotheses requiring review."
+    }
+  ]
+}

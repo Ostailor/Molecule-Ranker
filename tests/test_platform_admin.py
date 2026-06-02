@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
 
+from molecule_ranker.platform.jobs import PlatformJobQueue
 from molecule_ranker.server import create_app
 
 
@@ -29,6 +31,8 @@ def test_admin_dashboard_pages_require_admin(tmp_path: Path) -> None:
         "/dashboard/admin/jobs",
         "/dashboard/admin/health",
         "/dashboard/admin/codex-worker",
+        "/dashboard/admin/support",
+        "/dashboard/admin/feedback",
     ]:
         response = client.get(path)
         assert response.status_code == 403, path
@@ -46,8 +50,62 @@ def test_non_admin_blocked_from_admin_api(tmp_path: Path) -> None:
     viewer_headers = _login(client, "viewer@example.com", "Viewer-password-1")
 
     response = client.get("/admin/users", headers=viewer_headers)
+    support = client.get("/admin/support-console", headers=viewer_headers)
 
     assert response.status_code == 403
+    assert support.status_code == 403
+
+
+def test_admin_support_console_redacts_failed_job_errors(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    headers = _login(client, "admin@example.com", "Admin-password-1")
+    app = cast(Any, client.app)
+    admin = app.state.platform_database.list_users()[0]
+    queue = PlatformJobQueue(app.state.platform_database)
+    job = queue.enqueue(job_type="ranking", requested_by=admin, project_id="project-1")
+    queue.fail(job, RuntimeError("failed with service_token=secret-token-value"))
+
+    api = client.get("/admin/support-console", headers=headers)
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+    page = client.get("/dashboard/admin/support")
+
+    assert api.status_code == 200, api.text
+    assert page.status_code == 200, page.text
+    assert "Admin support console" in page.text
+    assert "Failed jobs" in page.text
+    assert "secret-token-value" not in api.text
+    assert "secret-token-value" not in page.text
+    assert "[REDACTED]" in api.text
+
+
+def test_admin_support_action_requires_admin_and_audits(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    admin_headers = _login(client, "admin@example.com", "Admin-password-1")
+    app = cast(Any, client.app)
+    admin = app.state.platform_database.list_users()[0]
+    queue = PlatformJobQueue(app.state.platform_database)
+    job = queue.enqueue(job_type="ranking", requested_by=admin, project_id="project-1")
+    queue.fail(job, RuntimeError("transient worker failed"))
+    created = client.post(
+        "/admin/users",
+        json={"email": "viewer@example.com", "password": "Viewer-password-1"},
+        headers=admin_headers,
+    )
+    assert created.status_code == 200, created.text
+    viewer_headers = _login(client, "viewer@example.com", "Viewer-password-1")
+
+    blocked = client.post(f"/admin/support/jobs/{job.job_id}/retry", headers=viewer_headers)
+    retried = client.post(f"/admin/support/jobs/{job.job_id}/retry", headers=admin_headers)
+    audit = client.get("/admin/audit", headers=admin_headers)
+
+    assert blocked.status_code == 403
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["status"] == "queued"
+    assert any(
+        event["event_type"] == "admin_support_retry_failed_job"
+        for event in audit.json()["events"]
+    )
 
 
 def test_admin_user_action_writes_audit_event(tmp_path: Path) -> None:

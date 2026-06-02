@@ -60,6 +60,26 @@ def test_workspace_run_comparison_reports_overlap(tmp_path: Path) -> None:
     assert comparison.run_summaries[0]["artifact_refs"]
 
 
+def test_workspace_summary_cache_invalidates_after_run_registration(tmp_path: Path) -> None:
+    run_a = _write_run(tmp_path / "run-a", "Parkinson disease", [("Rasagiline", 0.82)])
+    run_b = _write_run(tmp_path / "run-b", "Parkinson disease", [("Levodopa", 0.71)])
+    store = ProjectWorkspaceStore(tmp_path)
+    workspace = store.create(workspace_id="workspace-a")
+    workspace = store.register_run_dir(run_a, run_id="run-a", workspace=workspace)
+
+    first = store.workspace_summary()
+    second = store.workspace_summary()
+    workspace = store.register_run_dir(run_b, run_id="run-b", workspace=workspace)
+    refreshed = store.workspace_summary()
+
+    assert first["cache_status"] == "miss"
+    assert second["cache_status"] == "hit"
+    assert refreshed["cache_status"] == "miss"
+    assert first["run_count"] == 1
+    assert refreshed["run_count"] == 2
+    assert refreshed["artifact_count"] > first["artifact_count"]
+
+
 def test_codex_project_summary_stores_output_separately_with_artifact_refs(
     tmp_path: Path,
 ) -> None:
@@ -139,6 +159,42 @@ def test_project_cli_create_run_artifacts_compare_and_codex_summary(tmp_path: Pa
     assert payload["status"] == "succeeded"
     assert payload["artifact_refs"]
     assert Path(payload["output_path"]).exists()
+
+
+def test_project_cli_register_run_updates_dashboard_workspace(tmp_path: Path) -> None:
+    run_dir = _write_run(tmp_path / "run-a", "Parkinson disease", [("Rasagiline", 0.82)])
+    runner = CliRunner()
+    create = runner.invoke(
+        app,
+        [
+            "project",
+            "create",
+            "--root",
+            str(tmp_path),
+            "--workspace-id",
+            "workspace-a",
+            "--json",
+        ],
+    )
+    assert create.exit_code == 0, create.stdout
+
+    registered = runner.invoke(
+        app,
+        [
+            "project",
+            "register-run",
+            str(run_dir),
+            "--root",
+            str(tmp_path),
+            "--run-id",
+            "run-a",
+        ],
+    )
+    workspace = ProjectWorkspaceStore(tmp_path).load()
+
+    assert registered.exit_code == 0, registered.stdout
+    assert workspace.runs[0].run_id == "run-a"
+    assert workspace.artifacts
 
 
 def _write_run(run_dir: Path, disease: str, candidates: list[tuple[str, float]]) -> Path:

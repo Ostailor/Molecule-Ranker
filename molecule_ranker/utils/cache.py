@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from molecule_ranker.utils.json_io import load_json_file
+
 
 class JsonCache:
     """Small JSON-file cache for real public adapter responses."""
@@ -33,7 +35,7 @@ class JsonCache:
         path = self.cache_dir / f"{key}.json"
         if not path.exists():
             return None
-        payload = json.loads(path.read_text())
+        payload = load_json_file(path)
         return payload if isinstance(payload, dict) else None
 
     def set(

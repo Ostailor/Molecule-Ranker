@@ -1,0 +1,13 @@
+{
+  "evaluation_id": "synthetic-evaluation-001",
+  "suite_id": "synthetic-pilot-suite",
+  "metrics": {
+    "toy_top_k_agreement": 0.5,
+    "toy_label_coverage": 1.0
+  },
+  "limitations": [
+    "Synthetic baseline only.",
+    "Evaluation artifacts are not biomedical evidence or clinical validation."
+  ],
+  "boundary": "Evaluation outputs measure platform behavior only."
+}

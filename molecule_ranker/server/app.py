@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from molecule_ranker import __version__
 from molecule_ranker.codex_backbone.schemas import CodexBackboneConfig
+from molecule_ranker.platform.auth import AuthError, SessionTokenManager
 from molecule_ranker.platform.db import PlatformDatabase
 from molecule_ranker.platform.observability import ObservabilityMiddleware, metrics
 from molecule_ranker.release import (
@@ -154,6 +155,12 @@ def create_app(
     auth_rate_limit: int = 20,
     codex_rate_limit: int = 30,
 ) -> FastAPI:
+    resolved_auth_secret = auth_secret or "local-development-hosted-secret-change-me-32"
+    if hosted_mode:
+        try:
+            SessionTokenManager(resolved_auth_secret)
+        except AuthError as exc:
+            raise ValueError("Hosted auth secret must be at least 32 characters.") from exc
     app = FastAPI(
         title="molecule-ranker API",
         version=__version__,
@@ -198,7 +205,7 @@ def create_app(
     app.state.codex_provider = codex_provider
     app.state.api_key = api_key
     app.state.hosted_mode = hosted_mode
-    app.state.auth_secret = auth_secret or "local-development-hosted-secret-change-me-32"
+    app.state.auth_secret = resolved_auth_secret
     app.state.oidc_issuer = oidc_issuer
     app.state.oidc_client_id = oidc_client_id
     app.state.oidc_client_secret_env_var = oidc_client_secret_env_var

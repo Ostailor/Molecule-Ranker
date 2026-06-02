@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Pilot feedback</h1>
+  <p class="muted">Feedback is operational input for the pilot and is not scientific evidence.</p>
+</header>
+{% if submitted %}
+  <p class="notice">Feedback submitted. Secrets were redacted before storage.</p>
+{% endif %}
+
+<section class="section">
+  <h2>Submit feedback</h2>
+  <form class="panel" method="post" action="/dashboard/feedback/submit">
+    <label>Page or command
+      <input name="page_or_command" value="dashboard">
+    </label>
+    <label>Type
+      <select name="feedback_type">
+        <option value="usability_issue">Usability issue</option>
+        <option value="feature_request">Feature request</option>
+        <option value="bug_report">Bug report</option>
+        <option value="workflow_friction">Workflow friction</option>
+      </select>
+    </label>
+    <label>Severity
+      <select name="severity">
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+        <option value="high">High</option>
+        <option value="critical">Critical</option>
+      </select>
+    </label>
+    <label>Project ID
+      <input name="project_id" placeholder="Optional">
+    </label>
+    <label>Artifact refs
+      <input name="artifact_refs" placeholder="Optional comma-separated artifact IDs">
+    </label>
+    <label>Feedback
+      <textarea name="text" rows="5" required></textarea>
+    </label>
+    <button class="button" type="submit">Submit feedback</button>
+  </form>
+</section>
+
+<section class="section">
+  <h2>Recent feedback</h2>
+  <table>
+    <thead><tr><th>Type</th><th>Severity</th><th>Status</th><th>Text</th></tr></thead>
+    <tbody>
+      {% for item in feedback %}
+        <tr>
+          <td>{{ item.feedback_type }}</td>
+          <td>{{ item.severity }}</td>
+          <td>{{ item.status }}</td>
+          <td>{{ item.text }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4">No pilot feedback submitted yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -1,0 +1,26 @@
+{
+  "graph_id": "synthetic-graph-demo",
+  "entities": [
+    {
+      "entity_id": "synthetic-target-a",
+      "entity_type": "target_placeholder",
+      "label": "SYN-TARGET-A"
+    },
+    {
+      "entity_id": "synthetic-candidate-alpha",
+      "entity_type": "candidate_placeholder",
+      "label": "Candidate Alpha"
+    }
+  ],
+  "relations": [
+    {
+      "relation_id": "synthetic-relation-001",
+      "subject": "synthetic-candidate-alpha",
+      "predicate": "demo_related_to",
+      "object": "synthetic-target-a",
+      "source_id": "SYN-SRC-001",
+      "not_biomedical_evidence": true
+    }
+  ],
+  "summary": "Synthetic graph summary for pilot dashboard demonstration only."
+}

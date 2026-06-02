@@ -32,24 +32,47 @@ class BaseWorker:
 
     def run_job(self, job: PlatformJob) -> PlatformJob:
         try:
+            active_job = self.queue.get(job.job_id) or job
             self._check_authorization(job)
-            if job.metadata.get("cancel_requested"):
-                return self.queue.cancel(job.job_id, actor_user_id=job.requested_by_user_id)
-            handler = self.handlers.get(job.job_type)
+            if active_job.metadata.get("cancel_requested"):
+                return self.queue.cancel(
+                    active_job.job_id,
+                    actor_user_id=active_job.requested_by_user_id,
+                )
+            if _timed_out(active_job):
+                return self.queue.mark_timed_out(
+                    active_job,
+                    summary=f"Job {active_job.job_id} timed out before execution.",
+                )
+            self.queue.heartbeat(active_job.job_id)
+            handler = self.handlers.get(active_job.job_type)
             if handler is None:
-                raise PlatformDatabaseError(f"No worker handler registered for {job.job_type}.")
+                raise PlatformDatabaseError(
+                    f"No worker handler registered for {active_job.job_type}."
+                )
             with pipeline_step_timer(
-                job.job_type,
-                project_id=job.project_id,
-                run_id=job.job_id,
+                active_job.job_type,
+                project_id=active_job.project_id,
+                run_id=active_job.job_id,
             ):
-                result = handler(job)
-            finished = self.queue.succeed(job, result)
+                result = handler(active_job)
+            refreshed = self.queue.get(active_job.job_id) or active_job
+            if refreshed.metadata.get("cancel_requested"):
+                return self.queue.cancel(
+                    refreshed.job_id,
+                    actor_user_id=refreshed.requested_by_user_id,
+                )
+            if _timed_out(refreshed):
+                return self.queue.mark_timed_out(
+                    refreshed,
+                    summary=f"Job {refreshed.job_id} timed out.",
+                )
+            finished = self.queue.succeed(refreshed, result)
             record_pipeline_run(succeeded=True)
             return finished
         except Exception as exc:
             record_pipeline_run(succeeded=False)
-            return self.queue.fail(job, exc)
+            return self.queue.handle_failure(job, exc)
 
     def _check_authorization(self, job: PlatformJob) -> None:
         user = self.database.get_user(job.requested_by_user_id)
@@ -66,3 +89,20 @@ class BaseWorker:
             database=self.database,
         ):
             raise PermissionError(f"Requesting user no longer has {permission}.")
+
+
+def _timed_out(job: PlatformJob) -> bool:
+    timeout = job.config_snapshot.get("timeout_seconds")
+    if timeout is None:
+        return False
+    try:
+        timeout_seconds = float(timeout)
+    except (TypeError, ValueError):
+        return False
+    if timeout_seconds <= 0:
+        return True
+    if job.started_at is None:
+        return False
+    from datetime import UTC, datetime
+
+    return (datetime.now(UTC) - job.started_at).total_seconds() > timeout_seconds

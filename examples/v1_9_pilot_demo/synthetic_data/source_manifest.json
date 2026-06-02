@@ -1,0 +1,13 @@
+{
+  "manifest_id": "synthetic-pilot-demo-manifest",
+  "synthetic_only": true,
+  "contains_real_pmids": false,
+  "contains_real_dois": false,
+  "contains_protocols": false,
+  "contains_synthesis_instructions": false,
+  "contains_dosing": false,
+  "source_ids": [
+    "SYN-SRC-001",
+    "SYN-SRC-002"
+  ]
+}

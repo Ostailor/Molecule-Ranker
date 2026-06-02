@@ -45,6 +45,8 @@ from molecule_ranker.platform.rbac import (
 from molecule_ranker.platform.schemas import UserAccount
 from molecule_ranker.server.dependencies import platform_database, workspace_store
 from molecule_ranker.server.security import reject_suspicious_identifier, safe_artifact_path
+from molecule_ranker.utils.json_io import JsonArtifactTooLargeError, load_json_file
+from molecule_ranker.utils.pagination import normalize_limit_offset
 from molecule_ranker.web.components import (
     candidate_by_name,
     candidate_comment_key,
@@ -2322,14 +2324,22 @@ def admin_jobs_page(
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> Response:
     require_platform_admin(user)
+    page = normalize_limit_offset(
+        limit=_query_int(request, "limit", default=100),
+        offset=_query_int(request, "offset", default=0),
+        max_limit=200,
+    )
+    jobs = PlatformJobQueue(database).list_jobs(limit=page.limit, offset=page.offset)
+    page = page.__class__(limit=page.limit, offset=page.offset, count=len(jobs))
     return _template(
         request,
         "admin_jobs.html",
         {
             "title": "Admin job queue",
             "user": user,
-            "jobs": PlatformJobQueue(database).list_jobs(limit=100),
+            "jobs": jobs,
             "failed_jobs": database.list_failed_jobs(),
+            "pagination": page,
         },
     )
 
@@ -2364,6 +2374,232 @@ def admin_codex_worker_page(
             "codex_status": database.codex_worker_status(),
         },
     )
+
+
+@router.get("/dashboard/admin/support", response_class=HTMLResponse)
+def admin_support_console_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import build_admin_support_console
+
+    return _template(
+        request,
+        "admin_support.html",
+        {
+            "title": "Admin support console",
+            "user": user,
+            "console": build_admin_support_console(database, root_dir=database.root_dir),
+            "action_result": request.query_params.get("action_result"),
+        },
+    )
+
+
+def _admin_support_redirect(action_result: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"/dashboard/admin/support?action_result={quote(action_result)}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/dashboard/feedback", response_class=HTMLResponse)
+def feedback_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    from molecule_ranker.pilot.feedback import PilotFeedbackStore
+
+    return _template(
+        request,
+        "pilot_feedback.html",
+        {
+            "title": "Pilot feedback",
+            "user": user,
+            "feedback": PilotFeedbackStore(database.root_dir).list(limit=25),
+            "is_admin": user.is_admin,
+            "submitted": request.query_params.get("submitted") == "1",
+        },
+    )
+
+
+@router.post("/dashboard/feedback/submit")
+async def submit_dashboard_feedback(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    from molecule_ranker.pilot.feedback import submit_feedback
+
+    form = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
+    text = str((form.get("text") or [""])[0])
+    feedback_type = str((form.get("feedback_type") or ["usability_issue"])[0])
+    severity = str((form.get("severity") or ["medium"])[0])
+    page_or_command = str((form.get("page_or_command") or ["dashboard"])[0])
+    raw_project_id = str((form.get("project_id") or [""])[0]).strip()
+    artifact_refs = str((form.get("artifact_refs") or [""])[0])
+    submit_feedback(
+        root_dir=database.root_dir,
+        user_id=user.user_id,
+        project_id=raw_project_id or None,
+        page_or_command=page_or_command,
+        feedback_type=feedback_type,  # type: ignore[arg-type]
+        severity=severity,  # type: ignore[arg-type]
+        text=text,
+        artifact_refs=[item.strip() for item in artifact_refs.split(",") if item.strip()],
+    )
+    return RedirectResponse(
+        "/dashboard/feedback?submitted=1",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/dashboard/admin/feedback", response_class=HTMLResponse)
+def admin_feedback_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.feedback import PilotFeedbackStore
+
+    return _template(
+        request,
+        "admin_feedback.html",
+        {
+            "title": "Pilot feedback admin",
+            "user": user,
+            "feedback": PilotFeedbackStore(database.root_dir).list(limit=500),
+        },
+    )
+
+
+@router.get("/dashboard/admin/feedback/export")
+def admin_feedback_export(
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.feedback import PilotFeedbackStore
+
+    feedback = PilotFeedbackStore(database.root_dir).list(limit=10_000)
+    return {
+        "feedback": [item.model_dump(mode="json") for item in feedback],
+        "not_scientific_evidence": True,
+        "excludes_cache_payloads": True,
+        "excludes_artifact_payloads": True,
+    }
+
+
+@router.post("/dashboard/admin/support/jobs/{job_id}/retry")
+def dashboard_admin_support_retry_job(
+    job_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import retry_failed_job
+
+    try:
+        result = retry_failed_job(database, job_id=job_id, actor=user)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _admin_support_redirect(f"retry completed: {result.get('status', 'queued')}")
+
+
+@router.post("/dashboard/admin/support/jobs/{job_id}/cancel")
+def dashboard_admin_support_cancel_job(
+    job_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import cancel_job
+
+    try:
+        result = cancel_job(database, job_id=job_id, actor=user)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _admin_support_redirect(f"cancel completed: {result.get('status', 'cancelled')}")
+
+
+@router.post("/dashboard/admin/support/jobs/{job_id}/requeue-dead-letter")
+def dashboard_admin_support_requeue_dead_letter(
+    job_id: str,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import requeue_dead_letter_job
+
+    try:
+        result = requeue_dead_letter_job(database, job_id=job_id, actor=user)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _admin_support_redirect(
+        f"dead-letter requeue completed: {result.get('status', 'queued')}"
+    )
+
+
+@router.post("/dashboard/admin/support/support-bundle")
+def dashboard_admin_support_bundle(
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import generate_admin_support_bundle
+
+    generate_admin_support_bundle(database, root_dir=database.root_dir, actor=user)
+    return _admin_support_redirect("support bundle created with manifest")
+
+
+@router.post("/dashboard/admin/support/readiness-check")
+def dashboard_admin_support_readiness(
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import run_admin_readiness_check
+
+    run_admin_readiness_check(database, root_dir=database.root_dir, actor=user)
+    return _admin_support_redirect("readiness check completed with report")
+
+
+@router.post("/dashboard/admin/support/migration-dry-run")
+def dashboard_admin_support_migration_dry_run(
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import run_admin_migration_dry_run
+
+    run_admin_migration_dry_run(database, root_dir=database.root_dir, actor=user)
+    return _admin_support_redirect("migration dry-run completed with report")
+
+
+@router.post("/dashboard/admin/support/backup-verify")
+def dashboard_admin_support_backup_verify(
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import run_admin_backup_verification
+
+    run_admin_backup_verification(database, root_dir=database.root_dir, actor=user)
+    return _admin_support_redirect("backup verification completed with report")
+
+
+@router.get("/dashboard/admin/support/redacted-logs")
+def dashboard_admin_support_redacted_logs(
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import view_redacted_logs
+
+    return view_redacted_logs(database, root_dir=database.root_dir, actor=user)
 
 
 @router.get("/dashboard/notifications", response_class=HTMLResponse)
@@ -2583,9 +2819,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.8</div>"
+        "<div class=\"brand\">molecule-ranker V1.9</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2613,8 +2849,8 @@ def _structure_dashboard_records(
         if not path.exists() or not safe_artifact_path(path, root_dir=Path(workspace.root_dir)):
             continue
         try:
-            payload = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
+            payload = load_json_file(path)
+        except (OSError, json.JSONDecodeError, JsonArtifactTooLargeError):
             continue
         records.extend(_structure_records_from_payload(payload, str(spec["key"])))
     return records
@@ -2698,8 +2934,8 @@ def _model_json_artifacts(registry: ModelRegistry, folder: str) -> list[dict[str
     records: list[dict[str, Any]] = []
     for path in sorted(artifact_dir.glob("*.json")):
         try:
-            payload = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
+            payload = load_json_file(path)
+        except (OSError, json.JSONDecodeError, JsonArtifactTooLargeError):
             continue
         if isinstance(payload, dict):
             records.append(payload)
@@ -2728,9 +2964,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.8</div>"
+        "<div class=\"brand\">molecule-ranker V1.9</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2763,9 +2999,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.8</div>"
+        "<div class=\"brand\">molecule-ranker V1.9</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2815,9 +3051,9 @@ def _campaign_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.8</div>"
+        "<div class=\"brand\">molecule-ranker V1.9</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3258,9 +3494,9 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.8</div>"
+        "<div class=\"brand\">molecule-ranker V1.9</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3836,9 +4072,9 @@ def _evaluation_dashboard_shell(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.8</div>"
+        "<div class=\"brand\">molecule-ranker V1.9</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4079,9 +4315,9 @@ def _hypothesis_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.8.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.8</div>"
+        "<div class=\"brand\">molecule-ranker V1.9</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4193,6 +4429,13 @@ def _project_hypothesis_children(
 
 def _compact_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ": "))
+
+
+def _query_int(request: Request, name: str, *, default: int) -> int:
+    try:
+        return int(str(request.query_params.get(name, default)))
+    except (TypeError, ValueError):
+        return default
 
 
 def _project_or_404(*, store: ProjectWorkspaceStore, project_id: str) -> ProjectWorkspace:

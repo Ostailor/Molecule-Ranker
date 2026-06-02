@@ -1,0 +1,20 @@
+{
+  "generated_count": 1,
+  "retained_count": 1,
+  "retained_generated_molecules": [
+    {
+      "generated_id": "SYN-GEN-001",
+      "name": "Generated Hypothesis One",
+      "canonical_smiles": "SYNTHETIC_PLACEHOLDER",
+      "origin": "generated",
+      "metadata": {
+        "generator_name": "synthetic_demo_generator",
+        "computational_hypothesis": true,
+        "not_evidence": true
+      }
+    }
+  ],
+  "warnings": [
+    "Generated molecules are computational hypotheses, not validated molecules or evidence."
+  ]
+}

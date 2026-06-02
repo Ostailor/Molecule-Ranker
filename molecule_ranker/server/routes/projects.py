@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from molecule_ranker.platform.rbac import can_access_project, require_project_access
 from molecule_ranker.platform.schemas import UserAccount
 from molecule_ranker.server.dependencies import current_user, workspace_store
+from molecule_ranker.utils.pagination import normalize_limit_offset
 from molecule_ranker.workspace.schemas import ProjectWorkspace
 from molecule_ranker.workspace.store import ProjectWorkspaceStore
 
@@ -24,9 +25,14 @@ def list_projects(
     request: Request,
     user: Annotated[UserAccount, Depends(current_user)],
     store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    filter: str | None = Query(default=None),
+    sort: str = Query(default="name"),
 ) -> dict[str, object]:
     if not store.workspace_path.exists():
-        return {"projects": []}
+        page = normalize_limit_offset(limit=limit, offset=offset, max_limit=500)
+        return {"projects": [], "pagination": page.model_dump()}
     workspace = store.load()
     if bool(request.app.state.hosted_mode) and not can_access_project(
         request.app.state.platform_database,
@@ -34,8 +40,29 @@ def list_projects(
         project_id=workspace.workspace_id,
         action="read",
     ):
-        return {"projects": []}
-    return {"projects": [_project_summary(workspace)]}
+        page = normalize_limit_offset(limit=limit, offset=offset, max_limit=500)
+        return {"projects": [], "pagination": page.model_dump()}
+    projects = [_project_summary(workspace)]
+    if filter:
+        needle = filter.lower()
+        projects = [
+            project
+            for project in projects
+            if needle in str(project["workspace_id"]).lower()
+            or needle in str(project["name"]).lower()
+        ]
+    reverse = sort.startswith("-")
+    sort_key = sort.removeprefix("-")
+    if sort_key in {"workspace_id", "name", "run_count", "artifact_count"}:
+        projects = sorted(
+            projects,
+            key=lambda item: _project_sort_value(item, sort_key),
+            reverse=reverse,
+        )
+    page = normalize_limit_offset(limit=limit, offset=offset, max_limit=500)
+    page_projects = projects[page.offset : page.offset + page.limit]
+    page = page.__class__(limit=page.limit, offset=page.offset, count=len(page_projects))
+    return {"projects": page_projects, "pagination": page.model_dump()}
 
 
 @router.post("/projects")
@@ -93,3 +120,8 @@ def _project_summary(workspace: ProjectWorkspace) -> dict[str, object]:
         "run_count": len(workspace.runs),
         "artifact_count": len(workspace.artifacts),
     }
+
+
+def _project_sort_value(project: dict[str, object], key: str) -> str | int:
+    value = project[key]
+    return value if isinstance(value, int) else str(value)

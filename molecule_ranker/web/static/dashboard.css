@@ -256,12 +256,19 @@ label {
   font-weight: 600;
 }
 
-input {
+input,
+select,
+textarea {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 9px 10px;
   font: inherit;
+}
+
+textarea {
+  min-height: 120px;
+  resize: vertical;
 }
 
 .button {

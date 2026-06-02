@@ -15,9 +15,18 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V1.8 upgrades the V1.7 validated internal research platform with "
-            "scientific evaluation benchmark suites and prospective validation analytics. "
-            "The validated internal research platform MVP boundary remains intact: "
+            "V1.9 upgrades the V1.8 validated internal research platform with "
+            "enterprise/internal pilot readiness: usability polish, performance "
+            "optimization, reliability hardening, operational readiness, pilot "
+            "onboarding, admin/support workflows, better error messages, robust "
+            "job retry/resume/cancel expectations, dashboard workflow improvements, "
+            "dataset/artifact migration safety, deployment diagnostics, monitoring "
+            "and alerting guidance, pilot feedback capture, support bundle "
+            "generation, and pre-V2.0 readiness validation. V1.9 does not add "
+            "major new science capabilities and does not expand molecule generation, "
+            "docking, ADMET, external connectors, or predictive modeling except "
+            "for stability and usability improvements. The validated internal "
+            "research platform MVP boundary remains intact: "
             "campaign plans, hypotheses, research questions, graph paths, portfolio "
             "recommendations, structure workflows, docking scores, model predictions, "
             "and generated molecules are planning or prioritization signals, not "
@@ -61,6 +70,14 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "FrozenPredictionSet, ProspectiveValidationRun, EvaluationMetric, "
             "EvaluationReport, DecisionQualityReport, and ReproducibilityManifest "
             "schemas for V1.8.",
+            "- V1.9 pilot readiness reports covering usability, performance, "
+            "reliability, operations, onboarding, admin/support, error messaging, "
+            "job control, dashboard workflows, migration safety, deployment "
+            "diagnostics, monitoring, pilot feedback, support bundles, and pre-V2 "
+            "validation.",
+            "- Support bundle manifests that list safe diagnostics without file "
+            "contents, environment variables, cache files, API keys, service "
+            "tokens, credentials, or plaintext secrets.",
             "- Deterministic evaluation metrics for ranking, generated experiment-worthiness, "
             "surrogate calibration, portfolio baselines, campaign learning, hypothesis "
             "lifecycle, integration provenance, guardrail failures, and reproducibility.",
@@ -107,6 +124,10 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "decisions",
             "- predicted structures are lower-confidence than suitable experimental structures",
             "- Codex outputs are assistant artifacts, not biomedical evidence",
+            "- Codex output must not become evidence, assay results, molecules, "
+            "scores, benchmark results, or decisions",
+            "- V1.9 pilot feedback is operational feedback, not biomedical evidence",
+            "- V1.9 support bundles are diagnostics manifests, not evidence packages",
             "",
             "## Contracts",
             "",

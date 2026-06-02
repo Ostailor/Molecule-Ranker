@@ -1,0 +1,30 @@
+services:
+  molecule-ranker-v1-9-pilot-demo:
+    image: ghcr.io/astral-sh/uv:python3.11-bookworm
+    working_dir: /workspace
+    ports:
+      - "8765:8765"
+    environment:
+      DEMO_ROOT: /workspace/examples/v1_9_pilot_demo/.demo_state
+      DEMO_DB_PATH: /workspace/examples/v1_9_pilot_demo/.demo_state/platform.sqlite
+      DEMO_ADMIN_EMAIL: pilot-admin@example.invalid
+      DEMO_HOST: 0.0.0.0
+      DEMO_PORT: "8765"
+    volumes:
+      - ../..:/workspace
+    command: >
+      bash -lc '
+        examples/v1_9_pilot_demo/scripts/bootstrap.sh &&
+        examples/v1_9_pilot_demo/scripts/seed_demo_project.sh &&
+        set -a &&
+        . examples/v1_9_pilot_demo/.demo_state/demo.env &&
+        set +a &&
+        uv run molecule-ranker serve
+          --root "$$DEMO_ROOT"
+          --host "$$DEMO_HOST"
+          --port "$$DEMO_PORT"
+          --hosted
+          --auth-secret "$$MOLECULE_RANKER_AUTH_SECRET"
+          --platform-db-path "$$DEMO_DB_PATH"
+          --allow-public-bind
+      '

@@ -7,6 +7,7 @@
 <section class="section">
   <h2>First-run setup</h2>
   <div class="panel">
+    <h3>First-run checklist</h3>
     <p>
       Create a project workspace before running jobs, registering artifacts, or inviting reviewers.
       Projects hold runs, artifacts, review decisions, Codex assistant outputs, and audit events.
@@ -24,7 +25,7 @@
   </div>
 </section>
 <section class="section">
-  <h2>Create project</h2>
+  <h2>Project setup wizard</h2>
   <form class="panel form-grid" method="post" action="/dashboard/projects/create">
     <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
     <label for="workspace_id">Project ID</label>
@@ -33,6 +34,18 @@
     <input id="name" name="name" type="text" placeholder="Example project">
     <button class="button" type="submit">Create project</button>
   </form>
+</section>
+<section class="section">
+  <h2>What can I do next?</h2>
+  <div class="panel">
+    <ul class="compact-list">
+      <li>Create a project, then import or register source-backed artifacts.</li>
+      <li>Open Review to triage candidates and generated hypotheses separately.</li>
+      <li>Use Evaluation to inspect platform-quality artifacts, not research evidence.</li>
+      <li>Keep integrations in dry-run/read-only mode until an admin enables writes.</li>
+    </ul>
+    <p><a class="button small-button" href="/dashboard/feedback">Pilot feedback</a></p>
+  </div>
 </section>
 <section class="section">
   <h2>Visible projects</h2>
@@ -49,7 +62,7 @@
           <td>{{ item.updated_at.isoformat() }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="4">No authorized projects.</td></tr>
+        <tr><td colspan="4">No authorized projects. Use the project setup wizard to create one.</td></tr>
       {% endfor %}
     </tbody>
   </table>

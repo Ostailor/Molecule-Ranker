@@ -34,6 +34,17 @@ ReleaseCategory = Literal[
     "hypothesis",
     "campaign",
     "evaluation",
+    "usability",
+    "performance",
+    "reliability",
+    "operations",
+    "pilot",
+    "support",
+    "job_control",
+    "dashboard",
+    "migration",
+    "monitoring",
+    "readiness",
 ]
 ReleaseCheckStatus = Literal["pass", "warn", "fail"]
 
@@ -327,6 +338,158 @@ V1_RELEASE_GATES: tuple[ReleaseGate, ...] = (
             "README.md",
         ),
     ),
+    ReleaseGate(
+        "v1-9-usability-polish",
+        "usability",
+        "V1.9 hosted dashboard and workflow language are polished for pilot users.",
+        (
+            "docs/user/dashboard.md",
+            "docs/user/overview.md",
+            "molecule_ranker/web/templates/base.html",
+            "tests/test_web_dashboard.py",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-performance-optimization",
+        "performance",
+        "V1.9 pilot paths expose operational timing and bounded workload controls.",
+        (
+            "molecule_ranker/platform/observability.py",
+            "molecule_ranker/platform/jobs.py",
+            "tests/test_platform_observability.py",
+            "docs/runbooks/worker_operations.md",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-reliability-hardening",
+        "reliability",
+        "V1.9 reliability hardening covers health, readiness, backup, restore, and failures.",
+        (
+            "molecule_ranker/platform/readiness.py",
+            "molecule_ranker/platform/backup.py",
+            "tests/test_platform_backup.py",
+            "docs/runbooks/backup_restore.md",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-operational-readiness",
+        "operations",
+        "V1.9 operator runbooks cover production configuration, release, and incidents.",
+        (
+            "docs/runbooks/production_config.md",
+            "docs/runbooks/release_process.md",
+            "docs/runbooks/security_incidents.md",
+            "docs/runbooks/deployment_diagnostics.md",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-pilot-onboarding",
+        "pilot",
+        "V1.9 pilot onboarding is documented with non-science scope boundaries.",
+        ("docs/runbooks/pilot_onboarding.md", "docs/v1.9-pilot-readiness.md"),
+    ),
+    ReleaseGate(
+        "v1-9-admin-support-workflows",
+        "support",
+        "V1.9 admin and support workflows are documented without exposing credentials.",
+        (
+            "docs/admin/support_workflows.md",
+            "docs/admin/users_and_roles.md",
+            "docs/admin/audit_logs.md",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-better-error-messages",
+        "support",
+        "V1.9 pilot-safe error messages include redacted details and remediation hints.",
+        (
+            "molecule_ranker/platform/pilot_readiness.py",
+            "molecule_ranker/server/app.py",
+            "docs/runbooks/troubleshooting.md",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-job-retry-resume-cancel",
+        "job_control",
+        "V1.9 job retry, resume, and cancel behavior is explicit and audited.",
+        (
+            "molecule_ranker/platform/jobs.py",
+            "molecule_ranker/workers/base.py",
+            "docs/runbooks/worker_operations.md",
+            "tests/test_platform_jobs.py",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-dashboard-workflows",
+        "dashboard",
+        "V1.9 dashboard workflows preserve research boundaries during pilot use.",
+        (
+            "molecule_ranker/web/templates/base.html",
+            "molecule_ranker/web/views.py",
+            "docs/user/dashboard.md",
+            "tests/test_web_dashboard.py",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-dataset-artifact-migration-safety",
+        "migration",
+        "V1.9 dataset and artifact migration safety is documented and checked.",
+        (
+            "molecule_ranker/platform/migrations.py",
+            "docs/admin/artifact_storage.md",
+            "docs/runbooks/backup_restore.md",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-deployment-diagnostics",
+        "operations",
+        "V1.9 deployment diagnostics cover readiness, version, metrics, and support bundles.",
+        (
+            "docs/runbooks/deployment_diagnostics.md",
+            "docs/runbooks/deployment.md",
+            "molecule_ranker/platform/readiness.py",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-monitoring-alerting",
+        "monitoring",
+        "V1.9 monitoring and alerting guidance covers pilot operational signals.",
+        (
+            "docs/runbooks/monitoring_alerting.md",
+            "molecule_ranker/platform/observability.py",
+            "tests/test_platform_observability.py",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-pilot-feedback-capture",
+        "pilot",
+        "V1.9 pilot feedback capture stays separate from evidence and decisions.",
+        (
+            "docs/user/pilot_feedback.md",
+            "molecule_ranker/review/feedback.py",
+            "tests/test_review_feedback.py",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-support-bundle-generation",
+        "support",
+        "V1.9 support bundles list redacted diagnostics without secrets or cache contents.",
+        (
+            "docs/runbooks/support_bundle.md",
+            "molecule_ranker/platform/pilot_readiness.py",
+            "tests/test_pilot_readiness_v19.py",
+        ),
+    ),
+    ReleaseGate(
+        "v1-9-pre-v2-readiness-validation",
+        "readiness",
+        "V1.9 validates pre-V2.0 operational maturity without adding science capabilities.",
+        (
+            "docs/v1.9-pilot-readiness.md",
+            "molecule_ranker/platform/pilot_readiness.py",
+            "tests/test_pilot_readiness_v19.py",
+        ),
+    ),
 )
 
 _CRITICAL_TODO_RE = re.compile(
@@ -384,6 +547,7 @@ def run_release_checks(
         _check_guardrail_audit(root, run_commands=run_commands),
         _check_required_docs(root),
         _check_required_runbooks(root),
+        _check_pilot_readiness(root),
         _check_readme(root),
         _check_docker_build_available(root, run_commands=run_commands),
         _check_no_critical_todos(root),
@@ -416,13 +580,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "1.8.0":
-        return ReleaseCheck("version", "Version is 1.8.0", "pass", "Package version is 1.8.0.")
+    if __version__ == "1.9.0":
+        return ReleaseCheck("version", "Version is 1.9.0", "pass", "Package version is 1.9.0.")
     return ReleaseCheck(
         "version",
-        "Version is 1.8.0",
+        "Version is 1.9.0",
         "fail",
-        f"Package version is {__version__}, expected 1.8.0.",
+        f"Package version is {__version__}, expected 1.9.0.",
     )
 
 
@@ -612,9 +776,12 @@ def _check_required_docs(root: Path) -> ReleaseCheck:
     required = (
         "docs/user/overview.md",
         "docs/user/limitations.md",
+        "docs/user/pilot_feedback.md",
         "docs/admin/security_checklist.md",
         "docs/admin/users_and_roles.md",
+        "docs/admin/support_workflows.md",
         "docs/contracts/v1.0-api-and-artifacts.md",
+        "docs/v1.9-pilot-readiness.md",
     )
     missing = [path for path in required if not (root / path).exists()]
     return _required_paths_check("docs", "Platform documentation exists", required, missing)
@@ -633,9 +800,44 @@ def _check_required_runbooks(root: Path) -> ReleaseCheck:
         "docs/runbooks/data_retention.md",
         "docs/runbooks/troubleshooting.md",
         "docs/runbooks/release_process.md",
+        "docs/runbooks/pilot_onboarding.md",
+        "docs/runbooks/deployment_diagnostics.md",
+        "docs/runbooks/monitoring_alerting.md",
+        "docs/runbooks/support_bundle.md",
     )
     missing = [path for path in required if not (root / path).exists()]
     return _required_paths_check("runbooks", "Operator runbooks exist", required, missing)
+
+
+def _check_pilot_readiness(root: Path) -> ReleaseCheck:
+    from molecule_ranker.platform.pilot_readiness import build_pilot_readiness_report
+
+    report = build_pilot_readiness_report(root)
+    if not report["ready"]:
+        return ReleaseCheck(
+            "pilot_readiness",
+            "V1.9 pilot readiness passes",
+            "fail",
+            "V1.9 pilot readiness evidence is incomplete.",
+            {"areas": report["areas"]},
+        )
+    if report["science_capability_expansion"]:
+        return ReleaseCheck(
+            "pilot_readiness",
+            "V1.9 pilot readiness passes",
+            "fail",
+            "V1.9 readiness must not add science capability expansion.",
+        )
+    return ReleaseCheck(
+        "pilot_readiness",
+        "V1.9 pilot readiness passes",
+        "pass",
+        "V1.9 enterprise/internal pilot readiness evidence is complete.",
+        {
+            "pilot_readiness_version": report["pilot_readiness_version"],
+            "area_count": len(report["areas"]),
+        },
+    )
 
 
 def _check_readme(root: Path) -> ReleaseCheck:
@@ -643,7 +845,7 @@ def _check_readme(root: Path) -> ReleaseCheck:
     if not readme.exists():
         return ReleaseCheck("readme", "README updated", "fail", "README.md is missing.")
     text = readme.read_text(errors="ignore").lower()
-    required = ("v1.0", "validated internal research platform mvp")
+    required = ("v1.9", "enterprise/internal pilot", "validated internal research platform mvp")
     missing = [phrase for phrase in required if phrase not in text]
     if "no medical advice" not in text and "does not provide medical advice" not in text:
         missing.append("no medical advice")
@@ -652,10 +854,10 @@ def _check_readme(root: Path) -> ReleaseCheck:
             "readme",
             "README updated",
             "fail",
-            "README.md is missing required V1.0 release language.",
+            "README.md is missing required V1.9 release language.",
             {"missing_phrases": missing},
         )
-    return ReleaseCheck("readme", "README updated", "pass", "README.md documents V1.0 scope.")
+    return ReleaseCheck("readme", "README updated", "pass", "README.md documents V1.9 scope.")
 
 
 def _check_docker_build_available(root: Path, *, run_commands: bool) -> ReleaseCheck:

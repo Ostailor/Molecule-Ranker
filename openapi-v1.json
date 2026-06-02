@@ -46,6 +46,138 @@
         "title": "AssignmentCreateRequest",
         "type": "object"
       },
+      "CampaignJobRequest": {
+        "properties": {
+          "campaign_approval": {
+            "default": false,
+            "title": "Campaign Approval",
+            "type": "boolean"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "campaign_plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Plan Id"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "event_artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Artifact Id"
+          },
+          "generated_molecule_followup": {
+            "default": false,
+            "title": "Generated Molecule Followup",
+            "type": "boolean"
+          },
+          "generated_review_gate_present": {
+            "default": false,
+            "title": "Generated Review Gate Present",
+            "type": "boolean"
+          },
+          "job_type": {
+            "title": "Job Type",
+            "type": "string"
+          },
+          "stage_gate_approval": {
+            "default": false,
+            "title": "Stage Gate Approval",
+            "type": "boolean"
+          },
+          "stage_gate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Gate Id"
+          },
+          "strategy": {
+            "default": "balanced",
+            "title": "Strategy",
+            "type": "string"
+          },
+          "use_codex": {
+            "default": false,
+            "title": "Use Codex",
+            "type": "boolean"
+          },
+          "work_package_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Package Id"
+          }
+        },
+        "required": [
+          "job_type"
+        ],
+        "title": "CampaignJobRequest",
+        "type": "object"
+      },
+      "CampaignStageGateApprovalRequest": {
+        "properties": {
+          "decision": {
+            "default": "approved",
+            "title": "Decision",
+            "type": "string"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "reviewer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Id"
+          }
+        },
+        "required": [
+          "rationale"
+        ],
+        "title": "CampaignStageGateApprovalRequest",
+        "type": "object"
+      },
       "CodexTask": {
         "properties": {
           "allowed_commands": {
@@ -157,7 +289,19 @@
               "explain_contradiction_hypothesis",
               "draft_hypothesis_review_questions",
               "draft_limitations",
-              "draft_review_questions"
+              "draft_review_questions",
+              "draft_campaign_memo",
+              "summarize_campaign_tradeoffs",
+              "explain_replan_trigger",
+              "draft_review_questions_for_campaign",
+              "summarize_budget_bottlenecks",
+              "draft_project_update_from_campaign",
+              "summarize_evaluation_report",
+              "explain_metric_changes",
+              "draft_benchmark_limitations",
+              "summarize_prospective_validation",
+              "explain_guardrail_failures",
+              "draft_decision_quality_lessons"
             ],
             "title": "Task Type",
             "type": "string"
@@ -556,6 +700,123 @@
         "title": "DesignPlanApprovalRequest",
         "type": "object"
       },
+      "EvaluationJobRequest": {
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "from_run": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Run"
+          },
+          "frozen_prediction_set_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frozen Prediction Set Id"
+          },
+          "job_type": {
+            "title": "Job Type",
+            "type": "string"
+          },
+          "metric": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric"
+          },
+          "output_artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Artifact Id"
+          },
+          "prospective_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prospective Run Id"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "split_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split Id"
+          },
+          "suite_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suite Id"
+          }
+        },
+        "required": [
+          "job_type"
+        ],
+        "title": "EvaluationJobRequest",
+        "type": "object"
+      },
       "ExplainRunRequest": {
         "properties": {
           "candidate": {
@@ -909,6 +1170,50 @@
           }
         },
         "title": "ExternalSystemPatchRequest",
+        "type": "object"
+      },
+      "GenericJobRequest": {
+        "examples": [
+          {
+            "config": {
+              "run_id": "pilot-demo-run"
+            },
+            "idempotency_key": "pilot-demo-run-ranking",
+            "job_type": "ranking",
+            "priority": "normal"
+          }
+        ],
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "job_type": {
+            "title": "Job Type",
+            "type": "string"
+          },
+          "priority": {
+            "default": "normal",
+            "title": "Priority",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_type"
+        ],
+        "title": "GenericJobRequest",
         "type": "object"
       },
       "GraphJobRequest": {
@@ -1559,6 +1864,70 @@
           "new_password"
         ],
         "title": "PasswordResetRequest",
+        "type": "object"
+      },
+      "PilotFeedbackApiRequest": {
+        "examples": [
+          {
+            "artifact_refs": [],
+            "feedback_type": "workflow_friction",
+            "metadata": {
+              "source": "sdk"
+            },
+            "page_or_command": "dashboard/jobs",
+            "project_id": "pilot-project",
+            "severity": "medium",
+            "text": "The retry action needs clearer context."
+          }
+        ],
+        "properties": {
+          "artifact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Artifact Refs",
+            "type": "array"
+          },
+          "feedback_type": {
+            "title": "Feedback Type",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "page_or_command": {
+            "title": "Page Or Command",
+            "type": "string"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "severity": {
+            "default": "medium",
+            "title": "Severity",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "page_or_command",
+          "feedback_type",
+          "text"
+        ],
+        "title": "PilotFeedbackApiRequest",
         "type": "object"
       },
       "PlatformSettingsRequest": {
@@ -2545,7 +2914,7 @@
   "info": {
     "description": "Local API by default. Hosted mode adds users, teams, RBAC, jobs, audit logs, guarded Codex worker orchestration, and V1.0 integrations.",
     "title": "molecule-ranker API",
-    "version": "1.8.0"
+    "version": "1.9.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2658,6 +3027,39 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "-created_at",
+              "title": "Sort",
+              "type": "string"
             }
           }
         ],
@@ -3010,6 +3412,276 @@
           }
         },
         "summary": "Admin Configure Settings",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/admin/support-console": {
+      "get": {
+        "operationId": "admin_support_console_admin_support_console_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Console Admin Support Console Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Console",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/admin/support/backup-verify": {
+      "post": {
+        "operationId": "admin_support_backup_verify_admin_support_backup_verify_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Backup Verify Admin Support Backup Verify Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Backup Verify",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/admin/support/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "admin_support_cancel_job_admin_support_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Cancel Job Admin Support Jobs  Job Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Support Cancel Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/admin/support/jobs/{job_id}/requeue-dead-letter": {
+      "post": {
+        "operationId": "admin_support_requeue_dead_letter_job_admin_support_jobs__job_id__requeue_dead_letter_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Requeue Dead Letter Job Admin Support Jobs  Job Id  Requeue Dead Letter Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Support Requeue Dead Letter Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/admin/support/jobs/{job_id}/retry": {
+      "post": {
+        "operationId": "admin_support_retry_job_admin_support_jobs__job_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Retry Job Admin Support Jobs  Job Id  Retry Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Support Retry Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/admin/support/migration-dry-run": {
+      "post": {
+        "operationId": "admin_support_migration_dry_run_admin_support_migration_dry_run_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Migration Dry Run Admin Support Migration Dry Run Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Migration Dry Run",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/admin/support/readiness-check": {
+      "post": {
+        "operationId": "admin_support_readiness_check_admin_support_readiness_check_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Readiness Check Admin Support Readiness Check Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Readiness Check",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/admin/support/redacted-logs": {
+      "get": {
+        "operationId": "admin_support_redacted_logs_admin_support_redacted_logs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Redacted Logs Admin Support Redacted Logs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Redacted Logs",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/admin/support/support-bundle": {
+      "post": {
+        "operationId": "admin_support_generate_bundle_admin_support_support_bundle_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Generate Bundle Admin Support Support Bundle Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Generate Bundle",
         "tags": [
           "platform"
         ]
@@ -3419,6 +4091,39 @@
               ],
               "title": "Status"
             }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "-created_at",
+              "title": "Sort",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -3770,6 +4475,276 @@
           }
         },
         "summary": "Admin Configure Settings",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/admin/support-console": {
+      "get": {
+        "operationId": "admin_support_console_api_v1_admin_support_console_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Console Api V1 Admin Support Console Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Console",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/admin/support/backup-verify": {
+      "post": {
+        "operationId": "admin_support_backup_verify_api_v1_admin_support_backup_verify_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Backup Verify Api V1 Admin Support Backup Verify Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Backup Verify",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/admin/support/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "admin_support_cancel_job_api_v1_admin_support_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Cancel Job Api V1 Admin Support Jobs  Job Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Support Cancel Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/admin/support/jobs/{job_id}/requeue-dead-letter": {
+      "post": {
+        "operationId": "admin_support_requeue_dead_letter_job_api_v1_admin_support_jobs__job_id__requeue_dead_letter_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Requeue Dead Letter Job Api V1 Admin Support Jobs  Job Id  Requeue Dead Letter Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Support Requeue Dead Letter Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/admin/support/jobs/{job_id}/retry": {
+      "post": {
+        "operationId": "admin_support_retry_job_api_v1_admin_support_jobs__job_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Retry Job Api V1 Admin Support Jobs  Job Id  Retry Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Support Retry Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/admin/support/migration-dry-run": {
+      "post": {
+        "operationId": "admin_support_migration_dry_run_api_v1_admin_support_migration_dry_run_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Migration Dry Run Api V1 Admin Support Migration Dry Run Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Migration Dry Run",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/admin/support/readiness-check": {
+      "post": {
+        "operationId": "admin_support_readiness_check_api_v1_admin_support_readiness_check_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Readiness Check Api V1 Admin Support Readiness Check Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Readiness Check",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/admin/support/redacted-logs": {
+      "get": {
+        "operationId": "admin_support_redacted_logs_api_v1_admin_support_redacted_logs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Redacted Logs Api V1 Admin Support Redacted Logs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Redacted Logs",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/admin/support/support-bundle": {
+      "post": {
+        "operationId": "admin_support_generate_bundle_api_v1_admin_support_support_bundle_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Support Generate Bundle Api V1 Admin Support Support Bundle Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Generate Bundle",
         "tags": [
           "platform"
         ]
@@ -4592,6 +5567,50 @@
         "summary": "Experiments Health",
         "tags": [
           "experiments"
+        ]
+      }
+    },
+    "/api/v1/feedback": {
+      "post": {
+        "operationId": "submit_pilot_feedback_api_api_v1_feedback_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PilotFeedbackApiRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Submit Pilot Feedback Api Api V1 Feedback Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Pilot Feedback Api",
+        "tags": [
+          "platform",
+          "platform"
         ]
       }
     },
@@ -6716,10 +7735,128 @@
         ]
       }
     },
+    "/api/v1/pilot/readiness": {
+      "post": {
+        "operationId": "run_pilot_readiness_api_v1_pilot_readiness_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Pilot Readiness Api V1 Pilot Readiness Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Pilot Readiness",
+        "tags": [
+          "platform",
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/platform/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_platform_job_api_v1_platform_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Platform Job Api V1 Platform Jobs  Job Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Platform Job",
+        "tags": [
+          "platform",
+          "jobs"
+        ]
+      }
+    },
     "/api/v1/projects": {
       "get": {
         "operationId": "list_projects_api_v1_projects_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Filter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "name",
+              "title": "Sort",
+              "type": "string"
+            }
+          },
           {
             "in": "header",
             "name": "Authorization",
@@ -6992,6 +8129,29 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -7184,6 +8344,132 @@
           }
         },
         "summary": "Create Assignment",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/campaign/jobs": {
+      "post": {
+        "operationId": "enqueue_campaign_job_api_v1_projects__project_id__campaign_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Campaign Job Api V1 Projects  Project Id  Campaign Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Campaign Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/campaigns/{campaign_id}/stage-gates/{stage_gate_id}/approve": {
+      "post": {
+        "operationId": "approve_campaign_stage_gate_api_v1_projects__project_id__campaigns__campaign_id__stage_gates__stage_gate_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "stage_gate_id",
+            "required": true,
+            "schema": {
+              "title": "Stage Gate Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignStageGateApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Campaign Stage Gate Api V1 Projects  Project Id  Campaigns  Campaign Id  Stage Gates  Stage Gate Id  Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Campaign Stage Gate",
         "tags": [
           "platform"
         ]
@@ -7501,6 +8787,114 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/evaluation/jobs": {
+      "post": {
+        "operationId": "enqueue_evaluation_job_api_v1_projects__project_id__evaluation_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Evaluation Job Api V1 Projects  Project Id  Evaluation Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Evaluation Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/evaluation/reports/{report_id}": {
+      "get": {
+        "operationId": "get_evaluation_report_api_v1_projects__project_id__evaluation_reports__report_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Evaluation Report Api V1 Projects  Project Id  Evaluation Reports  Report Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Evaluation Report",
+        "tags": [
+          "platform",
+          "platform"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/graph/jobs": {
       "post": {
         "operationId": "enqueue_graph_job_api_v1_projects__project_id__graph_jobs_post",
@@ -7669,6 +9063,153 @@
         "summary": "Enqueue Hypothesis Job",
         "tags": [
           "platform"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/jobs": {
+      "get": {
+        "operationId": "list_project_jobs_api_v1_projects__project_id__jobs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "-created_at",
+              "title": "Sort",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Project Jobs Api V1 Projects  Project Id  Jobs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Project Jobs",
+        "tags": [
+          "platform",
+          "jobs"
+        ]
+      },
+      "post": {
+        "operationId": "enqueue_project_job_api_v1_projects__project_id__jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenericJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Project Job Api V1 Projects  Project Id  Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Project Job",
+        "tags": [
+          "platform",
+          "jobs"
         ]
       }
     },
@@ -8811,6 +10352,50 @@
         ]
       }
     },
+    "/dashboard/admin/feedback": {
+      "get": {
+        "operationId": "admin_feedback_page_dashboard_admin_feedback_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Feedback Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/admin/feedback/export": {
+      "get": {
+        "operationId": "admin_feedback_export_dashboard_admin_feedback_export_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Feedback Export Dashboard Admin Feedback Export Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Feedback Export",
+        "tags": [
+          "web"
+        ]
+      }
+    },
     "/dashboard/admin/health": {
       "get": {
         "operationId": "admin_health_page_dashboard_admin_health_get",
@@ -8916,6 +10501,274 @@
         ]
       }
     },
+    "/dashboard/admin/support": {
+      "get": {
+        "operationId": "admin_support_console_page_dashboard_admin_support_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Support Console Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/admin/support/backup-verify": {
+      "post": {
+        "operationId": "dashboard_admin_support_backup_verify_dashboard_admin_support_backup_verify_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dashboard Admin Support Backup Verify Dashboard Admin Support Backup Verify Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dashboard Admin Support Backup Verify",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/admin/support/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "dashboard_admin_support_cancel_job_dashboard_admin_support_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dashboard Admin Support Cancel Job Dashboard Admin Support Jobs  Job Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dashboard Admin Support Cancel Job",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/admin/support/jobs/{job_id}/requeue-dead-letter": {
+      "post": {
+        "operationId": "dashboard_admin_support_requeue_dead_letter_dashboard_admin_support_jobs__job_id__requeue_dead_letter_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dashboard Admin Support Requeue Dead Letter Dashboard Admin Support Jobs  Job Id  Requeue Dead Letter Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dashboard Admin Support Requeue Dead Letter",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/admin/support/jobs/{job_id}/retry": {
+      "post": {
+        "operationId": "dashboard_admin_support_retry_job_dashboard_admin_support_jobs__job_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dashboard Admin Support Retry Job Dashboard Admin Support Jobs  Job Id  Retry Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dashboard Admin Support Retry Job",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/admin/support/migration-dry-run": {
+      "post": {
+        "operationId": "dashboard_admin_support_migration_dry_run_dashboard_admin_support_migration_dry_run_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dashboard Admin Support Migration Dry Run Dashboard Admin Support Migration Dry Run Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dashboard Admin Support Migration Dry Run",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/admin/support/readiness-check": {
+      "post": {
+        "operationId": "dashboard_admin_support_readiness_dashboard_admin_support_readiness_check_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dashboard Admin Support Readiness Dashboard Admin Support Readiness Check Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dashboard Admin Support Readiness",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/admin/support/redacted-logs": {
+      "get": {
+        "operationId": "dashboard_admin_support_redacted_logs_dashboard_admin_support_redacted_logs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dashboard Admin Support Redacted Logs Dashboard Admin Support Redacted Logs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dashboard Admin Support Redacted Logs",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/admin/support/support-bundle": {
+      "post": {
+        "operationId": "dashboard_admin_support_bundle_dashboard_admin_support_support_bundle_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dashboard Admin Support Bundle Dashboard Admin Support Support Bundle Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dashboard Admin Support Bundle",
+        "tags": [
+          "web"
+        ]
+      }
+    },
     "/dashboard/admin/teams": {
       "get": {
         "operationId": "admin_teams_page_dashboard_admin_teams_get",
@@ -8974,6 +10827,50 @@
           }
         },
         "summary": "Audit Log Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/feedback": {
+      "get": {
+        "operationId": "feedback_page_dashboard_feedback_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Feedback Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/feedback/submit": {
+      "post": {
+        "operationId": "submit_dashboard_feedback_dashboard_feedback_submit_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Submit Dashboard Feedback Dashboard Feedback Submit Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Submit Dashboard Feedback",
         "tags": [
           "web"
         ]
@@ -9378,6 +11275,99 @@
         ]
       }
     },
+    "/dashboard/projects/{project_id}/campaigns": {
+      "get": {
+        "operationId": "campaign_list_page_dashboard_projects__project_id__campaigns_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Campaign List Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/campaigns/{section}": {
+      "get": {
+        "operationId": "campaign_section_page_dashboard_projects__project_id__campaigns__section__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "section",
+            "required": true,
+            "schema": {
+              "title": "Section",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Campaign Section Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
     "/dashboard/projects/{project_id}/candidates/{candidate_name}": {
       "get": {
         "operationId": "candidate_dossier_page_dashboard_projects__project_id__candidates__candidate_name__get",
@@ -9718,6 +11708,99 @@
           }
         },
         "summary": "Design Readiness Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/evaluation": {
+      "get": {
+        "operationId": "evaluation_overview_page_dashboard_projects__project_id__evaluation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Evaluation Overview Page",
+        "tags": [
+          "web"
+        ]
+      }
+    },
+    "/dashboard/projects/{project_id}/evaluation/{section}": {
+      "get": {
+        "operationId": "evaluation_section_page_dashboard_projects__project_id__evaluation__section__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "section",
+            "required": true,
+            "schema": {
+              "title": "Section",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Evaluation Section Page",
         "tags": [
           "web"
         ]
@@ -11606,6 +13689,50 @@
         "summary": "Experiments Health",
         "tags": [
           "experiments"
+        ]
+      }
+    },
+    "/feedback": {
+      "post": {
+        "operationId": "submit_pilot_feedback_api_feedback_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PilotFeedbackApiRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Submit Pilot Feedback Api Feedback Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Pilot Feedback Api",
+        "tags": [
+          "platform",
+          "platform"
         ]
       }
     },
@@ -13787,10 +15914,128 @@
         ]
       }
     },
+    "/pilot/readiness": {
+      "post": {
+        "operationId": "run_pilot_readiness_pilot_readiness_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Pilot Readiness Pilot Readiness Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Pilot Readiness",
+        "tags": [
+          "platform",
+          "platform"
+        ]
+      }
+    },
+    "/platform/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_platform_job_platform_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Platform Job Platform Jobs  Job Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Platform Job",
+        "tags": [
+          "platform",
+          "jobs"
+        ]
+      }
+    },
     "/projects": {
       "get": {
         "operationId": "list_projects_projects_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Filter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "name",
+              "title": "Sort",
+              "type": "string"
+            }
+          },
           {
             "in": "header",
             "name": "Authorization",
@@ -14063,6 +16308,29 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -14255,6 +16523,132 @@
           }
         },
         "summary": "Create Assignment",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/campaign/jobs": {
+      "post": {
+        "operationId": "enqueue_campaign_job_projects__project_id__campaign_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Campaign Job Projects  Project Id  Campaign Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Campaign Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/campaigns/{campaign_id}/stage-gates/{stage_gate_id}/approve": {
+      "post": {
+        "operationId": "approve_campaign_stage_gate_projects__project_id__campaigns__campaign_id__stage_gates__stage_gate_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "stage_gate_id",
+            "required": true,
+            "schema": {
+              "title": "Stage Gate Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignStageGateApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Campaign Stage Gate Projects  Project Id  Campaigns  Campaign Id  Stage Gates  Stage Gate Id  Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Campaign Stage Gate",
         "tags": [
           "platform"
         ]
@@ -14572,6 +16966,114 @@
         ]
       }
     },
+    "/projects/{project_id}/evaluation/jobs": {
+      "post": {
+        "operationId": "enqueue_evaluation_job_projects__project_id__evaluation_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Evaluation Job Projects  Project Id  Evaluation Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Evaluation Job",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/evaluation/reports/{report_id}": {
+      "get": {
+        "operationId": "get_evaluation_report_projects__project_id__evaluation_reports__report_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Evaluation Report Projects  Project Id  Evaluation Reports  Report Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Evaluation Report",
+        "tags": [
+          "platform",
+          "platform"
+        ]
+      }
+    },
     "/projects/{project_id}/graph/jobs": {
       "post": {
         "operationId": "enqueue_graph_job_projects__project_id__graph_jobs_post",
@@ -14740,6 +17242,153 @@
         "summary": "Enqueue Hypothesis Job",
         "tags": [
           "platform"
+        ]
+      }
+    },
+    "/projects/{project_id}/jobs": {
+      "get": {
+        "operationId": "list_project_jobs_projects__project_id__jobs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "-created_at",
+              "title": "Sort",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Project Jobs Projects  Project Id  Jobs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Project Jobs",
+        "tags": [
+          "platform",
+          "jobs"
+        ]
+      },
+      "post": {
+        "operationId": "enqueue_project_job_projects__project_id__jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenericJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enqueue Project Job Projects  Project Id  Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Project Job",
+        "tags": [
+          "platform",
+          "jobs"
         ]
       }
     },

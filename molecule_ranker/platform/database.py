@@ -12,6 +12,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -190,6 +191,25 @@ platform_jobs = Table(
     Column("result_json", JSON, nullable=True),
 )
 
+Index(
+    "ix_platform_jobs_status_priority_created",
+    platform_jobs.c.status,
+    platform_jobs.c.priority,
+    platform_jobs.c.created_at,
+)
+Index(
+    "ix_platform_jobs_project_status_created",
+    platform_jobs.c.project_id,
+    platform_jobs.c.status,
+    platform_jobs.c.created_at,
+)
+Index(
+    "ix_platform_jobs_type_status_created",
+    platform_jobs.c.job_type,
+    platform_jobs.c.status,
+    platform_jobs.c.created_at,
+)
+
 codex_worker_jobs = Table(
     "codex_worker_jobs",
     metadata,
@@ -225,6 +245,13 @@ artifact_records = Table(
     Column("provenance_json", JSON, nullable=False, default=dict),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("metadata_json", JSON, nullable=False, default=dict),
+)
+
+Index(
+    "ix_artifact_records_project_type_created",
+    artifact_records.c.project_id,
+    artifact_records.c.artifact_type,
+    artifact_records.c.created_at,
 )
 
 project_workspaces = Table(

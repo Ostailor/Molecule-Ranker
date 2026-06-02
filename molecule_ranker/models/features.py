@@ -129,40 +129,46 @@ def featurize_model_rows(
     invalid_policy = str(config.get("invalid_structure_policy", "exclude"))
     built_rows: list[dict[str, Any]] = []
     excluded_rows: list[dict[str, str]] = []
+    batch_size = _positive_int(config.get("batch_size"), default=max(len(rows), 1))
+    progress_callback = config.get("progress_callback")
 
-    for index, item in enumerate(rows):
-        row_id = _row_id(item, index)
-        smiles = _optional_string(_value(item, "canonical_smiles") or _value(item, "smiles"))
-        mol = mol_from_smiles(smiles) if smiles else None
-        if mol is None and _requires_structure(feature_spec):
-            if invalid_policy == "mark":
-                features = {name: 0.0 for name in feature_names}
-                features["structure_valid"] = 0.0
-                built_rows.append(
-                    {
-                        "row_id": row_id,
-                        "candidate_id": _optional_string(_value(item, "candidate_id")),
-                        "candidate_name": _candidate_name(item),
-                        "features": _ordered_features(features, feature_names),
-                        "warnings": ["invalid_structure"],
-                    }
-                )
-            else:
-                excluded_rows.append({"row_id": row_id, "reason": "invalid_structure"})
-            continue
+    for batch_start in range(0, len(rows), batch_size):
+        batch = rows[batch_start : batch_start + batch_size]
+        for index, item in enumerate(batch, start=batch_start):
+            row_id = _row_id(item, index)
+            smiles = _optional_string(_value(item, "canonical_smiles") or _value(item, "smiles"))
+            mol = mol_from_smiles(smiles) if smiles else None
+            if mol is None and _requires_structure(feature_spec):
+                if invalid_policy == "mark":
+                    features = {name: 0.0 for name in feature_names}
+                    features["structure_valid"] = 0.0
+                    built_rows.append(
+                        {
+                            "row_id": row_id,
+                            "candidate_id": _optional_string(_value(item, "candidate_id")),
+                            "candidate_name": _candidate_name(item),
+                            "features": _ordered_features(features, feature_names),
+                            "warnings": ["invalid_structure"],
+                        }
+                    )
+                else:
+                    excluded_rows.append({"row_id": row_id, "reason": "invalid_structure"})
+                continue
 
-        features = _features_for_row(item, mol, feature_spec, feature_names, config)
-        built_rows.append(
-            {
-                "row_id": row_id,
-                "candidate_id": _optional_string(
-                    _value(item, "candidate_id") or _value(item, "generated_id")
-                ),
-                "candidate_name": _candidate_name(item),
-                "features": _ordered_features(features, feature_names),
-                "warnings": [],
-            }
-        )
+            features = _features_for_row(item, mol, feature_spec, feature_names, config)
+            built_rows.append(
+                {
+                    "row_id": row_id,
+                    "candidate_id": _optional_string(
+                        _value(item, "candidate_id") or _value(item, "generated_id")
+                    ),
+                    "candidate_name": _candidate_name(item),
+                    "features": _ordered_features(features, feature_names),
+                    "warnings": [],
+                }
+            )
+        if callable(progress_callback):
+            progress_callback(min(batch_start + len(batch), len(rows)), len(rows))
 
     leakage = validate_no_feature_leakage(built_rows)
     feature_schema = {**feature_schema, "leakage_check": leakage}
@@ -188,6 +194,14 @@ def validate_no_feature_leakage(rows: Sequence[Mapping[str, Any]]) -> dict[str, 
             continue
         leakage_columns.update(str(key) for key in features if str(key) in LEAKAGE_FEATURE_COLUMNS)
     return {"passed": not leakage_columns, "leakage_columns": sorted(leakage_columns)}
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _features_for_row(

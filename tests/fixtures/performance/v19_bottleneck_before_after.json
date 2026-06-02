@@ -1,0 +1,31 @@
+{
+  "fixture_id": "v19-common-bottlenecks-before-after",
+  "version": "1.9.0",
+  "purpose": "Static benchmark fixture for V1.9 operational optimization checks.",
+  "comparisons": [
+    {
+      "target": "job_queue_polling",
+      "before": "Python-side full queued-job scan for priority selection.",
+      "after": "SQL ordered claim with status/priority/created_at index.",
+      "output_equivalence": "claimed job ordering remains priority then creation time"
+    },
+    {
+      "target": "dashboard_job_list_pages",
+      "before": "fixed 100-row list rendering",
+      "after": "bounded limit/offset pagination",
+      "output_equivalence": "same newest-first ordering within requested page"
+    },
+    {
+      "target": "artifact_json_loading",
+      "before": "unbounded read_text plus json.loads in common paths",
+      "after": "bounded json.load helper and top-level array streaming helper",
+      "output_equivalence": "same parsed JSON when artifact is under configured memory bound"
+    },
+    {
+      "target": "workspace_summary",
+      "before": "summary counts recomputed from workspace model on each caller path",
+      "after": "mtime/size keyed summary cache invalidated by workspace saves",
+      "output_equivalence": "same run/artifact/codex counts after cache miss or invalidation"
+    }
+  ]
+}

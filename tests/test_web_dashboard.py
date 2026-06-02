@@ -128,6 +128,7 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/projects/workspace-a/candidates/Rasagiline",
         "/dashboard/projects/workspace-a/codex",
         "/dashboard/notifications",
+        "/dashboard/feedback",
         "/dashboard/audit",
         "/dashboard/admin",
         "/dashboard/admin/users",
@@ -139,6 +140,8 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/admin/jobs",
         "/dashboard/admin/health",
         "/dashboard/admin/codex-worker",
+        "/dashboard/admin/support",
+        "/dashboard/admin/feedback",
     ]:
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 303
@@ -680,6 +683,8 @@ def test_admin_dashboard_pages_render_for_admin(tmp_path: Path) -> None:
         "/dashboard/admin/jobs": "Job queue",
         "/dashboard/admin/health": "System health",
         "/dashboard/admin/codex-worker": "Codex worker status",
+        "/dashboard/admin/support": "Admin support console",
+        "/dashboard/admin/feedback": "Pilot feedback admin",
     }
     for path, snippet in expectations.items():
         response = client.get(path)
@@ -756,6 +761,55 @@ def test_admin_jobs_page_explains_status_and_errors(tmp_path: Path) -> None:
     assert queued.job_id in response.text
     assert failed.job_id in response.text
     assert "Codex provider is not configured." in response.text
+
+
+def test_admin_job_dashboard_paginates_jobs(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    app = cast(Any, client.app)
+    admin = app.state.platform_database.list_users()[0]
+    jobs = [
+        app.state.platform_database.enqueue_job(
+            job_type="dashboard_build",
+            requested_by_user_id=admin.user_id,
+            project_id="workspace-a",
+        )
+        for _ in range(5)
+    ]
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/admin/jobs?limit=2&offset=2")
+
+    assert response.status_code == 200
+    assert "Showing 3-4" in response.text
+    assert jobs[4].job_id not in response.text
+    assert jobs[2].job_id in response.text
+    assert jobs[1].job_id in response.text
+
+
+def test_admin_jobs_api_paginates_jobs(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    app = cast(Any, client.app)
+    admin = app.state.platform_database.list_users()[0]
+    for _ in range(5):
+        app.state.platform_database.enqueue_job(
+            job_type="dashboard_build",
+            requested_by_user_id=admin.user_id,
+            project_id="workspace-a",
+        )
+    headers = _api_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/admin/jobs?limit=2&offset=2", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"] == {
+        "limit": 2,
+        "offset": 2,
+        "count": 2,
+        "next_offset": 4,
+        "previous_offset": 0,
+    }
+    assert len(payload["jobs"]) == 2
 
 
 def test_dashboard_rbac_hides_unauthorized_projects(tmp_path: Path) -> None:

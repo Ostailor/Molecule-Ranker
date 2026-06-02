@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections import Counter
+from typing import Any
+
 from molecule_ranker.literature.schemas import LiteratureEvidenceBundle
 
 
@@ -24,6 +27,22 @@ def literature_quality_score(bundle: LiteratureEvidenceBundle) -> float:
         + review_bonus
         - retraction_penalty
     )
+
+
+def aggregate_literature_claims(bundle: LiteratureEvidenceBundle) -> dict[str, Any]:
+    claim_type_counts = Counter(claim.claim_type for claim in bundle.claims)
+    direction_counts = Counter(claim.direction for claim in bundle.claims)
+    paper_ids = {claim.paper_id for claim in bundle.claims}
+    return {
+        "claim_count": len(bundle.claims),
+        "paper_count": len(bundle.papers),
+        "claiming_paper_count": len(paper_ids),
+        "claim_type_counts": dict(sorted(claim_type_counts.items())),
+        "direction_counts": dict(sorted(direction_counts.items())),
+        "clinical_paper_count": sum(1 for paper in bundle.papers if paper.is_clinical),
+        "review_paper_count": sum(1 for paper in bundle.papers if paper.is_review),
+        "retracted_paper_count": sum(1 for paper in bundle.papers if paper.is_retracted),
+    }
 
 
 def _clamp(value: float) -> float:

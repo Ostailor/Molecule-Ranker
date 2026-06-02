@@ -8,6 +8,7 @@ from typing import Any
 from molecule_ranker.codex_backbone.provider import CodexBackboneProvider
 from molecule_ranker.codex_backbone.schemas import CodexBackboneConfig, CodexTaskResult
 from molecule_ranker.utils import slugify
+from molecule_ranker.utils.json_io import load_json_file
 from molecule_ranker.workspace.artifact_registry import ArtifactRegistry
 from molecule_ranker.workspace.audit import WorkspaceAuditLogger
 from molecule_ranker.workspace.run_manager import (
@@ -23,6 +24,7 @@ class ProjectWorkspaceStore:
         self.root_dir = root_dir.resolve()
         self.state_dir = self.root_dir / ".molecule-ranker"
         self.workspace_path = self.state_dir / "workspace.json"
+        self.summary_cache_path = self.state_dir / "workspace_summary_cache.json"
         self.codex_output_dir = self.state_dir / "codex_project_outputs"
         self.audit = WorkspaceAuditLogger(self.root_dir)
 
@@ -47,7 +49,7 @@ class ProjectWorkspaceStore:
     def load(self) -> ProjectWorkspace:
         if not self.workspace_path.exists():
             raise ValueError(f"Workspace does not exist: {self.workspace_path}")
-        return ProjectWorkspace.model_validate(json.loads(self.workspace_path.read_text()))
+        return ProjectWorkspace.model_validate(load_json_file(self.workspace_path))
 
     def load_or_create(
         self,
@@ -65,7 +67,63 @@ class ProjectWorkspaceStore:
         self.workspace_path.write_text(
             json.dumps(workspace.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
         )
+        self.invalidate_summary_cache()
         return workspace
+
+    def workspace_summary(
+        self,
+        workspace: ProjectWorkspace | None = None,
+    ) -> dict[str, Any]:
+        marker = self._summary_cache_marker()
+        if workspace is None and self.summary_cache_path.exists():
+            try:
+                cached = json.loads(self.summary_cache_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                cached = None
+            if isinstance(cached, dict) and cached.get("cache_marker") == marker:
+                payload = dict(cached.get("summary") or {})
+                payload["cache_status"] = "hit"
+                return payload
+        active_workspace = workspace or self.load()
+        summary = {
+            "workspace_id": active_workspace.workspace_id,
+            "name": active_workspace.name,
+            "root_dir": active_workspace.root_dir,
+            "run_count": len(active_workspace.runs),
+            "artifact_count": len(active_workspace.artifacts),
+            "codex_output_count": len(active_workspace.codex_outputs),
+            "updated_at": active_workspace.updated_at.isoformat(),
+            "cache_status": "miss",
+        }
+        self.summary_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        self.summary_cache_path.write_text(
+            json.dumps(
+                {
+                    "cache_marker": marker,
+                    "summary": {
+                        key: value
+                        for key, value in summary.items()
+                        if key != "cache_status"
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return summary
+
+    def invalidate_summary_cache(self) -> None:
+        try:
+            self.summary_cache_path.unlink()
+        except FileNotFoundError:
+            return
+
+    def _summary_cache_marker(self) -> dict[str, int]:
+        if not self.workspace_path.exists():
+            return {"mtime_ns": 0, "size_bytes": 0}
+        stat = self.workspace_path.stat()
+        return {"mtime_ns": stat.st_mtime_ns, "size_bytes": stat.st_size}
 
     def register_run_dir(
         self,

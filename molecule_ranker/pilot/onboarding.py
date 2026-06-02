@@ -1,0 +1,14 @@
+from __future__ import annotations
+
+
+def pilot_onboarding_checklist() -> list[str]:
+    return [
+        "Confirm V1.9.0 version and V1 contract identifiers.",
+        "Confirm internal research use only boundaries.",
+        "Confirm generated molecules remain computational hypotheses.",
+        "Confirm Codex outputs are assistant artifacts, not evidence or decisions.",
+        "Confirm support and feedback workflows do not collect secrets.",
+    ]
+
+
+__all__ = ["pilot_onboarding_checklist"]

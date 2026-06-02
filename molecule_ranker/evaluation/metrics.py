@@ -170,14 +170,13 @@ def balanced_accuracy(
     pairs = _binary_prediction_pairs(labels, predictions, scores=scores, threshold=threshold)
     if pairs is None or not pairs:
         return _undefined("balanced_accuracy", "classification", "no_labels_or_predictions")
-    positives = [pair for pair in pairs if pair[0] == 1]
-    negatives = [pair for pair in pairs if pair[0] == 0]
-    if not positives or not negatives:
+    counts = _confusion_counts(pairs)
+    if counts["positive"] == 0 or counts["negative"] == 0:
         return _undefined(
             "balanced_accuracy", "classification", "requires_positive_and_negative_labels"
         )
-    tpr = sum(yhat == 1 for _y, yhat in positives) / len(positives)
-    tnr = sum(yhat == 0 for _y, yhat in negatives) / len(negatives)
+    tpr = counts["true_positive"] / counts["positive"]
+    tnr = counts["true_negative"] / counts["negative"]
     return _metric("balanced_accuracy", "classification", (tpr + tnr) / 2)
 
 
@@ -185,13 +184,13 @@ def precision(labels: Sequence[Number], predictions: Sequence[Number]) -> Evalua
     pairs = _binary_prediction_pairs(labels, predictions)
     if pairs is None or not pairs:
         return _undefined("precision", "classification", "no_labels_or_predictions")
-    predicted_positive = [pair for pair in pairs if pair[1] == 1]
-    if not predicted_positive:
+    counts = _confusion_counts(pairs)
+    if counts["predicted_positive"] == 0:
         return _undefined("precision", "classification", "no_predicted_positive_labels")
     return _metric(
         "precision",
         "classification",
-        sum(y == 1 for y, _ in predicted_positive) / len(predicted_positive),
+        counts["true_positive"] / counts["predicted_positive"],
     )
 
 
@@ -199,12 +198,10 @@ def recall(labels: Sequence[Number], predictions: Sequence[Number]) -> Evaluatio
     pairs = _binary_prediction_pairs(labels, predictions)
     if pairs is None or not pairs:
         return _undefined("recall", "classification", "no_labels_or_predictions")
-    positives = [pair for pair in pairs if pair[0] == 1]
-    if not positives:
+    counts = _confusion_counts(pairs)
+    if counts["positive"] == 0:
         return _undefined("recall", "classification", "no_positive_labels")
-    return _metric(
-        "recall", "classification", sum(yhat == 1 for _y, yhat in positives) / len(positives)
-    )
+    return _metric("recall", "classification", counts["true_positive"] / counts["positive"])
 
 
 def f1(labels: Sequence[Number], predictions: Sequence[Number]) -> EvaluationMetric:
@@ -602,6 +599,32 @@ def _binary_prediction_pairs(
         (1 if _positive(label) else 0, 1 if _positive(prediction) else 0)
         for label, prediction in zip(labels, predictions, strict=True)
     ]
+
+
+def _confusion_counts(pairs: Sequence[tuple[int, int]]) -> dict[str, int]:
+    true_positive = 0
+    true_negative = 0
+    positive = 0
+    negative = 0
+    predicted_positive = 0
+    for label, prediction in pairs:
+        if label == 1:
+            positive += 1
+            if prediction == 1:
+                true_positive += 1
+        else:
+            negative += 1
+            if prediction == 0:
+                true_negative += 1
+        if prediction == 1:
+            predicted_positive += 1
+    return {
+        "true_positive": true_positive,
+        "true_negative": true_negative,
+        "positive": positive,
+        "negative": negative,
+        "predicted_positive": predicted_positive,
+    }
 
 
 def _regression_pairs(

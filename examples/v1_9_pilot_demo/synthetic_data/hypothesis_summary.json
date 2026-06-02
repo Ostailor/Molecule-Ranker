@@ -1,0 +1,10 @@
+{
+  "hypothesis_id": "synthetic-hypothesis-001",
+  "title": "Synthetic prioritization hypothesis",
+  "summary": "Operational hypothesis record for UI demonstration only.",
+  "generated_from": [
+    "SYN-SRC-001",
+    "SYN-GEN-001"
+  ],
+  "boundary": "Hypotheses are planning artifacts, not biomedical evidence."
+}

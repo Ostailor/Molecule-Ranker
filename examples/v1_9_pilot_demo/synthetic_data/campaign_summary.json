@@ -1,0 +1,13 @@
+{
+  "campaign_id": "synthetic-campaign-001",
+  "name": "Synthetic pilot review campaign",
+  "status": "planning_demo",
+  "work_packages": [
+    {
+      "work_package_id": "synthetic-wp-001",
+      "title": "Artifact completeness review",
+      "description": "Review synthetic metadata completeness for pilot onboarding."
+    }
+  ],
+  "boundary": "Campaign plans are research-management artifacts, not lab protocols."
+}

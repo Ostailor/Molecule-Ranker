@@ -904,6 +904,7 @@ class PipelineWorker(BaseWorker):
                 "experiment_import",
                 "active_learning",
                 "review_export",
+                "external_export",
                 "dashboard_build",
                 *PORTFOLIO_JOB_TYPES,
                 *GRAPH_JOB_TYPES,

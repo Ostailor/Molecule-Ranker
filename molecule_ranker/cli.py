@@ -399,6 +399,30 @@ campaign_app = typer.Typer(
     help="V1.7 closed-loop campaign planning and budget-aware execution commands.",
     no_args_is_help=True,
 )
+pilot_app = typer.Typer(
+    help="V1.9 enterprise/internal pilot readiness audit commands.",
+    no_args_is_help=True,
+)
+performance_app = typer.Typer(
+    help="V1.9 synthetic performance profiling and report commands.",
+    no_args_is_help=True,
+)
+migrate_app = typer.Typer(
+    help="V1.9 artifact, database, and compatibility migration tooling.",
+    no_args_is_help=True,
+)
+support_app = typer.Typer(
+    help="Enterprise pilot support bundle and redaction commands.",
+    no_args_is_help=True,
+)
+ops_app = typer.Typer(
+    help="Enterprise pilot operational metrics, alerts, and health history.",
+    no_args_is_help=True,
+)
+feedback_app = typer.Typer(
+    help="Enterprise pilot feedback capture commands.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
@@ -425,6 +449,12 @@ app.add_typer(structure_app, name="structure")
 app.add_typer(graph_app, name="graph")
 app.add_typer(hypothesis_app, name="hypothesis")
 app.add_typer(campaign_app, name="campaign")
+app.add_typer(pilot_app, name="pilot")
+app.add_typer(performance_app, name="performance")
+app.add_typer(migrate_app, name="migrate")
+app.add_typer(support_app, name="support")
+app.add_typer(ops_app, name="ops")
+app.add_typer(feedback_app, name="feedback")
 model_app.add_typer(model_dataset_app, name="dataset")
 model_app.add_typer(model_registry_app, name="registry")
 eval_app.add_typer(eval_suite_app, name="suite")
@@ -452,6 +482,78 @@ def main() -> None:
 def version() -> None:
     """Print the package version."""
     typer.echo(__version__)
+
+
+@app.command("doctor")
+def doctor_command(
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+    root_dir: Annotated[
+        Path,
+        typer.Option(
+            "--root",
+            file_okay=False,
+            dir_okay=True,
+            help="Repository or deployment root.",
+        ),
+    ] = Path("."),
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+) -> None:
+    """Run enterprise pilot diagnostics."""
+    from molecule_ranker.pilot.readiness import PilotReadinessConfig, run_pilot_readiness_audit
+    from molecule_ranker.pilot.usability import run_usability_checks
+
+    readiness = run_pilot_readiness_audit(
+        PilotReadinessConfig.synthetic_dev(root_dir=root_dir, database_path=db_path)
+    )
+    usability = run_usability_checks(root_dir)
+    payload = {
+        "version": __version__,
+        "pilot_readiness": readiness.model_dump(mode="json"),
+        "usability": usability,
+    }
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo("molecule-ranker doctor")
+        typer.echo(
+            "Pilot readiness: "
+            f"{readiness.passed_count} pass, {readiness.warning_count} warn, "
+            f"{readiness.failed_count} fail"
+        )
+        typer.echo(
+            "Usability: "
+            f"{usability['passed_count']} pass, {usability['failed_count']} fail"
+        )
+    if readiness.failed_count or usability["failed_count"]:
+        raise typer.Exit(code=1)
+
+
+@app.command("next-steps")
+def next_steps_command(
+    run_dir: Annotated[Path, typer.Argument(file_okay=False, dir_okay=True)],
+) -> None:
+    """Suggest safe operational next steps for a run directory."""
+    from molecule_ranker.pilot.usability import next_steps_for_run
+
+    typer.echo(f"Next steps for {run_dir}:")
+    for step in next_steps_for_run(run_dir):
+        typer.echo(f"- {step}")
+
+
+@app.command("explain-error")
+def explain_error_command(
+    error_code: Annotated[str, typer.Argument(help="Error code to explain.")],
+) -> None:
+    """Explain an error code with safe remediation guidance."""
+    from molecule_ranker.pilot.usability import explain_error
+
+    explanation = explain_error(error_code)
+    typer.echo(explanation["title"])
+    typer.echo(f"Meaning: {explanation['meaning']}")
+    typer.echo(f"Remediation: {explanation['remediation']}")
 
 
 @release_app.command("manifest")
@@ -523,6 +625,653 @@ def release_notes_command(
     notes = render_release_notes(build_release_manifest(root_dir))
     target = write_release_notes(notes, output)
     typer.echo(str(target.resolve()))
+
+
+@pilot_app.command("readiness")
+def pilot_readiness_command(
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional Markdown or JSON report output."),
+    ] = None,
+    root_dir: Annotated[
+        Path,
+        typer.Option(
+            "--root",
+            file_okay=False,
+            dir_okay=True,
+            help="Repository or deployment root.",
+        ),
+    ] = Path("."),
+    environment: Annotated[str, typer.Option("--environment", help="Pilot environment name.")] = (
+        "development"
+    ),
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    artifact_storage_path: Annotated[
+        Path,
+        typer.Option("--artifact-storage-path", help="Artifact storage directory."),
+    ] = Path(".molecule-ranker/artifacts"),
+    backup_path: Annotated[
+        Path | None,
+        typer.Option("--backup-path", help="Backup directory. Omit for warning."),
+    ] = Path(".molecule-ranker/backups"),
+    secret_key: Annotated[
+        str | None,
+        typer.Option("--secret-key", envvar="MOLECULE_RANKER_SECRET_KEY", help="Auth secret."),
+    ] = None,
+    worker_healthy: Annotated[
+        bool,
+        typer.Option("--worker-healthy/--worker-unhealthy", help="Declare worker queue health."),
+    ] = True,
+) -> None:
+    """Run the V1.9 enterprise/internal pilot readiness audit."""
+    from molecule_ranker.pilot.readiness import PilotReadinessConfig, run_pilot_readiness_audit
+    from molecule_ranker.pilot.reports import (
+        pilot_readiness_report_to_json,
+        render_pilot_readiness_markdown,
+        write_pilot_readiness_report,
+    )
+
+    config = PilotReadinessConfig.synthetic_dev(
+        root_dir=root_dir,
+        environment=environment,  # type: ignore[arg-type]
+        database_path=db_path,
+        database_url=database_url,
+        artifact_storage_path=artifact_storage_path,
+        backup_path=backup_path,
+        secret_key=secret_key,
+        worker_queue_healthy=worker_healthy,
+    )
+    report = run_pilot_readiness_audit(config)
+    if output is not None:
+        target = write_pilot_readiness_report(report, output)
+        typer.echo(str(target.resolve()))
+    elif json_output:
+        typer.echo(pilot_readiness_report_to_json(report))
+    else:
+        typer.echo(render_pilot_readiness_markdown(report))
+    if report.failed_count:
+        raise typer.Exit(code=1)
+
+
+@pilot_app.command("release-gate")
+def pilot_release_gate_command(
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Repository or pilot root."),
+    ] = Path("."),
+    evidence_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--evidence-dir",
+            file_okay=False,
+            dir_okay=True,
+            help="Directory containing pilot release-gate evidence markers.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+) -> None:
+    """Run the V1.9 pilot release gate."""
+    from molecule_ranker.pilot.release_gate import (
+        PilotReleaseGateConfig,
+        run_pilot_release_gate,
+    )
+
+    report = run_pilot_release_gate(
+        PilotReleaseGateConfig(
+            root_dir=root_dir,
+            evidence_dir=evidence_dir,
+            database_path=db_path,
+            database_url=database_url,
+        )
+    )
+    if json_output:
+        _echo_json(report)
+    else:
+        typer.echo(f"Pilot release gate: {report['status']}")
+        typer.echo(
+            "Checks: "
+            f"{report['summary']['pass']} pass, "
+            f"{report['summary']['warn']} warn, "
+            f"{report['summary']['fail']} fail"
+        )
+        for check in report["checks"]:
+            if check["status"] != "pass":
+                typer.echo(f"- {check['status']}: {check['check_id']}: {check['message']}")
+    if report["status"] != "pass":
+        raise typer.Exit(code=1)
+
+
+@pilot_app.command("exit-review")
+def pilot_exit_review_command(
+    project_id: Annotated[str, typer.Option("--project-id", help="Pilot project ID.")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Repository or pilot root."),
+    ] = Path("."),
+    evidence_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--evidence-dir",
+            file_okay=False,
+            dir_okay=True,
+            help="Directory containing pilot release-gate evidence markers.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+) -> None:
+    """Build an operational pilot exit review summary."""
+    from molecule_ranker.pilot.release_gate import (
+        PilotReleaseGateConfig,
+        build_pilot_exit_review,
+        render_pilot_exit_review_markdown,
+    )
+
+    review = build_pilot_exit_review(
+        project_id=project_id,
+        config=PilotReleaseGateConfig(
+            root_dir=root_dir,
+            evidence_dir=evidence_dir,
+            database_path=db_path,
+            database_url=database_url,
+        ),
+    )
+    if json_output:
+        _echo_json(review)
+    else:
+        typer.echo(render_pilot_exit_review_markdown(review))
+    if review["decision"] == "stop":
+        raise typer.Exit(code=1)
+
+
+@performance_app.command("profile")
+def performance_profile_command(
+    workflow: Annotated[
+        str,
+        typer.Option("--workflow", help="Synthetic workflow baseline to profile."),
+    ] = "golden",
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            dir_okay=True,
+            help="Directory for performance_report.json and performance_report.md.",
+        ),
+    ] = Path("."),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the redacted profile JSON after writing reports."),
+    ] = False,
+) -> None:
+    """Run a synthetic V1.9 baseline performance profile without live API calls."""
+    from molecule_ranker.performance.profiler import profile_synthetic_workflow
+    from molecule_ranker.performance.reports import (
+        performance_profile_to_json,
+        write_performance_reports,
+    )
+
+    try:
+        profile = profile_synthetic_workflow(workflow)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    json_path, markdown_path = write_performance_reports(profile, output_dir)
+    if json_output:
+        typer.echo(performance_profile_to_json(profile))
+    else:
+        typer.echo(str(json_path.resolve()))
+        typer.echo(str(markdown_path.resolve()))
+
+
+@performance_app.command("report")
+def performance_report_command(
+    from_profile: Annotated[
+        Path,
+        typer.Option(
+            "--from-profile",
+            exists=True,
+            dir_okay=False,
+            help="Path to performance_report.json.",
+        ),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional Markdown report output path."),
+    ] = None,
+) -> None:
+    """Render a Markdown report from an existing performance profile JSON."""
+    from molecule_ranker.performance.reports import (
+        load_performance_profile,
+        render_performance_markdown,
+        write_performance_markdown_report,
+    )
+
+    profile = load_performance_profile(from_profile)
+    if output is None:
+        typer.echo(render_performance_markdown(profile))
+        return
+    target = write_performance_markdown_report(profile, output)
+    typer.echo(str(target.resolve()))
+
+
+@migrate_app.command("artifacts")
+def migrate_artifacts_command(
+    path: Annotated[
+        Path,
+        typer.Option("--path", file_okay=False, dir_okay=True, help="Artifact/results directory."),
+    ],
+    target_version: Annotated[
+        str,
+        typer.Option("--target-version", help="Target artifact contract version."),
+    ] = "1.9",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run/--apply", help="Plan migration without changing artifacts."),
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional Markdown migration report path."),
+    ] = None,
+) -> None:
+    """Migrate recognized artifact contracts with backups and a manifest."""
+    from molecule_ranker.migrations.artifact_migrations import migrate_artifacts
+    from molecule_ranker.migrations.reports import render_migration_manifest_markdown
+
+    try:
+        manifest = migrate_artifacts(path, target_version=target_version, dry_run=dry_run)
+    except Exception as exc:
+        typer.echo(f"Migration error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(render_migration_manifest_markdown(manifest), encoding="utf-8")
+    _echo_json(manifest.model_dump(mode="json"))
+
+
+@migrate_app.command("db")
+def migrate_db_command(
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Secrets are redacted in command output.",
+        ),
+    ] = None,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run/--apply", help="Check planned DB migration actions only."),
+    ] = False,
+) -> None:
+    """Initialize or update the platform database schema."""
+    from molecule_ranker.migrations.db_migrations import migrate_database
+
+    try:
+        report = migrate_database(
+            root_dir=root_dir,
+            database_url=database_url,
+            db_path=db_path,
+            dry_run=dry_run,
+        )
+    except Exception as exc:
+        typer.echo(f"Database migration error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_json(report.model_dump(mode="json"))
+
+
+@migrate_app.command("check")
+def migrate_check_command(
+    root: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    target_version: Annotated[
+        str,
+        typer.Option("--target-version", help="Target artifact contract version."),
+    ] = "1.9",
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="Optional platform database URL for migration checks.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="Optional SQLite platform database path."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            dir_okay=False,
+            help="Optional Markdown compatibility report path.",
+        ),
+    ] = None,
+) -> None:
+    """Check V1.9 artifact and database compatibility without mutating artifacts."""
+    from molecule_ranker.migrations.compatibility import run_compatibility_check
+    from molecule_ranker.migrations.reports import render_compatibility_report_markdown
+
+    try:
+        report = run_compatibility_check(
+            root,
+            target_version=target_version,
+            database_url=database_url,
+            db_path=db_path,
+        )
+    except Exception as exc:
+        typer.echo(f"Compatibility check error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(render_compatibility_report_markdown(report), encoding="utf-8")
+    _echo_json(report.model_dump(mode="json"))
+
+
+@support_app.command("bundle")
+def support_bundle_command(
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Support bundle ZIP output path."),
+    ],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Pilot deployment root."),
+    ] = Path("."),
+    include_codex_transcripts: Annotated[
+        bool,
+        typer.Option(
+            "--include-codex-transcripts",
+            help="Include selected redacted Codex transcripts. Disabled by default.",
+        ),
+    ] = False,
+    allow_raw_assay_files: Annotated[
+        bool,
+        typer.Option(
+            "--allow-raw-assay-files",
+            help="Allow selected raw assay files. Disabled by default.",
+        ),
+    ] = False,
+) -> None:
+    """Create a redacted enterprise pilot support bundle."""
+    from molecule_ranker.pilot.support_bundle import create_support_bundle
+
+    try:
+        result = create_support_bundle(
+            root_dir=root_dir,
+            output_path=output,
+            include_codex_transcripts=include_codex_transcripts,
+            allow_raw_assay_files=allow_raw_assay_files,
+        )
+    except Exception as exc:
+        typer.echo(f"Support bundle error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(str(result.output_path))
+
+
+@support_app.command("redact")
+def support_redact_command(
+    input_path: Annotated[
+        Path,
+        typer.Option("--input", exists=True, dir_okay=False, help="Input text/log file."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Redacted output file."),
+    ],
+) -> None:
+    """Write a redacted copy of a text or log file."""
+    from molecule_ranker.pilot.support_bundle import redact_file
+
+    try:
+        target = redact_file(input_path, output)
+    except Exception as exc:
+        typer.echo(f"Redaction error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(str(target.resolve()))
+
+
+@ops_app.command("metrics")
+def ops_metrics_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Pilot deployment root."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="Optional platform database URL.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="Optional SQLite platform database path."),
+    ] = None,
+    backup_path: Annotated[
+        Path | None,
+        typer.Option("--backup-path", help="Backup directory for stale-backup monitoring."),
+    ] = None,
+) -> None:
+    """Emit redacted pilot ops metrics dashboard JSON."""
+    from molecule_ranker.pilot.ops_observability import build_ops_metrics
+
+    _echo_json(
+        build_ops_metrics(
+            root_dir=root_dir,
+            database_url=database_url,
+            db_path=db_path,
+            backup_path=backup_path,
+        )
+    )
+
+
+@ops_app.command("alerts")
+def ops_alerts_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Pilot deployment root."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="Optional platform database URL.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="Optional SQLite platform database path."),
+    ] = None,
+    backup_path: Annotated[
+        Path | None,
+        typer.Option("--backup-path", help="Backup directory for stale-backup monitoring."),
+    ] = None,
+) -> None:
+    """Evaluate pilot alert rules and emit redacted JSON."""
+    from molecule_ranker.pilot.ops_observability import build_ops_alerts, build_ops_metrics
+
+    metrics_report = build_ops_metrics(
+        root_dir=root_dir,
+        database_url=database_url,
+        db_path=db_path,
+        backup_path=backup_path,
+    )
+    _echo_json(build_ops_alerts(metrics_report))
+
+
+@ops_app.command("health-history")
+def ops_health_history_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Pilot deployment root."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="Optional platform database URL.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="Optional SQLite platform database path."),
+    ] = None,
+    backup_path: Annotated[
+        Path | None,
+        typer.Option("--backup-path", help="Backup directory for stale-backup monitoring."),
+    ] = None,
+) -> None:
+    """Emit health trend summaries for pilot operations."""
+    from molecule_ranker.pilot.ops_observability import build_health_history
+
+    _echo_json(
+        build_health_history(
+            root_dir=root_dir,
+            database_url=database_url,
+            db_path=db_path,
+            backup_path=backup_path,
+        )
+    )
+
+
+@feedback_app.command("submit")
+def feedback_submit_command(
+    text: Annotated[str, typer.Argument(help="Feedback text. Secrets are redacted.")],
+    feedback_type: Annotated[
+        str,
+        typer.Option(
+            "--type",
+            help="Feedback type: usability_issue, feature_request, bug_report, workflow_friction.",
+        ),
+    ] = "usability_issue",
+    user_id: Annotated[str, typer.Option("--user-id", help="Pilot user identifier.")] = "cli-user",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    page_or_command: Annotated[
+        str,
+        typer.Option("--page-or-command", help="Page or CLI command where feedback occurred."),
+    ] = "cli",
+    severity: Annotated[
+        str,
+        typer.Option("--severity", help="Severity: low, medium, high, critical."),
+    ] = "medium",
+    artifact_ref: Annotated[
+        list[str] | None,
+        typer.Option("--artifact-ref", help="Referenced artifact ID. Repeatable."),
+    ] = None,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Pilot root directory."),
+    ] = Path("."),
+) -> None:
+    """Submit pilot feedback as operational input, not scientific evidence."""
+    from molecule_ranker.pilot.feedback import submit_feedback
+
+    try:
+        feedback = submit_feedback(
+            root_dir=root_dir,
+            user_id=user_id,
+            project_id=project_id,
+            page_or_command=page_or_command,
+            feedback_type=feedback_type,  # type: ignore[arg-type]
+            severity=severity,  # type: ignore[arg-type]
+            text=text,
+            artifact_refs=artifact_ref or [],
+        )
+    except Exception as exc:
+        typer.echo(f"Feedback submit error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_json(feedback.model_dump(mode="json"))
+
+
+@feedback_app.command("list")
+def feedback_list_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Pilot root directory."),
+    ] = Path("."),
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    status_filter: Annotated[
+        str | None,
+        typer.Option("--status", help="Filter by status."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
+) -> None:
+    """List redacted pilot feedback records."""
+    from molecule_ranker.pilot.feedback import PilotFeedbackStore
+
+    feedback = PilotFeedbackStore(root_dir).list(
+        project_id=project_id,
+        status=status_filter,  # type: ignore[arg-type]
+        limit=limit,
+    )
+    _echo_json({"feedback": [item.model_dump(mode="json") for item in feedback]})
+
+
+@feedback_app.command("export")
+def feedback_export_command(
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Feedback export JSON path."),
+    ],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Pilot root directory."),
+    ] = Path("."),
+    include_artifact_payloads: Annotated[
+        bool,
+        typer.Option(
+            "--include-artifact-payloads",
+            help="Reserved explicit opt-in; default export includes artifact refs only.",
+        ),
+    ] = False,
+) -> None:
+    """Export pilot feedback without cache or raw artifact payloads by default."""
+    from molecule_ranker.pilot.feedback import export_feedback
+
+    path = export_feedback(
+        root_dir,
+        output,
+        include_artifact_payloads=include_artifact_payloads,
+    )
+    typer.echo(str(path.resolve()))
 
 
 @validate_app.command("golden")
@@ -6262,11 +7011,16 @@ def project_register_run(
 ) -> None:
     """Register one completed molecule-ranker run directory in the project workspace."""
     try:
-        store = LegacyProjectWorkspaceStore(root_dir)
+        workspace_store = WorkspaceProjectStore(root_dir)
+        store = (
+            workspace_store
+            if workspace_store.workspace_path.exists()
+            else LegacyProjectWorkspaceStore(root_dir)
+        )
         workspace = store.register_run_dir(run_dir, run_id=run_id)
         resolved_run_dir = str(run_dir.resolve())
         project_run = next(run for run in workspace.runs if run.run_dir == resolved_run_dir)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, StopIteration, ValueError, json.JSONDecodeError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     if json_output:

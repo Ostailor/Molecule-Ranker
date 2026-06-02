@@ -93,6 +93,11 @@ def test_signed_token_expiration() -> None:
         manager.verify(token)
 
 
+def test_hosted_app_rejects_short_auth_secret_at_startup(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Hosted auth secret must be at least 32 characters"):
+        create_app(root_dir=tmp_path, hosted_mode=True, auth_secret="too-short")
+
+
 def test_service_account_token_hash_storage_and_revoke(tmp_path: Path) -> None:
     client = _client(tmp_path)
     headers = _login(client)

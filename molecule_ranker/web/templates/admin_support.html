@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Admin support console</h1>
+  <p class="muted">Pilot operations, recovery, migration, backup, and support workflows.</p>
+</header>
+
+{% if action_result %}
+  <p class="notice">{{ action_result }}</p>
+{% endif %}
+
+<section class="section">
+  <h2>Operations summary</h2>
+  <div class="panel">
+    <p>Pilot readiness: {{ console.pilot_readiness.passed_count }} pass, {{ console.pilot_readiness.warning_count }} warn, {{ console.pilot_readiness.failed_count }} fail</p>
+    <p>Worker status: {{ console.worker_status.status }}</p>
+    <p>Queue backlog: {{ console.queue_backlog.queued_count }}</p>
+    <p>Storage usage: {{ console.storage_usage.artifact_file_count }} files, {{ console.storage_usage.artifact_bytes }} bytes</p>
+    <p>Backup status: {% if console.backup_status.stale %}stale{% else %}current{% endif %}</p>
+    <p>Retention status: {{ console.retention_status.scope_type }}:{{ console.retention_status.scope_id }}</p>
+    <p>Migration status: {% if console.migration_status.migrations_current %}current{% else %}pending{% endif %}</p>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Support actions</h2>
+  <div class="panel">
+    <form method="post" action="/dashboard/admin/support/support-bundle"><button class="button" type="submit">Generate support bundle</button></form>
+    <form method="post" action="/dashboard/admin/support/readiness-check"><button class="button" type="submit">Run readiness check</button></form>
+    <form method="post" action="/dashboard/admin/support/migration-dry-run"><button class="button" type="submit">Run migration dry-run</button></form>
+    <form method="post" action="/dashboard/admin/support/backup-verify"><button class="button" type="submit">Run backup verification</button></form>
+    <p><a href="/dashboard/admin/support/redacted-logs">View redacted logs</a></p>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Failed jobs</h2>
+  <table>
+    <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Error</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for job in console.failed_jobs %}
+        <tr>
+          <td>{{ job.job_id }}</td>
+          <td>{{ job.job_type }}</td>
+          <td><span class="status-badge status-{{ job.status }}">{{ job.status }}</span></td>
+          <td>{{ job.error_summary }}</td>
+          <td>
+            <form method="post" action="/dashboard/admin/support/jobs/{{ job.job_id }}/retry"><button class="button" type="submit">Retry</button></form>
+            <form method="post" action="/dashboard/admin/support/jobs/{{ job.job_id }}/cancel"><button class="button" type="submit">Cancel</button></form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5">No failed jobs.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="section">
+  <h2>Dead-letter jobs</h2>
+  <table>
+    <thead><tr><th>Job</th><th>Type</th><th>Error</th><th>Action</th></tr></thead>
+    <tbody>
+      {% for job in console.dead_letter_jobs %}
+        <tr>
+          <td>{{ job.job_id }}</td>
+          <td>{{ job.job_type }}</td>
+          <td>{{ job.error_summary }}</td>
+          <td><form method="post" action="/dashboard/admin/support/jobs/{{ job.job_id }}/requeue-dead-letter"><button class="button" type="submit">Move back to queue</button></form></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4">No dead-letter jobs.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="section">
+  <h2>Guardrail failures</h2>
+  <table>
+    <thead><tr><th>Job</th><th>Type</th><th>Error</th></tr></thead>
+    <tbody>
+      {% for job in console.guardrail_failures %}
+        <tr><td>{{ job.job_id }}</td><td>{{ job.job_type }}</td><td>{{ job.error_summary }}</td></tr>
+      {% else %}
+        <tr><td colspan="3">No guardrail failures.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="section">
+  <h2>Codex worker status</h2>
+  <pre>{{ console.codex_worker_status | tojson(indent=2) }}</pre>
+</section>
+
+<section class="section">
+  <h2>Integration health</h2>
+  <pre>{{ console.integration_health | tojson(indent=2) }}</pre>
+</section>
+
+<section class="section">
+  <h2>Health history</h2>
+  <pre>{{ console.health_history.health_trend_summaries | tojson(indent=2) }}</pre>
+</section>
+{% endblock %}

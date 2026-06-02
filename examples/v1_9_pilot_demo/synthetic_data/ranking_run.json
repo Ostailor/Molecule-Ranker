@@ -1,0 +1,98 @@
+{
+  "success": true,
+  "disease": {
+    "canonical_name": "Synthetic program A"
+  },
+  "targets": [
+    {
+      "symbol": "SYN-TARGET-A",
+      "label": "Synthetic target placeholder"
+    }
+  ],
+  "candidates": [
+    {
+      "name": "Candidate Alpha",
+      "origin": "source_backed_synthetic",
+      "known_targets": [
+        "SYN-TARGET-A"
+      ],
+      "score": 0.72,
+      "score_breakdown": {
+        "confidence": 0.61,
+        "source_count": 2
+      },
+      "developability_summary": {
+        "triage_label": "synthetic_demo_review",
+        "limitations": [
+          "Synthetic demo data only.",
+          "Not evidence of activity, safety, binding, or clinical utility."
+        ]
+      },
+      "evidence_summary": {
+        "literature": [
+          {
+            "source_id": "SYN-SRC-001",
+            "claim": "Synthetic placeholder claim for UI provenance only.",
+            "not_biomedical_evidence": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "Candidate Beta",
+      "origin": "source_backed_synthetic",
+      "known_targets": [
+        "SYN-TARGET-B"
+      ],
+      "score": 0.58,
+      "score_breakdown": {
+        "confidence": 0.49,
+        "source_count": 1
+      },
+      "developability_summary": {
+        "triage_label": "synthetic_demo_watch",
+        "limitations": [
+          "Synthetic demo data only."
+        ]
+      },
+      "evidence_summary": {
+        "literature": [
+          {
+            "source_id": "SYN-SRC-002",
+            "claim": "Synthetic placeholder claim for UI provenance only.",
+            "not_biomedical_evidence": true
+          }
+        ]
+      }
+    }
+  ],
+  "generated_molecule_hypotheses": [
+    {
+      "name": "Generated Hypothesis One",
+      "origin": "generated",
+      "score": 0.33,
+      "rationale": "Computational follow-up hypothesis for pilot UI demonstration only.",
+      "not_evidence": true
+    }
+  ],
+  "assay_results": [
+    {
+      "candidate_name": "Candidate Alpha",
+      "assay_name": "synthetic_demo_measurement",
+      "result": "synthetic_label_only",
+      "source_file_name": "synthetic_experimental_import.csv",
+      "not_biomedical_evidence": true
+    }
+  ],
+  "active_learning": {
+    "batch_id": "synthetic-batch-001",
+    "suggestions": [
+      "Review whether the synthetic artifact has all required metadata."
+    ]
+  },
+  "summary": {
+    "candidate_count": 2,
+    "generated_candidate_count": 1,
+    "target_count": 2
+  }
+}

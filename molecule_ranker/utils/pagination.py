@@ -28,6 +28,51 @@ class PaginatedResult:
     page_payloads: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class LimitOffsetPage:
+    limit: int
+    offset: int
+    count: int = 0
+
+    @property
+    def next_offset(self) -> int | None:
+        return self.offset + self.count if self.count >= self.limit else None
+
+    @property
+    def previous_offset(self) -> int | None:
+        return max(0, self.offset - self.limit) if self.offset > 0 else None
+
+    @property
+    def start_index(self) -> int:
+        return self.offset + 1 if self.count else 0
+
+    @property
+    def end_index(self) -> int:
+        return self.offset + self.count
+
+    def model_dump(self) -> dict[str, int | None]:
+        return {
+            "limit": self.limit,
+            "offset": self.offset,
+            "count": self.count,
+            "next_offset": self.next_offset,
+            "previous_offset": self.previous_offset,
+        }
+
+
+def normalize_limit_offset(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    default_limit: int = 100,
+    max_limit: int = 500,
+) -> LimitOffsetPage:
+    safe_limit = default_limit if limit <= 0 else limit
+    safe_limit = max(1, min(safe_limit, max_limit))
+    safe_offset = max(0, offset)
+    return LimitOffsetPage(limit=safe_limit, offset=safe_offset)
+
+
 def paginate_chembl_list(
     fetch_page: Callable[[int, int], dict[str, Any]],
     *,

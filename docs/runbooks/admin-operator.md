@@ -27,7 +27,7 @@ synthesis instructions, lab protocols, or patient treatment guidance.
    curl -fsS http://127.0.0.1:8765/version
    ```
 
-The version endpoint must report `1.8.0`, `api.v1`, `artifacts.v1`,
+The version endpoint must report `1.9.0`, `api.v1`, `artifacts.v1`,
 `data-contracts.v1`, and `mr_warehouse_v1.0.0`.
 
 ## Routine Operations

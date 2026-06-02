@@ -93,10 +93,14 @@ PlatformJobType = Literal[
 PlatformJobStatus = Literal[
     "queued",
     "running",
+    "retrying",
     "succeeded",
     "failed",
     "partial",
     "cancelled",
+    "timed_out",
+    "dead_lettered",
+    "waiting_for_approval",
     "guardrail_failed",
 ]
 JobPriority = Literal["low", "normal", "high"]

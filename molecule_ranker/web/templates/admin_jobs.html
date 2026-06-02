@@ -22,6 +22,17 @@
 </section>
 <section class="section">
   <h2>Recent jobs</h2>
+  {% if pagination %}
+    <p class="muted">
+      Showing {{ pagination.start_index }}-{{ pagination.end_index }}
+      {% if pagination.next_offset is not none %}
+        <a href="/dashboard/admin/jobs?limit={{ pagination.limit }}&offset={{ pagination.next_offset }}">Next</a>
+      {% endif %}
+      {% if pagination.previous_offset is not none %}
+        <a href="/dashboard/admin/jobs?limit={{ pagination.limit }}&offset={{ pagination.previous_offset }}">Previous</a>
+      {% endif %}
+    </p>
+  {% endif %}
   <table>
     <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Project</th></tr></thead>
     <tbody>
