@@ -57,7 +57,7 @@ class FakeGraphCodexProvider:
 
 
 def test_v15_version_declared() -> None:
-    assert __version__ == "2.0.0"
+    assert __version__ == "2.1.0"
 
 
 def test_graph_schema_keeps_inference_separate_from_evidence_and_results() -> None:

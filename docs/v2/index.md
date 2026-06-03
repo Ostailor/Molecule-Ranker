@@ -1,10 +1,12 @@
-# V2.0 Enterprise Documentation
+# V2.1 Enterprise Documentation
 
-molecule-ranker V2.0 is a validated enterprise discovery operating system for
-internal research teams. It stabilizes the V1.9 platform for production
-enterprise use with release contracts, deployment controls, identity and access
-management, tenant isolation, validation evidence packages, disaster recovery,
-audit readiness, observability, and stable `/api/v2` and SDK surfaces.
+molecule-ranker V2.1 keeps the V2.0 validated enterprise discovery operating
+system intact and adds a controlled Codex runtime agent for approved,
+audited, deterministic molecule-ranker tool execution. V2.0 stabilized the
+V1.9 platform for production enterprise use with release contracts, deployment
+controls, identity and access management, tenant isolation, validation evidence
+packages, disaster recovery, audit readiness, observability, and stable
+`/api/v2` and SDK surfaces.
 
 ## Required Boundaries
 
@@ -33,6 +35,7 @@ audit readiness, observability, and stable `/api/v2` and SDK surfaces.
 - [Operator Guide](operator_guide.md)
 - [Integration Guide](integration_guide.md)
 - [Codex Backbone](codex_backbone.md)
+- [Codex Runtime Agent](codex_runtime_agent.md)
 - [Data Governance](data_governance.md)
 - [Validation Package](validation_package.md)
 - [Backup and Restore](backup_restore.md)

@@ -15,18 +15,21 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V2.0 ships molecule-ranker as a validated enterprise discovery "
-            "operating system. The release stabilizes enterprise contracts, "
-            "production deployment, security controls, identity and access control, "
-            "tenant/project isolation, validation evidence packages, operational "
-            "runbooks, disaster recovery, governance and audit readiness, "
-            "performance and reliability targets, release certification workflows, "
-            "stable APIs and SDK behavior, enterprise admin controls, end-to-end "
-            "synthetic demo workflows, and V2.0 documentation and training. V2.0 "
-            "does not add major new science capabilities and does not expand "
+            "V2.1 keeps molecule-ranker as a validated enterprise discovery "
+            "operating system and adds controlled Codex runtime-agent execution "
+            "through approved, audited, deterministic tools. V2.0 stabilized "
+            "enterprise contracts, production deployment, security controls, "
+            "identity and access control, tenant/project isolation, validation "
+            "evidence packages, operational runbooks, disaster recovery, "
+            "governance and audit readiness, performance and reliability targets, "
+            "release certification workflows, stable APIs and SDK behavior, "
+            "enterprise admin controls, end-to-end synthetic demo workflows, and "
+            "V2.0 documentation and training. V2.1 does not add major new science "
+            "capabilities and does not expand "
             "molecule generation, docking, ADMET, graph reasoning, model training, "
-            "external integrations, or campaign planning except for stability, "
-            "validation, security, and enterprise readiness. The enterprise "
+            "external integrations, or campaign planning except for controlled "
+            "runtime orchestration, stability, validation, security, and "
+            "enterprise readiness. The enterprise "
             "research boundary remains intact: "
             "campaign plans, hypotheses, research questions, graph paths, portfolio "
             "recommendations, structure workflows, docking scores, model predictions, "
@@ -76,6 +79,9 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "evidence packages, runbooks, disaster recovery, governance, reliability "
             "targets, certification workflows, stable APIs/SDK, admin controls, demo "
             "workflows, and training.",
+            "- V2.1 CodexRuntimeAgent, ActionPlanner, ToolRegistry, PolicyEngine, "
+            "ApprovalGate, ActionExecutor, ArtifactValidator, GuardrailChecker, "
+            "and AuditLogger for controlled runtime tool execution.",
             "- Inherited V1.9 pilot readiness reports covering usability, performance, "
             "reliability, operations, onboarding, admin/support, error messaging, "
             "job control, dashboard workflows, migration safety, deployment "
@@ -131,9 +137,11 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- Codex outputs are assistant artifacts, not biomedical evidence",
             "- Codex output must not become evidence, assay results, molecules, "
             "scores, benchmark results, or decisions",
-            "- V2.0 validation evidence packages are software/process validation artifacts",
-            "- V2.0 enterprise validation is not clinical validation",
-            "- V2.0 support bundles are diagnostics manifests, not biomedical evidence",
+            "- Codex runtime actions must pass tool registry, RBAC, policy, approval, "
+            "artifact validation, guardrail, and audit checks",
+            "- V2.1 validation evidence packages are software/process validation artifacts",
+            "- V2.1 enterprise validation is not clinical validation",
+            "- V2.1 support bundles are diagnostics manifests, not biomedical evidence",
             "",
             "## Contracts",
             "",

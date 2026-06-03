@@ -56,10 +56,10 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
                 "Codex-generated campaign priorities, budgets, costs, metrics, outcomes, "
                 "or advancement decisions",
                 "campaign plans promoted to lab protocols or synthesis routes",
-                "major new science modules in the V2.0 enterprise release",
+                "major new science modules in the V2.1 enterprise release",
                 "expanded generation, docking, ADMET, graph reasoning, model training, "
-                "integrations, or campaign planning except for stability, validation, "
-                "security, and enterprise readiness",
+                "integrations, or campaign planning except for controlled runtime "
+                "orchestration, stability, validation, security, and enterprise readiness",
             ],
             "scientific_integrity_constraints": list(SCIENTIFIC_INTEGRITY_CONSTRAINTS),
             "contracts": {
@@ -167,10 +167,9 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V2.0 is for internal research use only and is not a clinical product.",
-        "V2.0 validates enterprise discovery operating-system readiness through "
-        "software, process, deployment, security, governance, and operational evidence, "
-        "not new science capability.",
+        "V2.1 is for internal research use only and is not a clinical product.",
+        "V2.1 keeps V2.0 enterprise readiness intact and adds a controlled Codex "
+        "runtime agent for approved deterministic tool execution.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
         "Generated molecules are computational hypotheses and require independent validation.",
         "Portfolio recommendations are research prioritization aids, not clinical or "
@@ -196,4 +195,6 @@ def _known_limitations() -> list[str]:
         "Predicted structures are lower-confidence than suitable experimental structures.",
         "Default validation uses mocked services; live API and connector validation are opt-in.",
         "Codex outputs are assistant artifacts and must not be promoted to biomedical evidence.",
+        "Codex runtime actions must pass the tool registry, RBAC, policy, approval, "
+        "artifact validation, guardrail, and audit trail checks.",
     ]

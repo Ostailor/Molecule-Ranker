@@ -46,6 +46,7 @@ from molecule_ranker.platform.rbac import (
     require_project_access,
 )
 from molecule_ranker.platform.schemas import UserAccount
+from molecule_ranker.runtime_agents.hosted import RuntimeAgentHostedStore
 from molecule_ranker.server.dependencies import platform_database, workspace_store
 from molecule_ranker.server.security import reject_suspicious_identifier, safe_artifact_path
 from molecule_ranker.utils.json_io import JsonArtifactTooLargeError, load_json_file
@@ -162,6 +163,172 @@ def project_list_alias(
     store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
 ) -> Response:
     return project_list_page(request, user, database, store)
+
+
+@router.get("/dashboard/agent/sessions", response_class=HTMLResponse)
+def agent_sessions_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    store = _agent_store(request)
+    sessions = [
+        session
+        for session in store.list_sessions()
+        if _can_view_agent_session(database, user, session.project_id)
+    ]
+    rows = [
+        [
+            _link(f"/dashboard/agent/sessions/{quote(session.session_id)}", session.session_id),
+            session.project_id or "",
+            session.autonomy_level,
+            session.status,
+            session.user_goal,
+        ]
+        for session in sessions
+    ]
+    return _agent_dashboard_html(
+        "Agent sessions",
+        _agent_nav()
+        + _table(["Session", "Project", "Autonomy", "Status", "Goal"], rows),
+    )
+
+
+@router.get("/dashboard/agent/sessions/{session_id}", response_class=HTMLResponse)
+def agent_session_detail_dashboard_page(
+    session_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    store = _agent_store(request)
+    session = _agent_session_or_404(store, session_id)
+    if not _can_view_agent_session(database, user, session.project_id):
+        raise HTTPException(status_code=403, detail="Agent permission denied.")
+    try:
+        plan = store.get_plan(session_id)
+        step_rows = [
+            [step.step_index + 1, step.tool_name, step.status, step.approval_reason or ""]
+            for step in plan.steps
+        ]
+        plan_summary = plan.plan_summary
+    except KeyError:
+        step_rows = []
+        plan_summary = "No action plan has been created."
+    approvals = store.list_approvals(session_id)
+    audit_events = store.list_audit_events(session_id)
+    guardrails = store.get_guardrail_report(session_id)
+    results = store.list_tool_results(session_id)
+    body = (
+        _agent_nav()
+        + f"<h2>Agent session detail</h2><p>{escape(session.user_goal)}</p>"
+        + f"<h2>Action plan view</h2><p>{escape(plan_summary)}</p>"
+        + "<h2>Step execution view</h2>"
+        + _table(["Index", "Tool", "Status", "Approval"], step_rows)
+        + "<h2>Approval queue</h2>"
+        + _table(
+            ["Approval", "Type", "Status", "Reason"],
+            [
+                [
+                    approval.approval_id,
+                    approval.approval_type,
+                    approval.status,
+                    approval.reason,
+                ]
+                for approval in approvals
+            ],
+        )
+        + "<h2>Runtime audit log</h2>"
+        + _table(
+            ["Event", "Actor", "Summary"],
+            [[event.event_type, event.actor or "", event.summary] for event in audit_events],
+        )
+        + "<h2>Guardrail report</h2>"
+        + f"<pre>{escape(json.dumps(guardrails, indent=2, sort_keys=True))}</pre>"
+        + "<h2>Produced artifacts</h2>"
+        + _table(
+            ["Result", "Artifacts", "Jobs"],
+            [
+                [
+                    result.result_id,
+                    ", ".join(result.artifact_ids),
+                    ", ".join(result.job_ids),
+                ]
+                for result in results
+            ],
+        )
+        + "<h2>Next actions</h2><ul><li>Review produced artifacts.</li>"
+        + "<li>Resolve pending approvals.</li><li>Inspect guardrail warnings.</li></ul>"
+    )
+    return _agent_dashboard_html("Agent session detail", body)
+
+
+@router.get("/dashboard/agent/approvals", response_class=HTMLResponse)
+def agent_approvals_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    store = _agent_store(request)
+    approvals = [
+        approval
+        for approval in store.list_approvals()
+        if _can_view_agent_session(
+            database,
+            user,
+            _agent_session_project(store, approval.session_id),
+        )
+    ]
+    return _agent_dashboard_html(
+        "Approval queue",
+        _agent_nav()
+        + _table(
+            ["Approval", "Session", "Type", "Status", "Reason"],
+            [
+                [
+                    approval.approval_id,
+                    _link(
+                        f"/dashboard/agent/sessions/{quote(approval.session_id)}",
+                        approval.session_id,
+                    ),
+                    approval.approval_type,
+                    approval.status,
+                    approval.reason,
+                ]
+                for approval in approvals
+            ],
+        ),
+    )
+
+
+@router.get("/dashboard/agent/audit", response_class=HTMLResponse)
+def agent_audit_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    store = _agent_store(request)
+    events = [
+        event
+        for event in store.list_audit_events()
+        if _can_view_agent_session(database, user, _agent_session_project(store, event.session_id))
+    ]
+    return _agent_dashboard_html(
+        "Runtime audit log",
+        _agent_nav()
+        + _table(
+            ["Session", "Event", "Actor", "Summary"],
+            [
+                [
+                    event.session_id,
+                    event.event_type,
+                    event.actor or "",
+                    event.summary,
+                ]
+                for event in events
+            ],
+        ),
+    )
 
 
 @router.post("/dashboard/projects/create")
@@ -3016,9 +3183,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.0</div>"
+        "<div class=\"brand\">molecule-ranker V2.1</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3161,9 +3328,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.0</div>"
+        "<div class=\"brand\">molecule-ranker V2.1</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3196,9 +3363,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.0</div>"
+        "<div class=\"brand\">molecule-ranker V2.1</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3248,9 +3415,9 @@ def _campaign_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.0</div>"
+        "<div class=\"brand\">molecule-ranker V2.1</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3691,9 +3858,9 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.0</div>"
+        "<div class=\"brand\">molecule-ranker V2.1</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4269,9 +4436,9 @@ def _evaluation_dashboard_shell(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.0</div>"
+        "<div class=\"brand\">molecule-ranker V2.1</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4512,9 +4679,9 @@ def _hypothesis_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.0</div>"
+        "<div class=\"brand\">molecule-ranker V2.1</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4674,6 +4841,70 @@ def _project_or_404(*, store: ProjectWorkspaceStore, project_id: str) -> Project
     if workspace is None:
         raise HTTPException(status_code=404, detail="Project not found.")
     return workspace
+
+
+def _agent_store(request: Request) -> RuntimeAgentHostedStore:
+    return RuntimeAgentHostedStore(request.app.state.root_dir)
+
+
+def _agent_session_or_404(store: RuntimeAgentHostedStore, session_id: str) -> Any:
+    try:
+        return store.get_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Agent session not found.") from exc
+
+
+def _agent_session_project(store: RuntimeAgentHostedStore, session_id: str) -> str | None:
+    try:
+        return store.get_session(session_id).project_id
+    except KeyError:
+        return None
+
+
+def _can_view_agent_session(
+    database: PlatformDatabase,
+    user: UserAccount,
+    project_id: str | None,
+) -> bool:
+    return has_permission(user, "agent:read", project_id=project_id, database=database)
+
+
+def _agent_dashboard_html(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>"
+        + escape(title)
+        + " · molecule-ranker</title>"
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.1.0-dashboard-1">'
+        + "</head><body><div class=\"shell\"><header class=\"topbar\">"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.1</div>"
+        + "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        + _link("/dashboard", "Projects")
+        + _link("/dashboard/agent/sessions", "Agent sessions")
+        + _link("/dashboard/agent/approvals", "Approval queue")
+        + _link("/dashboard/agent/audit", "Runtime audit")
+        + _link("/dashboard/admin", "Admin")
+        + "</nav></div></header><main class=\"content\">"
+        + "<aside class=\"research-disclaimer\">Internal research use only. "
+        + "Codex runtime actions are orchestrated tool calls and are not biomedical "
+        + "evidence. Risky actions require approval.</aside>"
+        + "<header class=\"page-heading\"><h1>"
+        + escape(title)
+        + "</h1></header>"
+        + body
+        + "</main></div></body></html>"
+    )
+
+
+def _agent_nav() -> str:
+    return (
+        "<nav class=\"section\">"
+        + _link("/dashboard/agent/sessions", "Agent sessions")
+        + _link("/dashboard/agent/approvals", "Approval queue")
+        + _link("/dashboard/agent/audit", "Runtime audit log")
+        + "</nav>"
+    )
 
 
 def _template(

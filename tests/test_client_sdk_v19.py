@@ -77,7 +77,7 @@ def test_client_against_testclient_core_workflow(tmp_path: Path) -> None:
     assert artifacts.pagination.count == 1
     assert downloaded == report_path.read_bytes()
     assert feedback.metadata["not_scientific_evidence"] is True
-    assert readiness["version"] == "2.0.0"
+    assert readiness["version"] == "2.1.0"
     assert evaluation.evaluation_boundary == "evaluation_reports_are_not_biomedical_evidence"
     assert evaluation.report["not_biomedical_evidence"] is True
 

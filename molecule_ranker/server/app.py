@@ -24,6 +24,7 @@ from molecule_ranker.release import (
 )
 from molecule_ranker.server.dependencies import require_api_key
 from molecule_ranker.server.routes import (
+    agent,
     artifacts,
     auth,
     codex,
@@ -361,6 +362,7 @@ def create_app(
     app.include_router(review.router, prefix="/api/v2", dependencies=v2_dependencies)
     app.include_router(experiments.router, prefix="/api/v2", dependencies=v2_dependencies)
     app.include_router(integrations.router, prefix="/api/v2", dependencies=v2_dependencies)
+    app.include_router(agent.router, prefix="/api/v2")
     app.include_router(webhooks.router, prefix="/api/v2")
     return app
 

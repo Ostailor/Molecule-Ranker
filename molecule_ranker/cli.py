@@ -255,6 +255,10 @@ codex_app = typer.Typer(
     help="V1.0 controlled Codex CLI assistant, worker, and engineering automation commands.",
     no_args_is_help=True,
 )
+codex_permissions_app = typer.Typer(
+    help="Managed Codex permission profile generation.",
+    no_args_is_help=True,
+)
 codex_assist_app = typer.Typer(
     help="Artifact-grounded Codex assistant workflows.",
     no_args_is_help=True,
@@ -443,6 +447,10 @@ feedback_app = typer.Typer(
     help="Enterprise pilot feedback capture commands.",
     no_args_is_help=True,
 )
+agent_app = typer.Typer(
+    help="V2.1 Codex runtime-agent planning, execution, approval, and audit commands.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
 app.add_typer(experimental_app, name="experimental")
 app.add_typer(experiment_app, name="experiment")
@@ -477,6 +485,7 @@ app.add_typer(migrate_app, name="migrate")
 app.add_typer(support_app, name="support")
 app.add_typer(ops_app, name="ops")
 app.add_typer(feedback_app, name="feedback")
+app.add_typer(agent_app, name="agent")
 model_app.add_typer(model_dataset_app, name="dataset")
 model_app.add_typer(model_registry_app, name="registry")
 eval_app.add_typer(eval_suite_app, name="suite")
@@ -484,6 +493,7 @@ eval_app.add_typer(eval_dataset_app, name="dataset")
 eval_app.add_typer(eval_prospective_app, name="prospective")
 codex_app.add_typer(codex_assist_app, name="assist")
 codex_app.add_typer(codex_engineering_app, name="engineering")
+codex_app.add_typer(codex_permissions_app, name="permissions")
 auth_cli_app.add_typer(auth_token_app, name="token")
 auth_cli_app.add_typer(auth_oidc_app, name="oidc")
 auth_cli_app.add_typer(auth_service_account_app, name="service-account")
@@ -507,6 +517,632 @@ def main() -> None:
 def version() -> None:
     """Print the package version."""
     typer.echo(__version__)
+
+
+@agent_app.command("start")
+def agent_start(
+    goal: Annotated[str, typer.Option("--goal", help="Research objective for the runtime agent.")],
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    autonomy: Annotated[
+        Literal[
+            "observe_only",
+            "suggest_only",
+            "execute_safe_tools",
+            "execute_with_approval",
+            "full_auto_restricted",
+        ],
+        typer.Option("--autonomy", help="Runtime autonomy level."),
+    ] = "suggest_only",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Plan only; do not execute.")] = False,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for runtime artifacts."),
+    ] = Path(".molecule-ranker/runtime-agent"),
+) -> None:
+    """Plan and optionally execute a runtime-agent session."""
+
+    session = _agent_session(goal=goal, project_id=project_id, autonomy=autonomy)
+    plan = _agent_plan(goal=goal, session=session, autonomy=autonomy)
+    mode = "dry_run" if dry_run else autonomy
+    execution = _agent_execute_plan(plan, mode=mode)
+    session = _agent_session_for_execution(session, execution)
+    _agent_write_outputs(
+        output_dir,
+        session=session,
+        execution_result=execution,
+        approvals=[],
+    )
+    _echo_json(
+        {
+            "session_id": session.session_id,
+            "plan_id": plan.plan_id,
+            "status": execution.status,
+            "output_dir": str(output_dir),
+        }
+    )
+
+
+@agent_app.command("plan")
+def agent_plan(
+    goal: Annotated[str, typer.Option("--goal", help="Research objective for the runtime agent.")],
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    autonomy: Annotated[
+        Literal[
+            "observe_only",
+            "suggest_only",
+            "execute_safe_tools",
+            "execute_with_approval",
+            "full_auto_restricted",
+        ],
+        typer.Option("--autonomy", help="Runtime autonomy level."),
+    ] = "suggest_only",
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for runtime artifacts."),
+    ] = Path(".molecule-ranker/runtime-agent"),
+) -> None:
+    """Create a RuntimeActionPlan without executing it."""
+
+    session = _agent_session(goal=goal, project_id=project_id, autonomy=autonomy)
+    plan = _agent_plan(goal=goal, session=session, autonomy=autonomy)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_cli_json(output_dir / "runtime_session.json", session.model_dump(mode="json"))
+    _write_cli_json(output_dir / "runtime_action_plan.json", plan.model_dump(mode="json"))
+    _echo_json(
+        {
+            "session_id": session.session_id,
+            "plan_id": plan.plan_id,
+            "status": "planned",
+            "plan": str(output_dir / "runtime_action_plan.json"),
+        }
+    )
+
+
+@agent_app.command("execute")
+def agent_execute(
+    plan: Annotated[Path, typer.Option("--plan", exists=True, dir_okay=False)],
+    autonomy: Annotated[
+        Literal[
+            "execute_safe_tools",
+            "execute_with_approval",
+            "full_auto_restricted",
+        ],
+        typer.Option("--autonomy", help="Runtime execution mode."),
+    ] = "execute_safe_tools",
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for runtime artifacts."),
+    ] = Path(".molecule-ranker/runtime-agent"),
+    approvals: Annotated[
+        list[str] | None,
+        typer.Option("--approval", help="Approved approval type, step ID, or tool name."),
+    ] = None,
+) -> None:
+    """Execute a saved RuntimeActionPlan through registered runtime tools."""
+
+    from molecule_ranker.runtime_agents.schemas import RuntimeActionPlan
+
+    loaded_plan = RuntimeActionPlan.model_validate(_read_cli_json(plan))
+    execution = _agent_execute_plan(loaded_plan, mode=autonomy, approvals=set(approvals or []))
+    session = _agent_load_or_create_session(output_dir, loaded_plan, autonomy)
+    session = _agent_session_for_execution(session, execution)
+    approval_requests = _agent_approval_requests_for_execution(execution)
+    _agent_write_outputs(
+        output_dir,
+        session=session,
+        execution_result=execution,
+        approvals=approval_requests,
+    )
+    for approval_request in approval_requests:
+        _write_cli_json(
+            output_dir / "runtime_approval_request.json",
+            approval_request.model_dump(mode="json"),
+        )
+    _echo_json(
+        {
+            "session_id": session.session_id,
+            "plan_id": loaded_plan.plan_id,
+            "status": execution.status,
+            "approval_requests": [request.approval_id for request in approval_requests],
+            "output_dir": str(output_dir),
+        }
+    )
+
+
+@agent_app.command("approve")
+def agent_approve(
+    request: Annotated[
+        Path,
+        typer.Option("--request", exists=True, dir_okay=False, help="RuntimeApprovalRequest JSON."),
+    ] = Path(".molecule-ranker/runtime-agent/runtime_approval_request.json"),
+    decided_by: Annotated[str, typer.Option("--decided-by", help="Human approver ID.")] = "user",
+    rationale: Annotated[str, typer.Option("--rationale", help="Decision rationale.")] = (
+        "Approved by human reviewer."
+    ),
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for runtime artifacts."),
+    ] = Path(".molecule-ranker/runtime-agent"),
+) -> None:
+    """Approve a RuntimeApprovalRequest."""
+
+    from molecule_ranker.runtime_agents.approvals import RuntimeApprovalController
+    from molecule_ranker.runtime_agents.schemas import RuntimeApprovalRequest
+
+    approval_request = RuntimeApprovalRequest.model_validate(_read_cli_json(request))
+    decision = RuntimeApprovalController().decide(
+        approval_request,
+        decided_by=decided_by,
+        approved=True,
+        rationale=rationale,
+    )
+    _write_cli_json(request, decision.request.model_dump(mode="json"))
+    _agent_append_audit(output_dir, decision.audit_event.model_dump(mode="json"))
+    _echo_json(
+        {
+            "approval_id": decision.request.approval_id,
+            "status": decision.request.status,
+            "decided_by": decision.request.decided_by,
+        }
+    )
+
+
+@agent_app.command("status")
+def agent_status(
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            help="Directory containing runtime artifacts.",
+        ),
+    ] = Path(".molecule-ranker/runtime-agent"),
+) -> None:
+    """Show runtime session status."""
+
+    session_path = output_dir / "runtime_session.json"
+    if not session_path.exists():
+        raise typer.BadParameter(f"Runtime session not found: {session_path}")
+    session = _read_cli_json(session_path)
+    _echo_json(
+        {
+            "session_id": session.get("session_id"),
+            "status": session.get("status"),
+            "project_id": session.get("project_id"),
+            "autonomy_level": session.get("autonomy_level"),
+        }
+    )
+
+
+@agent_app.command("cancel")
+def agent_cancel(
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            help="Directory containing runtime artifacts.",
+        ),
+    ] = Path(".molecule-ranker/runtime-agent"),
+) -> None:
+    """Cancel a runtime session."""
+
+    session_path = output_dir / "runtime_session.json"
+    if not session_path.exists():
+        raise typer.BadParameter(f"Runtime session not found: {session_path}")
+    session = _read_cli_json(session_path)
+    before = dict(session)
+    session["status"] = "cancelled"
+    session["completed_at"] = datetime.now(UTC).isoformat()
+    _write_cli_json(session_path, session)
+    _agent_append_audit(
+        output_dir,
+        _agent_audit_event(
+            session_id=str(session.get("session_id") or "runtime-session"),
+            event_type="runtime_session_cancelled",
+            actor="user",
+            summary="Runtime session cancelled by CLI.",
+            object_type="RuntimeAgentSession",
+            object_id=str(session.get("session_id") or "runtime-session"),
+            before=before,
+            after=session,
+        ),
+    )
+    _echo_json({"session_id": session.get("session_id"), "status": "cancelled"})
+
+
+@agent_app.command("audit")
+def agent_audit(
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            help="Directory containing runtime artifacts.",
+        ),
+    ] = Path(".molecule-ranker/runtime-agent"),
+) -> None:
+    """Show runtime audit events."""
+
+    audit_path = output_dir / "runtime_audit_log.json"
+    if not audit_path.exists():
+        _echo_json({"audit_events": []})
+        return
+    _echo_json({"audit_events": _read_cli_json(audit_path)})
+
+
+@agent_app.command("eval")
+def agent_eval(
+    suite: Annotated[
+        Literal["runtime"],
+        typer.Option("--suite", help="Runtime-agent eval suite to run."),
+    ] = "runtime",
+) -> None:
+    """Run runtime-agent evals with mocked Codex plans."""
+
+    from molecule_ranker.runtime_agents.evals import run_runtime_agent_eval_suite
+
+    result = run_runtime_agent_eval_suite(suite=suite)
+    _echo_json(result.model_dump(mode="json"))
+
+
+@agent_app.command("explain")
+def agent_explain(
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            help="Directory containing runtime artifacts.",
+        ),
+    ] = Path(".molecule-ranker/runtime-agent"),
+) -> None:
+    """Explain what happened using runtime artifacts."""
+
+    summary_path = output_dir / "runtime_summary.md"
+    if summary_path.exists():
+        typer.echo(summary_path.read_text(encoding="utf-8"))
+        return
+    status_payload = {
+        "session": _read_cli_json(output_dir / "runtime_session.json")
+        if (output_dir / "runtime_session.json").exists()
+        else {},
+        "plan": _read_cli_json(output_dir / "runtime_action_plan.json")
+        if (output_dir / "runtime_action_plan.json").exists()
+        else {},
+        "results": _read_cli_json(output_dir / "runtime_tool_results.json")
+        if (output_dir / "runtime_tool_results.json").exists()
+        else [],
+    }
+    _echo_json(status_payload)
+
+
+def _agent_session(
+    *,
+    goal: str,
+    project_id: str | None,
+    autonomy: str,
+) -> Any:
+    from molecule_ranker.runtime_agents.schemas import RuntimeAgentSession
+
+    return RuntimeAgentSession(
+        session_id=f"runtime-session-{uuid.uuid4().hex[:12]}",
+        project_id=project_id,
+        org_id=None,
+        user_id=None,
+        user_goal=goal,
+        autonomy_level=autonomy,  # type: ignore[arg-type]
+        status="created",
+        started_at=datetime.now(UTC),
+        completed_at=None,
+        metadata={"cli": "molecule-ranker agent"},
+    )
+
+
+def _agent_plan(*, goal: str, session: Any, autonomy: str) -> Any:
+    from molecule_ranker.runtime_agents.planner import (
+        CodexPlannerUnavailable,
+        CodexRuntimePlanner,
+    )
+    from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
+
+    class _UnavailableCodexPlannerClient:
+        def plan(self, *, prompt: str, sandbox_mode: str, jsonl_output_path: str | None) -> str:
+            del prompt, sandbox_mode, jsonl_output_path
+            raise CodexPlannerUnavailable("CLI deterministic planning mode.")
+
+    registry = RuntimeToolRegistry.default()
+    planner = CodexRuntimePlanner(registry=registry, codex_client=_UnavailableCodexPlannerClient())
+    permissions = _agent_all_permissions(registry)
+    try:
+        return planner.plan(
+            user_goal=goal,
+            session_id=session.session_id,
+            project_id=session.project_id,
+            org_id=session.org_id,
+            user_id=session.user_id,
+            allowed_tools=registry.tool_names(),
+            policy_constraints=[
+                "Codex output is not biomedical evidence.",
+                "External writes require approval.",
+                "Stage gates and campaign advancement require human approval.",
+            ],
+            user_permissions=permissions,
+            autonomy_level=autonomy,
+        )
+    except CodexPlannerUnavailable:
+        return _agent_keyword_plan(goal=goal, session=session, registry=registry)
+
+
+def _agent_keyword_plan(*, goal: str, session: Any, registry: Any) -> Any:
+    from molecule_ranker.runtime_agents.schemas import RuntimeActionPlan, RuntimeActionStep
+
+    goal_lower = goal.lower()
+    tool_names: list[str] = []
+    if "create" in goal_lower and "project" in goal_lower:
+        tool_names.append("create_project")
+    if "rank" in goal_lower or "ranking" in goal_lower:
+        tool_names.append("run_ranking")
+    if "generate candidates" in goal_lower or "run generation" in goal_lower:
+        tool_names.append("run_generation")
+    if "graph" in goal_lower:
+        tool_names.append("build_graph")
+    if "hypothes" in goal_lower:
+        tool_names.append("generate_hypotheses")
+    if "review" in goal_lower:
+        tool_names.append("create_review_workspace")
+    if "evaluation" in goal_lower or "benchmark" in goal_lower:
+        tool_names.append("run_benchmark")
+    if not tool_names:
+        tool_names.append("summarize_artifacts")
+
+    plan_id = f"runtime-plan-{uuid.uuid4().hex[:12]}"
+    steps = [
+        RuntimeActionStep(
+            step_id=f"runtime-step-{uuid.uuid4().hex[:12]}",
+            plan_id=plan_id,
+            step_index=index,
+            action_type=tool_name,
+            tool_name=tool_name,
+            tool_args={"goal": goal},
+            requires_approval=registry.require(tool_name).requires_approval_by_default,
+            approval_reason="Tool requires approval by default."
+            if registry.require(tool_name).requires_approval_by_default
+            else None,
+            expected_outputs=[],
+            status="pending",
+            result_id=None,
+            warnings=[],
+            metadata={"cli_keyword_plan": True},
+        )
+        for index, tool_name in enumerate(dict.fromkeys(tool_names))
+    ]
+    return RuntimeActionPlan(
+        plan_id=plan_id,
+        session_id=session.session_id,
+        user_goal=goal,
+        plan_summary="Deterministic CLI runtime-agent plan.",
+        steps=steps,
+        required_approvals=[],
+        expected_artifacts=[],
+        risk_level="low",
+        guardrail_warnings=[],
+        created_by="deterministic_template",
+        validated=True,
+        validation_errors=[],
+        metadata={
+            "tool_specs": {
+                step.tool_name: {
+                    "required_permissions": registry.require(step.tool_name).required_permissions,
+                    "side_effect_level": registry.require(step.tool_name).side_effect_level,
+                    "policy_tags": registry.require(step.tool_name).policy_tags,
+                }
+                for step in steps
+            },
+            "planner": "cli_keyword_template",
+        },
+    )
+
+
+def _agent_execute_plan(
+    plan: Any,
+    *,
+    mode: str,
+    approvals: set[str] | None = None,
+) -> Any:
+    from molecule_ranker.runtime_agents.executor import RuntimeActionExecutor
+    from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
+
+    registry = RuntimeToolRegistry.default()
+    executor = RuntimeActionExecutor(
+        registry=registry,
+        tool_handlers={
+            spec.tool_name: _agent_cli_tool_handler
+            for spec in registry.list_tools()
+            if spec.category != "codex"
+        },
+    )
+    return executor.execute(
+        plan,
+        mode=mode,  # type: ignore[arg-type]
+        actor="user",
+        approvals=approvals or set(),
+    )
+
+
+def _agent_cli_tool_handler(step: Any, spec: Any) -> dict[str, Any]:
+    artifact_ids = (
+        [f"runtime-artifact-{step.tool_name}-{uuid.uuid4().hex[:8]}"]
+        if spec.side_effect_level == "artifact_write"
+        else []
+    )
+    job_ids = (
+        [f"runtime-job-{step.tool_name}-{uuid.uuid4().hex[:8]}"]
+        if spec.side_effect_level in {"artifact_write", "db_write", "external_read"}
+        else []
+    )
+    return {
+        "status": "succeeded",
+        "output": {
+            "summary": f"{step.tool_name} delegated to registered deterministic entrypoint.",
+            "deterministic_entrypoint": spec.metadata.get("deterministic_entrypoint"),
+            "runtime_execution": spec.metadata.get("runtime_execution"),
+        },
+        "artifact_ids": artifact_ids,
+        "job_ids": job_ids,
+        "metadata": {
+            "artifact_provenance": {
+                artifact_id: step.step_id for artifact_id in artifact_ids
+            },
+            "tool_registry_side_effect_level": spec.side_effect_level,
+        },
+    }
+
+
+def _agent_write_outputs(
+    output_dir: Path,
+    *,
+    session: Any,
+    execution_result: Any,
+    approvals: list[Any],
+) -> None:
+    from molecule_ranker.runtime_agents.guardrails import RuntimeGuardrailChecker
+    from molecule_ranker.runtime_agents.reports import write_runtime_artifacts
+
+    guardrail_report = RuntimeGuardrailChecker().check_plan(
+        execution_result.plan,
+        user_permissions=_agent_all_permissions(),
+        approvals={approval.approval_type for approval in approvals},
+    )
+    write_runtime_artifacts(
+        output_dir,
+        session=session,
+        execution_result=execution_result,
+        approvals=approvals,
+        guardrail_report=guardrail_report,
+    )
+
+
+def _agent_session_for_execution(session: Any, execution_result: Any) -> Any:
+    status = "succeeded"
+    if execution_result.status == "approval_required":
+        status = "awaiting_approval"
+    elif execution_result.status == "cancelled":
+        status = "cancelled"
+    elif execution_result.status in {"failed", "policy_blocked"}:
+        status = "failed"
+    return session.model_copy(
+        update={
+            "status": status,
+            "completed_at": datetime.now(UTC)
+            if execution_result.status
+            in {"succeeded", "failed", "cancelled", "dry_run", "suggested", "policy_blocked"}
+            else None,
+        }
+    )
+
+
+def _agent_load_or_create_session(output_dir: Path, plan: Any, autonomy: str) -> Any:
+    from molecule_ranker.runtime_agents.schemas import RuntimeAgentSession
+
+    session_path = output_dir / "runtime_session.json"
+    if session_path.exists():
+        return RuntimeAgentSession.model_validate(_read_cli_json(session_path))
+    return RuntimeAgentSession(
+        session_id=plan.session_id,
+        project_id=None,
+        org_id=None,
+        user_id=None,
+        user_goal=plan.user_goal,
+        autonomy_level=autonomy,  # type: ignore[arg-type]
+        status="created",
+        started_at=datetime.now(UTC),
+        completed_at=None,
+        metadata={"cli": "molecule-ranker agent"},
+    )
+
+
+def _agent_approval_requests_for_execution(execution_result: Any) -> list[Any]:
+    if execution_result.status != "approval_required":
+        return []
+    from molecule_ranker.runtime_agents.approvals import (
+        RuntimeApprovalController,
+        approval_type_for_tool,
+    )
+    from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
+
+    registry = RuntimeToolRegistry.default()
+    controller = RuntimeApprovalController()
+    requests: list[Any] = []
+    for result in execution_result.results:
+        if result.status != "approval_required":
+            continue
+        step = next(
+            (item for item in execution_result.plan.steps if item.step_id == result.step_id),
+            None,
+        )
+        if step is None:
+            continue
+        spec = registry.require(step.tool_name)
+        approval_type = approval_type_for_tool(spec) or "execute_plan"
+        requests.append(
+            controller.create_approval_request(
+                session_id=execution_result.plan.session_id,
+                plan_id=execution_result.plan.plan_id,
+                step_id=step.step_id,
+                requested_by="codex",
+                approval_type=approval_type,
+                reason=result.error_summary or f"{step.tool_name} requires approval.",
+                risk_summary=f"{step.tool_name} has side effect {spec.side_effect_level}.",
+            )
+        )
+    return requests
+
+
+def _agent_append_audit(output_dir: Path, event: dict[str, Any]) -> None:
+    audit_path = output_dir / "runtime_audit_log.json"
+    events = _read_cli_json(audit_path) if audit_path.exists() else []
+    if not isinstance(events, list):
+        events = []
+    events.append(event)
+    _write_cli_json(audit_path, events)
+
+
+def _agent_audit_event(
+    *,
+    session_id: str,
+    event_type: str,
+    actor: str,
+    summary: str,
+    object_type: str,
+    object_id: str,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "event_id": f"runtime-audit-{uuid.uuid4().hex[:12]}",
+        "session_id": session_id,
+        "event_type": event_type,
+        "actor": actor,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "summary": summary,
+        "object_type": object_type,
+        "object_id": object_id,
+        "before": before,
+        "after": after,
+        "metadata": {"cli": "molecule-ranker agent"},
+    }
+
+
+def _agent_all_permissions(registry: Any | None = None) -> set[str]:
+    from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
+
+    active_registry = registry or RuntimeToolRegistry.default()
+    return {
+        permission
+        for spec in active_registry.list_tools()
+        for permission in spec.required_permissions
+    }
 
 
 @app.command("doctor")
@@ -8067,6 +8703,62 @@ def project_serve(
         platform_db_path=platform_db_path,
         allow_public_bind=allow_public_bind,
     )
+
+
+@codex_permissions_app.command("generate")
+def codex_permissions_generate(
+    profile: Annotated[
+        Literal[
+            "read_only_runtime",
+            "workspace_write_runtime",
+            "integration_readonly_runtime",
+            "engineering_runtime",
+        ],
+        typer.Option("--profile", help="Managed Codex permission profile name."),
+    ],
+    runtime_work_dir: Annotated[
+        str,
+        typer.Option(
+            "--runtime-work-dir",
+            help="Runtime working directory allowed for workspace-write profiles.",
+        ),
+    ] = ".molecule-ranker/runtime-agent/work",
+    allowed_artifact_dir: Annotated[
+        str,
+        typer.Option(
+            "--allowed-artifact-dir",
+            help="Artifact directory allowed for workspace-write runtime profiles.",
+        ),
+    ] = "artifacts/runtime",
+    approved_domain: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--approved-domain",
+            help="Approved integration network domain. Repeat for multiple domains.",
+        ),
+    ] = None,
+    allow_local_private_network: Annotated[
+        bool,
+        typer.Option(
+            "--allow-local-private-network",
+            help="Allow local/private network ranges for this generated profile.",
+        ),
+    ] = False,
+) -> None:
+    """Generate a managed Codex permission profile snippet."""
+
+    from molecule_ranker.runtime_agents.codex_permissions import (
+        generate_codex_permission_profile,
+    )
+
+    generated = generate_codex_permission_profile(
+        profile,
+        runtime_work_dir=runtime_work_dir,
+        allowed_artifact_dir=allowed_artifact_dir,
+        approved_domains=approved_domain,
+        allow_local_private_network=allow_local_private_network,
+    )
+    _echo_json(generated.model_dump(mode="json"))
 
 
 @codex_app.command("status")

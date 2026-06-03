@@ -2,11 +2,11 @@
   "api_contract_version": "api.v1",
   "artifact_contract_version": "1.0",
   "build_timestamp": "2026-06-02T22:56:44Z",
-  "dependency_lock_hash": "5f7baa15d8f4e3cb9d5f4eff6e6a759882c5e6a7bd8c5c98c392dc6ed2a58ecb",
+  "dependency_lock_hash": "0b1dd598445548ad512d594d81f8d244148a19d11b40d3a70d5c65204f3936dc",
   "git_commit": "7e5b2fdc882b2c31a6eb636c32116c8704d74ac7",
   "known_limitations": [
-    "V2.0 is for internal research use only and is not a clinical product.",
-    "V2.0 validates enterprise discovery operating-system readiness through software, process, deployment, security, governance, and operational evidence, not new science capability.",
+    "V2.1 is for internal research use only and is not a clinical product.",
+    "V2.1 keeps V2.0 enterprise readiness intact and adds a controlled Codex runtime agent for approved deterministic tool execution.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules are computational hypotheses and require independent validation.",
     "Portfolio recommendations are research prioritization aids, not clinical or experimental instructions.",
@@ -24,7 +24,8 @@
     "Docking scores, poses, and structure-derived interactions are computational heuristics, not proof of binding or activity.",
     "Predicted structures are lower-confidence than suitable experimental structures.",
     "Default validation uses mocked services; live API and connector validation are opt-in.",
-    "Codex outputs are assistant artifacts and must not be promoted to biomedical evidence."
+    "Codex outputs are assistant artifacts and must not be promoted to biomedical evidence.",
+    "Codex runtime actions must pass the tool registry, RBAC, policy, approval, artifact validation, guardrail, and audit trail checks."
   ],
   "name": "molecule-ranker",
   "readiness": {
@@ -40,5 +41,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "2.0.0"
+  "version": "2.1.0"
 }

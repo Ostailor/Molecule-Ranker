@@ -74,6 +74,11 @@ Permission = Literal[
     "evaluation:run",
     "evaluation:export",
     "evaluation:admin",
+    "agent:read",
+    "agent:plan",
+    "agent:execute",
+    "agent:approve",
+    "agent:admin",
     "admin:manage_users",
     "admin:manage_org",
     "admin:view_audit",
@@ -153,6 +158,11 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "evaluation:run",
         "evaluation:export",
         "evaluation:admin",
+        "agent:read",
+        "agent:plan",
+        "agent:execute",
+        "agent:approve",
+        "agent:admin",
         "admin:view_audit",
     },
     "editor": {
@@ -203,6 +213,9 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "evaluation:read",
         "evaluation:run",
         "evaluation:export",
+        "agent:read",
+        "agent:plan",
+        "agent:execute",
     },
     "reviewer": {
         "project:read",
@@ -227,6 +240,8 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "campaign:read",
         "campaign:approve",
         "evaluation:read",
+        "agent:read",
+        "agent:approve",
     },
     "viewer": {
         "project:read",
@@ -245,6 +260,7 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "hypothesis:read",
         "campaign:read",
         "evaluation:read",
+        "agent:read",
     },
     "runner": {
         "project:read",
@@ -275,6 +291,9 @@ PROJECT_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "campaign:plan",
         "evaluation:read",
         "evaluation:run",
+        "agent:read",
+        "agent:plan",
+        "agent:execute",
     },
 }
 

@@ -41,7 +41,7 @@ def test_synthetic_golden_profile_contains_required_measurements() -> None:
     profile = profile_synthetic_workflow("golden")
 
     assert isinstance(profile, PerformanceProfile)
-    assert profile.version == "2.0.0"
+    assert profile.version == "2.1.0"
     assert profile.workflow == "golden"
     assert profile.live_apis_enabled is False
     assert set(profile.measurements) == REQUIRED_MEASUREMENTS

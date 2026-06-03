@@ -18,7 +18,7 @@ def test_v19_pilot_readiness_covers_enterprise_operational_focus() -> None:
     report = build_pilot_readiness_report(ROOT)
 
     assert PILOT_READINESS_VERSION == "pilot-readiness.v1.9"
-    assert report["version"] == "2.0.0"
+    assert report["version"] == "2.1.0"
     assert report["ready"] is True
     assert len(V19_PILOT_AREAS) == 15
     assert {area.area_id for area in V19_PILOT_AREAS} == {
