@@ -1,4 +1,5 @@
-FROM python:3.11-slim AS runtime
+ARG PYTHON_BASE=python:3.11-slim
+FROM ${PYTHON_BASE} AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,8 +13,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN addgroup --system molecule-ranker \
-    && adduser --system --ingroup molecule-ranker --home /app molecule-ranker \
+USER root
+
+RUN getent group molecule-ranker >/dev/null || addgroup --system molecule-ranker \
+    && id -u molecule-ranker >/dev/null 2>&1 || adduser --system --ingroup molecule-ranker --home /app molecule-ranker \
     && mkdir -p /data/projects /data/artifacts /data/storage \
     && chown -R molecule-ranker:molecule-ranker /app /data
 

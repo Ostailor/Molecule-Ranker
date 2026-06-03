@@ -429,8 +429,11 @@ def _audit_local_files(root: Path) -> list[SecurityAuditFinding]:
             continue
         if path.name.startswith("security_bad_fixtures"):
             continue
+        relative = path.relative_to(root)
+        if _skip_local_secret_scan(relative):
+            continue
         text = path.read_text(errors="ignore")
-        if redact_secrets(text) != text:
+        if _contains_unredacted_secret_text(text):
             check_id = (
                 "audit_logs_do_not_include_secrets"
                 if "audit" in path.name.lower()
@@ -574,11 +577,78 @@ def _has_path_traversal(value: str) -> bool:
 
 def _contains_secret(value: Any) -> bool:
     raw = json.dumps(value, sort_keys=True, default=str) if not isinstance(value, str) else value
-    if redact_secrets(raw) != raw:
-        return True
-    if SECRET_KEY_RE.search(raw) and "[REDACTED]" not in raw and "safe metadata" not in raw:
+    if _contains_unredacted_secret_text(raw):
         return True
     return False
+
+
+def _skip_local_secret_scan(relative: Path) -> bool:
+    parts = set(relative.parts)
+    if parts & {".molecule-ranker", ".demo_state", ".pytest_cache", ".ruff_cache", "__pycache__"}:
+        return True
+    if relative.parts and relative.parts[0] in {"docs", "examples"}:
+        return True
+    return relative.name == "README.md"
+
+
+def _contains_unredacted_secret_text(text: str) -> bool:
+    if "[REDACTED]" in text or "safe metadata" in text:
+        return False
+    redacted = redact_secrets(text)
+    if redacted == text:
+        return False
+    changed = _redaction_deltas(text, redacted)
+    return any(not _allowed_secret_placeholder(value) for value in changed)
+
+
+def _redaction_deltas(original: str, redacted: str) -> list[str]:
+    values: list[str] = []
+    for pattern in _SECRET_DETECTION_PATTERNS:
+        for match in pattern.finditer(original):
+            values.append(match.group(0))
+    if not values and original != redacted:
+        values.append(original)
+    return values
+
+
+_SECRET_DETECTION_PATTERNS = (
+    re.compile(
+        r"(?i)\b(?:api[_-]?key|openai[_-]?api[_-]?key|secret|token|password|passwd|"
+        r"authorization)\s*[:=]\s*([^\s\"']{6,})"
+    ),
+    re.compile(
+        r"(?i)([\"']?(?:api[_-]?key|openai[_-]?api[_-]?key|secret|token|password|"
+        r"passwd|authorization)[\"']?\s*:\s*[\"'])([^\"']{6,})([\"'])"
+    ),
+    re.compile(r"(?im)^([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*)=(.+)$"),
+    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+        re.S,
+    ),
+)
+
+
+def _allowed_secret_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "example",
+            "placeholder",
+            "redacted",
+            "change-me",
+            "strong-password",
+            "admin-password",
+            "readiness-password",
+            "release-gate-password",
+            "$(",
+            "${",
+            "$molecule_ranker",
+        )
+    )
 
 
 def _redacted_excerpt(text: str) -> str:

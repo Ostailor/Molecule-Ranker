@@ -190,9 +190,23 @@ def _text_findings(artifact: ArtifactSnapshot) -> list[GuardrailFinding]:
             "ADMET output is described as proof of safety.",
         ),
         (
+            "Biomedical evidence integrity",
+            "no_model_prediction_as_evidence",
+            re.compile(
+                r"\bmodel\s+prediction\b.{0,80}\b(?:is|as|becomes?|counts?\s+as)\b"
+                r".{0,40}\bevidence\b",
+                re.I | re.S,
+            ),
+            "Model prediction is described as evidence.",
+        ),
+        (
             "Medical/synthesis/lab-protocol safety",
             "no_synthesis_instructions",
-            re.compile(r"\bsynthesis\s+(?:instructions?|route|steps?)\b", re.I),
+            re.compile(
+                r"\b(?:step[- ]?by[- ]?step\s+)?synthesis\s+(?:route|steps?)\b|"
+                r"\bsynthesis\s+instructions?\s*:",
+                re.I,
+            ),
             "Artifact contains synthesis-instruction language.",
         ),
         (
@@ -210,7 +224,14 @@ def _text_findings(artifact: ArtifactSnapshot) -> list[GuardrailFinding]:
         (
             "Medical/synthesis/lab-protocol safety",
             "no_cure_treat_claims",
-            re.compile(r"\b(?:cures?|treats?|prevents?)\b", re.I),
+            re.compile(
+                r"\bcures?\b|"
+                r"\b(?:treats?|prevents?)\b[^.\n]{0,80}"
+                r"\b(?:disease|condition|patient|tumou?r|cancer|exampledisease)\b|"
+                r"\b(?:disease|condition|patient|tumou?r|cancer|exampledisease)\b"
+                r"[^.\n]{0,80}\b(?:treated|prevented)\b",
+                re.I,
+            ),
             "Artifact contains cure, treatment, or prevention claim language.",
         ),
     ]
@@ -325,7 +346,11 @@ def _citation_findings(artifact: ArtifactSnapshot, payload: Any) -> list[Guardra
     findings: list[GuardrailFinding] = []
     for item in _dicts(payload):
         keys = set(item)
-        citation_like = bool(keys & {"citation", "citation_id", "pmid", "doi", "title"})
+        citation_like = bool(keys & {"citation", "citation_id", "pmid", "doi"}) or (
+            "title" in keys
+            and str(item.get("evidence_type") or item.get("source") or "").lower()
+            in {"literature", "publication", "pubmed", "citation"}
+        )
         if citation_like and not item.get("source_record_id") and not item.get("record_id"):
             findings.append(
                 _structural_finding(

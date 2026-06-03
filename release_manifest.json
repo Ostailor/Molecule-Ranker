@@ -1,12 +1,12 @@
 {
   "api_contract_version": "api.v1",
   "artifact_contract_version": "1.0",
-  "build_timestamp": "2026-06-02T18:06:01Z",
-  "dependency_lock_hash": "6343425d061c91772814e8e5c4e0b643f278cd958a37757a0b3ff74ba6240291",
-  "git_commit": "f0af3526a633a41e660d5cf7de033d04acd2d2ec",
+  "build_timestamp": "2026-06-02T22:56:44Z",
+  "dependency_lock_hash": "5f7baa15d8f4e3cb9d5f4eff6e6a759882c5e6a7bd8c5c98c392dc6ed2a58ecb",
+  "git_commit": "7e5b2fdc882b2c31a6eb636c32116c8704d74ac7",
   "known_limitations": [
-    "V1.9 is for internal research use only and is not a clinical product.",
-    "V1.9 prepares enterprise/internal pilots through operational hardening, not new science capability.",
+    "V2.0 is for internal research use only and is not a clinical product.",
+    "V2.0 validates enterprise discovery operating-system readiness through software, process, deployment, security, governance, and operational evidence, not new science capability.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules are computational hypotheses and require independent validation.",
     "Portfolio recommendations are research prioritization aids, not clinical or experimental instructions.",
@@ -18,6 +18,7 @@
     "Benchmark results are evaluation artifacts, not biomedical evidence.",
     "Prospective validation analytics are not clinical validation.",
     "Codex must not invent benchmark results, labels, metrics, or conclusions.",
+    "Enterprise validation artifacts are software/process validation artifacts, not clinical validation.",
     "Graph paths do not prove causality, efficacy, safety, binding, or activity.",
     "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
     "Docking scores, poses, and structure-derived interactions are computational heuristics, not proof of binding or activity.",
@@ -27,7 +28,7 @@
   ],
   "name": "molecule-ranker",
   "readiness": {
-    "gate_count": 33,
+    "gate_count": 15,
     "missing_gates": [],
     "status": "pass"
   },
@@ -39,5 +40,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "1.9.0"
+  "version": "2.0.0"
 }

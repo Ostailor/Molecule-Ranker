@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: molecule-ranker-server
+  labels:
+    app: molecule-ranker
+    component: server
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: molecule-ranker
+    component: server
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http

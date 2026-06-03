@@ -34,10 +34,13 @@ from molecule_ranker.platform.auth import (
     SessionTokenManager,
     generate_opaque_token,
 )
-from molecule_ranker.platform.database import artifact_records
+from molecule_ranker.platform.database import artifact_records, project_permissions
 from molecule_ranker.platform.db import PlatformDatabase
 from molecule_ranker.platform.jobs import PlatformJobQueue
+from molecule_ranker.platform.observability import redact_for_log
 from molecule_ranker.platform.rbac import (
+    ORG_ROLE_PERMISSIONS,
+    PROJECT_ROLE_PERMISSIONS,
     has_permission,
     require_platform_admin,
     require_project_access,
@@ -178,6 +181,12 @@ async def project_create_submit(
         existing = store.load()
         require_project_access(database, user, project_id=existing.workspace_id, action="admin")
     workspace = store.create(workspace_id=workspace_id, name=name)
+    database.register_project_workspace(
+        project_id=workspace.workspace_id,
+        name=workspace.name,
+        root_dir=str(store.root_dir),
+        actor_user_id=user.user_id,
+    )
     database.grant_project_permission(
         project_id=workspace.workspace_id,
         role="owner",
@@ -2201,7 +2210,11 @@ def audit_log_page(
     return _template(
         request,
         "audit.html",
-        {"title": "Audit log", "user": user, "events": database.list_audit_events(limit=100)},
+        {
+            "title": "Audit log",
+            "user": user,
+            "events": _admin_audit_events(database),
+        },
     )
 
 
@@ -2221,6 +2234,42 @@ def admin_page(
             "users": database.list_users(),
             "organizations": database.list_organizations(),
             "teams": list_admin_teams(database),
+        },
+    )
+
+
+@router.get("/dashboard/admin/roles", response_class=HTMLResponse)
+def admin_roles_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+) -> Response:
+    require_platform_admin(user)
+    return _template(
+        request,
+        "admin_roles.html",
+        {
+            "title": "Admin roles",
+            "user": user,
+            "org_roles": _admin_role_matrix(ORG_ROLE_PERMISSIONS),
+            "project_roles": _admin_role_matrix(PROJECT_ROLE_PERMISSIONS),
+        },
+    )
+
+
+@router.get("/dashboard/admin/project-permissions", response_class=HTMLResponse)
+def admin_project_permissions_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    return _template(
+        request,
+        "admin_project_permissions.html",
+        {
+            "title": "Project permissions",
+            "user": user,
+            "permissions": _admin_project_permissions(database),
         },
     )
 
@@ -2303,6 +2352,24 @@ def admin_service_accounts_page(
     )
 
 
+@router.get("/dashboard/admin/integrations", response_class=HTMLResponse)
+def admin_integrations_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    return _template(
+        request,
+        "admin_integrations.html",
+        {
+            "title": "Integration administration",
+            "user": user,
+            "summary": redact_for_log(database.integration_dashboard_summary()),
+        },
+    )
+
+
 @router.get("/dashboard/admin/audit", response_class=HTMLResponse)
 def admin_audit_page(
     request: Request,
@@ -2313,7 +2380,7 @@ def admin_audit_page(
     return _template(
         request,
         "admin_audit.html",
-        {"title": "Admin audit", "user": user, "events": database.list_audit_events(limit=100)},
+        {"title": "Admin audit", "user": user, "events": _admin_audit_events(database)},
     )
 
 
@@ -2358,6 +2425,80 @@ def admin_health_page(
     )
 
 
+@router.get("/dashboard/admin/workers", response_class=HTMLResponse)
+def admin_workers_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    jobs = PlatformJobQueue(database).list_jobs(limit=200)
+    status_counts: dict[str, int] = {}
+    type_counts: dict[str, int] = {}
+    for job in jobs:
+        status_counts[str(job.status)] = status_counts.get(str(job.status), 0) + 1
+        type_counts[str(job.job_type)] = type_counts.get(str(job.job_type), 0) + 1
+    return _template(
+        request,
+        "admin_workers.html",
+        {
+            "title": "Workers",
+            "user": user,
+            "status_counts": status_counts,
+            "type_counts": type_counts,
+            "queue_backlog": status_counts.get("queued", 0),
+            "codex_status": database.codex_worker_status(),
+        },
+    )
+
+
+@router.get("/dashboard/admin/slo", response_class=HTMLResponse)
+def admin_slo_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.platform.slo import generate_slo_report
+
+    report = generate_slo_report(
+        database=database,
+        backup_path=database.root_dir / ".molecule-ranker" / "backups",
+    )
+    return _template(
+        request,
+        "admin_slo.html",
+        {
+            "title": "SLO dashboard",
+            "user": user,
+            "report": report.to_dict(),
+        },
+    )
+
+
+@router.get("/dashboard/admin/policies", response_class=HTMLResponse)
+def admin_policies_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.platform.policy import PolicyEngine, default_policy_pack
+
+    engine = PolicyEngine.default()
+    action = str(request.query_params.get("action") or "export_generated_molecule")
+    explanation = engine.explain(action, {"generated_molecule": True, "review_status": "pending"})
+    return _template(
+        request,
+        "admin_policies.html",
+        {
+            "title": "Policies",
+            "user": user,
+            "rules": [rule.model_dump(mode="json") for rule in default_policy_pack()],
+            "explanation": explanation,
+        },
+    )
+
+
 @router.get("/dashboard/admin/codex-worker", response_class=HTMLResponse)
 def admin_codex_worker_page(
     request: Request,
@@ -2372,6 +2513,62 @@ def admin_codex_worker_page(
             "title": "Codex worker status",
             "user": user,
             "codex_status": database.codex_worker_status(),
+        },
+    )
+
+
+@router.get("/dashboard/admin/backup-restore", response_class=HTMLResponse)
+def admin_backup_restore_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import build_admin_support_console
+
+    console = build_admin_support_console(database, root_dir=database.root_dir)
+    return _template(
+        request,
+        "admin_backup_restore.html",
+        {
+            "title": "Backup/restore",
+            "user": user,
+            "console": console,
+            "action_result": request.query_params.get("action_result"),
+        },
+    )
+
+
+@router.post("/dashboard/admin/backup-restore/verify")
+def dashboard_admin_backup_restore_verify(
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.pilot.admin_support import run_admin_backup_verification
+
+    run_admin_backup_verification(database, root_dir=database.root_dir, actor=user)
+    return RedirectResponse(
+        "/dashboard/admin/backup-restore?action_result=backup verification completed",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/dashboard/admin/release-validation", response_class=HTMLResponse)
+def admin_release_validation_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+) -> Response:
+    require_platform_admin(user)
+    from molecule_ranker.v2 import validate_v2_release_contracts
+
+    return _template(
+        request,
+        "admin_release_validation.html",
+        {
+            "title": "Release and validation package",
+            "user": user,
+            "contract_report": validate_v2_release_contracts(),
         },
     )
 
@@ -2819,9 +3016,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.9</div>"
+        "<div class=\"brand\">molecule-ranker V2.0</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2964,9 +3161,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.9</div>"
+        "<div class=\"brand\">molecule-ranker V2.0</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -2999,9 +3196,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.9</div>"
+        "<div class=\"brand\">molecule-ranker V2.0</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3051,9 +3248,9 @@ def _campaign_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.9</div>"
+        "<div class=\"brand\">molecule-ranker V2.0</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3494,9 +3691,9 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.9</div>"
+        "<div class=\"brand\">molecule-ranker V2.0</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4072,9 +4269,9 @@ def _evaluation_dashboard_shell(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.9</div>"
+        "<div class=\"brand\">molecule-ranker V2.0</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4315,9 +4512,9 @@ def _hypothesis_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=1.9.0-dashboard-2\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.0.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V1.9</div>"
+        "<div class=\"brand\">molecule-ranker V2.0</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4429,6 +4626,40 @@ def _project_hypothesis_children(
 
 def _compact_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ": "))
+
+
+def _admin_role_matrix(source: dict[str, set[str]]) -> list[dict[str, Any]]:
+    return [
+        {"role": role, "permissions": sorted(permissions)}
+        for role, permissions in sorted(source.items())
+    ]
+
+
+def _admin_project_permissions(database: PlatformDatabase) -> list[dict[str, Any]]:
+    with database.engine.connect() as connection:
+        rows = (
+            connection.execute(
+                select(project_permissions).order_by(
+                    project_permissions.c.project_id,
+                    project_permissions.c.principal_type,
+                    project_permissions.c.principal_id,
+                )
+            )
+            .mappings()
+            .fetchall()
+        )
+    return [redact_for_log(dict(row)) for row in rows]
+
+
+def _admin_audit_events(database: PlatformDatabase) -> list[dict[str, Any]]:
+    return [
+        {
+            **event.model_dump(),
+            "summary": redact_for_log(event.summary),
+            "metadata": redact_for_log(event.metadata),
+        }
+        for event in database.list_audit_events(limit=100)
+    ]
 
 
 def _query_int(request: Request, name: str, *, default: int) -> int:

@@ -46,12 +46,14 @@ from molecule_ranker.server.security import (
     unhandled_exception_response,
     validation_exception_response,
 )
+from molecule_ranker.v2 import V2_API_CONTRACT_VERSION, V2_CONTRACT_VERSION
 from molecule_ranker.web import router as web_router
 from molecule_ranker.workspace.store import ProjectWorkspaceStore
 
 OPENAPI_TAGS = [
     {"name": "health", "description": "Operational health and version endpoints."},
     {"name": "v1-health", "description": "V1 operational health and version endpoints."},
+    {"name": "v2-health", "description": "V2 operational health and version endpoints."},
     {"name": "auth", "description": "Hosted authentication and service account tokens."},
     {"name": "projects", "description": "Project workspaces and sharing."},
     {"name": "runs", "description": "Run metadata and run-scoped operations."},
@@ -100,18 +102,18 @@ def _dashboard_error_response(request: Request, exc: HTTPException) -> Response:
     message = escape(str(exc.detail), quote=True)
     title = escape(_dashboard_error_title(exc.status_code), quote=True)
     body = (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{title} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css\">"
-        "</head><body><main class=\"content\">"
-        f"<header class=\"page-heading\"><h1>{title}</h1></header>"
-        "<section class=\"section\"><div class=\"panel\">"
+        '<link rel="stylesheet" href="/static/dashboard/dashboard.css">'
+        '</head><body><main class="content">'
+        f'<header class="page-heading"><h1>{title}</h1></header>'
+        '<section class="section"><div class="panel">'
         "<h2>What happened</h2>"
         f"<p>{message}</p>"
-        "<p class=\"muted\">Use the dashboard navigation or retry after checking your "
+        '<p class="muted">Use the dashboard navigation or retry after checking your '
         "permissions and project ID.</p>"
-        f"<p class=\"muted\">Request ID: <code>{escape(request_id, quote=True)}</code></p>"
+        f'<p class="muted">Request ID: <code>{escape(request_id, quote=True)}</code></p>'
         "</div></section></main></body></html>"
     )
     return Response(
@@ -149,6 +151,10 @@ def create_app(
     oidc_client_id: str | None = None,
     oidc_client_secret_env_var: str | None = None,
     oidc_redirect_url: str | None = None,
+    oidc_discovery_url: str | None = None,
+    oidc_allowed_email_domains: list[str] | None = None,
+    oidc_group_role_mapping: dict[str, list[str]] | None = None,
+    oidc_allow_insecure_http_for_dev: bool = False,
     cors_allow_origins: list[str] | None = None,
     max_request_bytes: int = 1_048_576,
     max_upload_bytes: int = 10_485_760,
@@ -210,6 +216,10 @@ def create_app(
     app.state.oidc_client_id = oidc_client_id
     app.state.oidc_client_secret_env_var = oidc_client_secret_env_var
     app.state.oidc_redirect_url = oidc_redirect_url
+    app.state.oidc_discovery_url = oidc_discovery_url
+    app.state.oidc_allowed_email_domains = list(oidc_allowed_email_domains or [])
+    app.state.oidc_group_role_mapping = dict(oidc_group_role_mapping or {})
+    app.state.oidc_allow_insecure_http_for_dev = oidc_allow_insecure_http_for_dev
     if hosted_mode:
         database = PlatformDatabase(
             resolved_root,
@@ -285,12 +295,35 @@ def create_app(
     def v1_metrics_endpoint() -> PlainTextResponse:
         return metrics_endpoint()
 
+    @app.get("/api/v2/health", tags=["v2-health"], response_model=HealthResponse)
+    def v2_health() -> HealthResponse:
+        return health()
+
+    @app.get("/api/v2/ready", tags=["v2-health"], response_model=ReadyResponse)
+    def v2_ready() -> ReadyResponse:
+        return ready()
+
+    @app.get("/api/v2/version", tags=["v2-health"], response_model=VersionResponse)
+    def v2_version() -> VersionResponse:
+        return VersionResponse(
+            version=__version__,
+            api_contract_version=V2_API_CONTRACT_VERSION,
+            artifact_contract_version=V2_CONTRACT_VERSION,
+            data_contract_version=DATA_CONTRACT_VERSION,
+            warehouse_contract_version=WAREHOUSE_CONTRACT_VERSION,
+        )
+
+    @app.get("/api/v2/metrics", tags=["v2-health"], response_class=PlainTextResponse)
+    def v2_metrics_endpoint() -> PlainTextResponse:
+        return metrics_endpoint()
+
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:
         return Response(status_code=204)
 
     dependencies = [Depends(require_api_key)]
     v1_dependencies = dependencies
+    v2_dependencies = dependencies
 
     @app.get(
         "/api/v1/active-learning/health",
@@ -320,6 +353,15 @@ def create_app(
     app.include_router(experiments.router, prefix="/api/v1", dependencies=v1_dependencies)
     app.include_router(integrations.router, prefix="/api/v1", dependencies=v1_dependencies)
     app.include_router(webhooks.router, prefix="/api/v1")
+    app.include_router(auth.router, prefix="/api/v2")
+    app.include_router(platform.router, prefix="/api/v2")
+    app.include_router(projects.router, prefix="/api/v2", dependencies=v2_dependencies)
+    app.include_router(artifacts.router, prefix="/api/v2", dependencies=v2_dependencies)
+    app.include_router(codex.router, prefix="/api/v2", dependencies=v2_dependencies)
+    app.include_router(review.router, prefix="/api/v2", dependencies=v2_dependencies)
+    app.include_router(experiments.router, prefix="/api/v2", dependencies=v2_dependencies)
+    app.include_router(integrations.router, prefix="/api/v2", dependencies=v2_dependencies)
+    app.include_router(webhooks.router, prefix="/api/v2")
     return app
 
 

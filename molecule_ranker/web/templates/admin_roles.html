@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>RBAC matrix</h1>
+  <p class="muted">Enterprise role-to-permission matrix for hosted administration and project access.</p>
+</header>
+<section class="section">
+  <h2>Organization roles</h2>
+  <table>
+    <thead><tr><th>Role</th><th>Permissions</th></tr></thead>
+    <tbody>
+      {% for item in org_roles %}
+        <tr><td>{{ item.role }}</td><td>{{ item.permissions | join(", ") }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="section">
+  <h2>Project roles</h2>
+  <table>
+    <thead><tr><th>Role</th><th>Permissions</th></tr></thead>
+    <tbody>
+      {% for item in project_roles %}
+        <tr><td>{{ item.role }}</td><td>{{ item.permissions | join(", ") }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

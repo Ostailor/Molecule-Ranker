@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "molecule-ranker"
-version = "1.9.0"
+version = "2.0.0"
 description = "Internal research platform for source-backed molecule ranking and guarded Codex orchestration."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,10 +37,10 @@ surrogate = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["molecule_ranker"]
+packages = ["molecule_ranker", "molecule_ranker_sdk"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "tests_integration", "tests_validation"]
+testpaths = ["tests", "tests_integration", "tests_validation", "tests_redteam"]
 pythonpath = ["."]
 markers = [
   "browser: optional browser-level smoke tests",

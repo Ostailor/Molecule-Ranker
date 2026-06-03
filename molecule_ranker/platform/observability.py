@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from html import escape
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -60,6 +61,7 @@ LOG_SECRET_PATTERNS = (
         re.compile(r"(?i)\bauthorization=\[REDACTED\]\s+[A-Za-z0-9._~+/=-]{8,}"),
         "authorization=[REDACTED]",
     ),
+    (re.compile(r"(?i)\[REDACTED\]\s+[A-Za-z0-9._~+/=-]{8,}"), "[REDACTED]"),
     (re.compile(r"\bmrs_[A-Za-z0-9._~+/=-]{8,}"), "mrs_[REDACTED]"),
     (re.compile(r"\bmrr_[A-Za-z0-9._~+/=-]{8,}"), "mrr_[REDACTED]"),
 )
@@ -310,6 +312,51 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
             set_request_id(None)
 
 
+def render_slo_dashboard_html(report: Any) -> str:
+    payload = report.to_dict() if hasattr(report, "to_dict") else _sanitize(report)
+    measurements = payload.get("measurements", [])
+    rows = "".join(
+        "<tr>"
+        f"<td>{_h(item.get('name', item.get('slo_id', '')))}</td>"
+        f"<td><span class=\"status status-{_h(item.get('status', 'unknown'))}\">"
+        f"{_h(item.get('status', 'unknown'))}</span></td>"
+        f"<td>{_h(item.get('observed_value'))} {_h(item.get('unit', ''))}</td>"
+        f"<td>{_h(item.get('comparator'))} {_h(item.get('target'))}</td>"
+        f"<td>{_h(item.get('bad_events', 0))} / {_h(item.get('total_events', 0))}</td>"
+        "</tr>"
+        for item in measurements
+        if isinstance(item, Mapping)
+    )
+    failed = payload.get("error_budget_summary", {}).get("failed_slos", [])
+    return (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>SLO dashboard</title>"
+        "<style>"
+        "body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;"
+        "color:#182230;background:#f6f8fb;line-height:1.45}"
+        "header,main{max-width:1180px;margin:0 auto;padding:18px}"
+        "header{background:#fff;border-bottom:1px solid #d6deea}"
+        ".notice,.summary{background:#fff;border:1px solid #d6deea;border-radius:6px;padding:12px}"
+        ".notice{border-color:#d6a800;background:#fff8db}"
+        "table{width:100%;border-collapse:collapse;background:#fff;margin-top:12px}"
+        "th,td{border:1px solid #d6deea;padding:8px;text-align:left;vertical-align:top}"
+        "th{background:#eef3f8}.status{font-weight:700}.status-pass{color:#116329}"
+        ".status-fail{color:#a61b1b}"
+        "</style></head><body><header><h1>SLO dashboard</h1></header><main>"
+        "<p class=\"notice\">Enterprise SLO reporting is platform operational evidence. "
+        "Metrics are redacted and do not include secrets, tokens, or biomedical claims.</p>"
+        "<section class=\"summary\">"
+        f"<strong>Overall status:</strong> {_h(payload.get('status', 'unknown'))}<br>"
+        f"<strong>Generated:</strong> {_h(payload.get('generated_at', ''))}<br>"
+        f"<strong>Failed SLOs:</strong> {_h(', '.join(str(item) for item in failed) or 'None')}"
+        "</section><section><h2>Service level objectives</h2><table>"
+        "<thead><tr><th>SLO</th><th>Status</th><th>Observed</th><th>Target</th>"
+        "<th>Bad events</th></tr></thead><tbody>"
+        f"{rows}</tbody></table></section></main></body></html>\n"
+    )
+
+
 def _sanitize(value: Any) -> Any:
     if isinstance(value, Mapping):
         sanitized: dict[str, Any] = {}
@@ -352,6 +399,10 @@ def _format_number(value: float) -> str:
     return f"{value:.12g}"
 
 
+def _h(value: Any) -> str:
+    return escape(str(redact_for_log(value)), quote=True)
+
+
 __all__ = [
     "JSONLogFormatter",
     "MetricsRegistry",
@@ -366,5 +417,6 @@ __all__ = [
     "record_api_request",
     "record_pipeline_run",
     "redact_for_log",
+    "render_slo_dashboard_html",
     "set_request_id",
 ]

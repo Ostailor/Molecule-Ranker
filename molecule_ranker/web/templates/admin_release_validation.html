@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Release and validation package</h1>
+  <p class="notice">Validation packages are software/platform evidence, not clinical validation or regulatory approval.</p>
+</header>
+<section class="section">
+  <h2>V2 contract validation</h2>
+  <pre>{{ contract_report | tojson(indent=2) }}</pre>
+</section>
+<section class="section">
+  <h2>Release commands</h2>
+  <pre>molecule-ranker v2 validate-contracts
+molecule-ranker validate v2-package --output validation_package/
+molecule-ranker validate enterprise-golden
+molecule-ranker v2 release-gate</pre>
+</section>
+{% endblock %}

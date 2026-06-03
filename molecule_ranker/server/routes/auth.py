@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -18,6 +19,11 @@ from molecule_ranker.platform.database import PlatformDatabase
 from molecule_ranker.platform.observability import metrics
 from molecule_ranker.platform.rbac import require_platform_admin
 from molecule_ranker.platform.schemas import UserAccount
+from molecule_ranker.platform.sso import (
+    HTTPOIDCMetadataProvider,
+    validate_id_token,
+    validate_oidc_discovery_document,
+)
 from molecule_ranker.server.dependencies import current_user, platform_database
 from molecule_ranker.server.routes.platform import public_user
 
@@ -47,6 +53,10 @@ class ServiceTokenCreateRequest(BaseModel):
 
 class ServiceTokenRevokeRequest(BaseModel):
     token_id: str
+
+
+class OIDCCallbackRequest(BaseModel):
+    id_token: str
 
 
 @router.post("/auth/login")
@@ -138,15 +148,54 @@ def oidc_login(request: Request) -> dict[str, Any]:
     config = _oidc_config(request)
     if not config.enabled:
         raise HTTPException(status_code=404, detail="OIDC is not configured.")
-    raise HTTPException(status_code=501, detail="OIDC login is not implemented in V1.0.")
+    provider = HTTPOIDCMetadataProvider(config.discovery_url or _default_discovery_url(config))
+    try:
+        discovery = validate_oidc_discovery_document(config, provider.discovery_document())
+    except AuthError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not config.redirect_url:
+        return {
+            "issuer": discovery.issuer,
+            "authorization_endpoint": discovery.authorization_endpoint,
+            "jwks_uri": discovery.jwks_uri,
+        }
+    query = urlencode(
+        {
+            "client_id": config.client_id,
+            "redirect_uri": config.redirect_url,
+            "response_type": "code",
+            "scope": "openid email profile groups",
+        }
+    )
+    return {
+        "issuer": discovery.issuer,
+        "authorization_url": f"{discovery.authorization_endpoint}?{query}",
+    }
 
 
 @router.get("/auth/oidc/callback")
-def oidc_callback(request: Request) -> dict[str, Any]:
+def oidc_callback_get(request: Request) -> dict[str, Any]:
     config = _oidc_config(request)
     if not config.enabled:
         raise HTTPException(status_code=404, detail="OIDC is not configured.")
-    raise HTTPException(status_code=501, detail="OIDC callback is not implemented in V1.0.")
+    id_token = request.query_params.get("id_token")
+    if not id_token:
+        raise HTTPException(
+            status_code=400,
+            detail="OIDC callback requires an ID token for validation.",
+        )
+    return _complete_oidc_callback(id_token=id_token, request=request)
+
+
+@router.post("/auth/oidc/callback")
+def oidc_callback(
+    callback: OIDCCallbackRequest,
+    request: Request,
+) -> dict[str, Any]:
+    config = _oidc_config(request)
+    if not config.enabled:
+        raise HTTPException(status_code=404, detail="OIDC is not configured.")
+    return _complete_oidc_callback(id_token=callback.id_token, request=request)
 
 
 @router.post("/auth/token/create")
@@ -155,6 +204,7 @@ def create_service_token(
     user: Annotated[UserAccount, Depends(current_user)],
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> dict[str, Any]:
+    _require_admin_token_scope(user, "admin:manage_users")
     require_platform_admin(user)
     target_user = database.get_user(request.user_id)
     if target_user is None or not target_user.is_active:
@@ -189,6 +239,7 @@ def revoke_service_token(
     user: Annotated[UserAccount, Depends(current_user)],
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> dict[str, Any]:
+    _require_admin_token_scope(user, "admin:manage_users")
     require_platform_admin(user)
     revoked = database.revoke_service_account_token(
         token_id=request.token_id,
@@ -230,13 +281,62 @@ def _issue_token_pair(
     }
 
 
+def _complete_oidc_callback(*, id_token: str, request: Request) -> dict[str, Any]:
+    config = _oidc_config(request)
+    provider = getattr(request.app.state, "oidc_metadata_provider", None)
+    if provider is None:
+        provider = HTTPOIDCMetadataProvider(config.discovery_url or _default_discovery_url(config))
+    try:
+        identity = validate_id_token(id_token, config=config, provider=provider)
+    except AuthError as exc:
+        metrics.increment("auth_failures_total")
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    if not identity.email:
+        raise HTTPException(status_code=401, detail="OIDC email claim is required.")
+    database: PlatformDatabase = request.app.state.platform_database
+    user = database.upsert_oidc_user(
+        email=identity.email,
+        subject=identity.subject,
+        issuer=identity.issuer,
+        roles=identity.roles,
+        display_name=str(identity.claims.get("name")) if identity.claims.get("name") else None,
+        metadata={"groups": identity.groups},
+    )
+    return _issue_token_pair(
+        database=database,
+        user=user,
+        auth_secret=request.app.state.auth_secret,
+        metadata={"flow": "oidc", "issuer": identity.issuer},
+    )
+
+
 def _oidc_config(request: Request) -> OIDCConfig:
     return OIDCConfig(
         issuer=getattr(request.app.state, "oidc_issuer", None),
         client_id=getattr(request.app.state, "oidc_client_id", None),
         client_secret_env_var=getattr(request.app.state, "oidc_client_secret_env_var", None),
         redirect_url=getattr(request.app.state, "oidc_redirect_url", None),
+        discovery_url=getattr(request.app.state, "oidc_discovery_url", None),
+        allowed_email_domains=list(getattr(request.app.state, "oidc_allowed_email_domains", [])),
+        group_role_mapping=dict(getattr(request.app.state, "oidc_group_role_mapping", {})),
+        allow_insecure_http_for_dev=bool(
+            getattr(request.app.state, "oidc_allow_insecure_http_for_dev", False)
+        ),
     )
+
+
+def _default_discovery_url(config: OIDCConfig) -> str:
+    if not config.issuer:
+        raise AuthError("OIDC issuer is required.")
+    return f"{config.issuer.rstrip('/')}/.well-known/openid-configuration"
+
+
+def _require_admin_token_scope(user: UserAccount, permission: str) -> None:
+    if user.auth_provider != "service_account":
+        return
+    scopes = {str(scope) for scope in user.metadata.get("scopes", [])}
+    if "*" not in scopes and permission not in scopes:
+        raise HTTPException(status_code=403, detail="Permission denied.")
 
 
 __all__ = ["PasswordPolicyConfig", "router"]

@@ -1,27 +1,30 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: molecule-ranker-web
+  name: molecule-ranker-server
   labels:
     app: molecule-ranker
-    component: web
+    component: server
+    app.kubernetes.io/version: "2.0.0"
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: molecule-ranker
-      component: web
+      component: server
   template:
     metadata:
       labels:
         app: molecule-ranker
-        component: web
+        component: server
     spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - name: artifacts
           persistentVolumeClaim:
@@ -33,16 +36,16 @@ spec:
           persistentVolumeClaim:
             claimName: molecule-ranker-projects
       containers:
-        - name: web
-          image: molecule-ranker:0.8.0
+        - name: server
+          image: molecule-ranker:2.0.0
           imagePullPolicy: IfNotPresent
           args: ["web"]
           ports:
-            - containerPort: 8765
-          envFrom:
-            - secretRef:
-                name: molecule-ranker-secrets
+            - name: http
+              containerPort: 8765
           env:
+            - name: MOLECULE_RANKER_HOSTED
+              value: "true"
             - name: MOLECULE_RANKER_HOST
               value: "0.0.0.0"
             - name: MOLECULE_RANKER_PORT
@@ -55,6 +58,20 @@ spec:
               value: /data/artifacts
             - name: MOLECULE_RANKER_STORAGE_ROOT
               value: /data/storage
+            - name: MOLECULE_RANKER_EXTERNAL_WRITES_ENABLED
+              value: "false"
+            - name: MOLECULE_RANKER_ENABLE_CODEX_WORKER
+              value: "false"
+            - name: MOLECULE_RANKER_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: molecule-ranker-secrets
+                  key: auth-secret
+            - name: MOLECULE_RANKER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: molecule-ranker-secrets
+                  key: database-url
           volumeMounts:
             - name: artifacts
               mountPath: /data/artifacts
@@ -65,15 +82,26 @@ spec:
           readinessProbe:
             httpGet:
               path: /ready
-              port: 8765
+              port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
           livenessProbe:
             httpGet:
               path: /health
-              port: 8765
+              port: http
             initialDelaySeconds: 30
             periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
@@ -87,6 +115,7 @@ metadata:
   labels:
     app: molecule-ranker
     component: worker
+    app.kubernetes.io/version: "2.0.0"
 spec:
   replicas: 1
   selector:
@@ -104,33 +133,8 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
-      containers:
-        - name: worker
-          image: molecule-ranker:0.8.0
-          imagePullPolicy: IfNotPresent
-          args: ["worker"]
-          envFrom:
-            - secretRef:
-                name: molecule-ranker-secrets
-          env:
-            - name: MOLECULE_RANKER_ROOT
-              value: /data/projects
-            - name: MOLECULE_RANKER_ARTIFACT_ROOT
-              value: /data/artifacts
-            - name: MOLECULE_RANKER_STORAGE_ROOT
-              value: /data/storage
-          volumeMounts:
-            - name: artifacts
-              mountPath: /data/artifacts
-            - name: storage
-              mountPath: /data/storage
-            - name: projects
-              mountPath: /data/projects
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
-            capabilities:
-              drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - name: artifacts
           persistentVolumeClaim:
@@ -141,3 +145,57 @@ spec:
         - name: projects
           persistentVolumeClaim:
             claimName: molecule-ranker-projects
+      containers:
+        - name: worker
+          image: molecule-ranker:2.0.0
+          imagePullPolicy: IfNotPresent
+          args: ["worker"]
+          env:
+            - name: MOLECULE_RANKER_HOSTED
+              value: "true"
+            - name: MOLECULE_RANKER_ROOT
+              value: /data/projects
+            - name: MOLECULE_RANKER_ARTIFACT_ROOT
+              value: /data/artifacts
+            - name: MOLECULE_RANKER_STORAGE_ROOT
+              value: /data/storage
+            - name: MOLECULE_RANKER_EXTERNAL_WRITES_ENABLED
+              value: "false"
+            - name: MOLECULE_RANKER_ENABLE_CODEX_WORKER
+              value: "false"
+            - name: MOLECULE_RANKER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: molecule-ranker-secrets
+                  key: database-url
+          volumeMounts:
+            - name: artifacts
+              mountPath: /data/artifacts
+            - name: storage
+              mountPath: /data/storage
+            - name: projects
+              mountPath: /data/projects
+          readinessProbe:
+            exec:
+              command: ["molecule-ranker", "db", "check", "--database-url", "$(MOLECULE_RANKER_DATABASE_URL)"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["molecule-ranker", "worker", "--help"]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]

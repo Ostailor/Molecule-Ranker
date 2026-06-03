@@ -22,9 +22,9 @@ from molecule_ranker.release.checks import (
     API_CONTRACT_VERSION,
     ARTIFACT_CONTRACT_VERSION,
     DATA_CONTRACT_VERSION,
+    RELEASE_GATES,
     RELEASE_STAGE,
     SCIENTIFIC_INTEGRITY_CONSTRAINTS,
-    V1_RELEASE_GATES,
     WAREHOUSE_CONTRACT_VERSION,
     evaluate_release_readiness,
 )
@@ -36,7 +36,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
         {
             "name": "molecule-ranker",
             "stage": RELEASE_STAGE,
-            "scope": "enterprise_internal_pilot_readiness",
+            "scope": "validated_enterprise_discovery_operating_system",
             "non_goals": [
                 "unvalidated model-provider execution",
                 "new external integration families",
@@ -56,6 +56,10 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
                 "Codex-generated campaign priorities, budgets, costs, metrics, outcomes, "
                 "or advancement decisions",
                 "campaign plans promoted to lab protocols or synthesis routes",
+                "major new science modules in the V2.0 enterprise release",
+                "expanded generation, docking, ADMET, graph reasoning, model training, "
+                "integrations, or campaign planning except for stability, validation, "
+                "security, and enterprise readiness",
             ],
             "scientific_integrity_constraints": list(SCIENTIFIC_INTEGRITY_CONSTRAINTS),
             "contracts": {
@@ -66,7 +70,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
             },
             "pilot_readiness_version": PILOT_READINESS_VERSION,
             "pilot_readiness": build_pilot_readiness_report(root_dir),
-            "release_gates": [gate.as_dict() for gate in V1_RELEASE_GATES],
+            "release_gates": [gate.as_dict() for gate in RELEASE_GATES],
         }
     )
     return manifest
@@ -163,8 +167,9 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V1.9 is for internal research use only and is not a clinical product.",
-        "V1.9 prepares enterprise/internal pilots through operational hardening, "
+        "V2.0 is for internal research use only and is not a clinical product.",
+        "V2.0 validates enterprise discovery operating-system readiness through "
+        "software, process, deployment, security, governance, and operational evidence, "
         "not new science capability.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
         "Generated molecules are computational hypotheses and require independent validation.",
@@ -182,6 +187,8 @@ def _known_limitations() -> list[str]:
         "Benchmark results are evaluation artifacts, not biomedical evidence.",
         "Prospective validation analytics are not clinical validation.",
         "Codex must not invent benchmark results, labels, metrics, or conclusions.",
+        "Enterprise validation artifacts are software/process validation artifacts, "
+        "not clinical validation.",
         "Graph paths do not prove causality, efficacy, safety, binding, or activity.",
         "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
         "Docking scores, poses, and structure-derived interactions are computational "

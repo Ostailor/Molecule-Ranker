@@ -279,12 +279,28 @@ auth_token_app = typer.Typer(
     help="Create and revoke service account tokens.",
     no_args_is_help=True,
 )
+auth_oidc_app = typer.Typer(
+    help="Test OIDC discovery, JWKS, and ID-token validation.",
+    no_args_is_help=True,
+)
+auth_service_account_app = typer.Typer(
+    help="Create and revoke scoped service account tokens.",
+    no_args_is_help=True,
+)
+auth_sessions_app = typer.Typer(
+    help="List and revoke hosted auth sessions.",
+    no_args_is_help=True,
+)
 config_app = typer.Typer(
     help="Show and validate production platform configuration.",
     no_args_is_help=True,
 )
 validate_app = typer.Typer(
     help="Run molecule-ranker validation suites.",
+    no_args_is_help=True,
+)
+policy_app = typer.Typer(
+    help="List, validate, and explain enterprise policy guardrails.",
     no_args_is_help=True,
 )
 eval_app = typer.Typer(
@@ -305,6 +321,10 @@ eval_prospective_app = typer.Typer(
 )
 api_app = typer.Typer(
     help="Inspect and export frozen V1.0 hosted API contracts.",
+    no_args_is_help=True,
+)
+v2_app = typer.Typer(
+    help="Inspect and validate frozen V2.0 enterprise release contracts.",
     no_args_is_help=True,
 )
 worker_app = typer.Typer(
@@ -400,7 +420,7 @@ campaign_app = typer.Typer(
     no_args_is_help=True,
 )
 pilot_app = typer.Typer(
-    help="V1.9 enterprise/internal pilot readiness audit commands.",
+    help="V2.0 enterprise readiness audit commands.",
     no_args_is_help=True,
 )
 performance_app = typer.Typer(
@@ -434,8 +454,10 @@ app.add_typer(user_app, name="user")
 app.add_typer(auth_cli_app, name="auth")
 app.add_typer(config_app, name="config")
 app.add_typer(validate_app, name="validate")
+app.add_typer(policy_app, name="policy")
 app.add_typer(eval_app, name="eval")
 app.add_typer(api_app, name="api")
+app.add_typer(v2_app, name="v2")
 app.add_typer(worker_app, name="worker")
 app.add_typer(job_app, name="job")
 app.add_typer(notifications_app, name="notifications")
@@ -463,6 +485,9 @@ eval_app.add_typer(eval_prospective_app, name="prospective")
 codex_app.add_typer(codex_assist_app, name="assist")
 codex_app.add_typer(codex_engineering_app, name="engineering")
 auth_cli_app.add_typer(auth_token_app, name="token")
+auth_cli_app.add_typer(auth_oidc_app, name="oidc")
+auth_cli_app.add_typer(auth_service_account_app, name="service-account")
+auth_cli_app.add_typer(auth_sessions_app, name="sessions")
 platform_cli_app.add_typer(platform_retention_app, name="retention")
 integration_app.add_typer(integration_system_app, name="system")
 integration_app.add_typer(integration_credential_app, name="credential")
@@ -523,10 +548,7 @@ def doctor_command(
             f"{readiness.passed_count} pass, {readiness.warning_count} warn, "
             f"{readiness.failed_count} fail"
         )
-        typer.echo(
-            "Usability: "
-            f"{usability['passed_count']} pass, {usability['failed_count']} fail"
-        )
+        typer.echo(f"Usability: {usability['passed_count']} pass, {usability['failed_count']} fail")
     if readiness.failed_count or usability["failed_count"]:
         raise typer.Exit(code=1)
 
@@ -671,7 +693,7 @@ def pilot_readiness_command(
         typer.Option("--worker-healthy/--worker-unhealthy", help="Declare worker queue health."),
     ] = True,
 ) -> None:
-    """Run the V1.9 enterprise/internal pilot readiness audit."""
+    """Run the V2.0 enterprise readiness audit."""
     from molecule_ranker.pilot.readiness import PilotReadinessConfig, run_pilot_readiness_audit
     from molecule_ranker.pilot.reports import (
         pilot_readiness_report_to_json,
@@ -726,7 +748,7 @@ def pilot_release_gate_command(
         typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
     ] = None,
 ) -> None:
-    """Run the V1.9 pilot release gate."""
+    """Run the V2.0 enterprise release gate."""
     from molecule_ranker.pilot.release_gate import (
         PilotReleaseGateConfig,
         run_pilot_release_gate,
@@ -1170,6 +1192,43 @@ def ops_health_history_command(
             backup_path=backup_path,
         )
     )
+
+
+@ops_app.command("slo-report")
+def ops_slo_report_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Deployment root."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="Optional platform database URL.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="Optional SQLite platform database path."),
+    ] = None,
+    backup_path: Annotated[
+        Path | None,
+        typer.Option("--backup-path", help="Backup directory for freshness SLO monitoring."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", help="Optional path for the redacted SLO report JSON."),
+    ] = None,
+) -> None:
+    """Emit a redacted V2 enterprise SLO report."""
+    from molecule_ranker.platform.slo import generate_slo_report, write_slo_report
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    report = generate_slo_report(database=database, backup_path=backup_path)
+    if output is not None:
+        write_slo_report(report, output)
+    _echo_json(report.to_dict())
 
 
 @feedback_app.command("submit")
@@ -1925,8 +1984,7 @@ def eval_run_command(
     rows = _evaluation_dataset_rows(dataset, split)
     labels = [1 if _evaluation_row_positive(row) else 0 for row in rows]
     scores = [
-        _evaluation_row_score(row, fallback=len(rows) - index)
-        for index, row in enumerate(rows)
+        _evaluation_row_score(row, fallback=len(rows) - index) for index, row in enumerate(rows)
     ]
     metric = top_k_hit_rate(labels, scores, k=min(1, len(labels) or 1))
     task_id = str(dataset.metadata.get("task_type") or (suite.tasks[0] if suite.tasks else "eval"))
@@ -2322,6 +2380,185 @@ def validate_security_command(
         raise typer.Exit(code=1)
 
 
+@validate_app.command("isolation")
+def validate_isolation_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Platform root."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", help="Optional hosted platform database URL."),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", dir_okay=False, help="Optional SQLite database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the V2.0 tenant/project isolation audit."""
+    from molecule_ranker.platform.isolation import run_isolation_audit
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    report = run_isolation_audit(database)
+    if json_output:
+        _echo_json(report)
+    else:
+        typer.echo(f"Isolation audit: {report['status']}")
+        typer.echo(f"Findings: {report['finding_count']}")
+        for finding in report["findings"]:
+            typer.echo(
+                f"- {finding['check_id']}: {finding['table']}:{finding['object_id']}: "
+                f"{finding['message']}"
+            )
+    if report["status"] != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("enterprise-golden")
+def validate_enterprise_golden_command(
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output", file_okay=False, help="Enterprise golden output directory."),
+    ] = Path(".molecule-ranker/validation/enterprise-golden"),
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Workspace root."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the V2.0 mocked enterprise golden workflow."""
+    from molecule_ranker.validation.enterprise_golden import run_enterprise_golden_workflow
+
+    report = run_enterprise_golden_workflow(output_dir=output_dir, root_dir=root_dir)
+    if json_output:
+        _echo_json(report)
+    else:
+        typer.echo(f"Enterprise golden workflow: {report['status']}")
+        typer.echo(f"Steps: {report['step_count']}")
+        typer.echo(f"Output: {report['output_dir']}")
+        typer.echo(
+            "Assertions: "
+            f"{report['assertion_summary']['passed']} passed, "
+            f"{report['assertion_summary']['failed']} failed"
+        )
+    if report["status"] != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("v2-package")
+def validate_v2_package_command(
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=False, help="Validation package output directory."),
+    ] = None,
+    zip_path: Annotated[
+        Path | None,
+        typer.Option("--zip", dir_okay=False, help="Optional validation package zip path."),
+    ] = None,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Workspace root to validate."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Generate the V2.0 software/platform validation evidence package."""
+    from tempfile import TemporaryDirectory
+
+    from molecule_ranker.validation.v2_package import generate_v2_validation_package
+
+    if output_dir is None and zip_path is None:
+        output_dir = Path("validation_package")
+    if output_dir is None:
+        with TemporaryDirectory(prefix="molecule-ranker-v2-package-") as temp:
+            result = generate_v2_validation_package(
+                output_dir=Path(temp),
+                root_dir=root_dir,
+                zip_path=zip_path,
+            )
+    else:
+        result = generate_v2_validation_package(
+            output_dir=output_dir,
+            root_dir=root_dir,
+            zip_path=zip_path,
+        )
+    payload = result.to_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"V2 validation package: {result.status}")
+        typer.echo(f"Manifest: {result.manifest_path}")
+        if result.zip_path is not None:
+            typer.echo(f"Zip: {result.zip_path}")
+    if result.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@policy_app.command("list")
+def policy_list_command(
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List the default V2.0 enterprise policy pack."""
+    from molecule_ranker.platform.policy import default_policy_pack
+
+    rules = [rule.model_dump(mode="json") for rule in default_policy_pack()]
+    payload = {"rule_count": len(rules), "rules": rules}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Policy rules: {len(rules)}")
+    for rule in rules:
+        typer.echo(f"- {rule['rule_id']}: {rule['action']} -> {rule['effect']}")
+
+
+@policy_app.command("validate")
+def policy_validate_command(
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Validate the default V2.0 enterprise policy pack."""
+    from molecule_ranker.platform.policy import PolicyEngine, default_policy_pack
+
+    try:
+        rules = default_policy_pack()
+        PolicyEngine.validate_rules(rules)
+    except ValueError as exc:
+        payload = {"valid": False, "error": str(exc)}
+        if json_output:
+            _echo_json(payload)
+        else:
+            typer.echo(f"Policy pack invalid: {exc}")
+        raise typer.Exit(code=1) from exc
+    payload = {"valid": True, "rule_count": len(rules)}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Policy pack valid: {len(rules)} rules")
+
+
+@policy_app.command("explain")
+def policy_explain_command(
+    action: Annotated[str, typer.Option("--action", help="Policy action to evaluate.")],
+    context_json: Annotated[
+        str | None,
+        typer.Option("--context-json", help="Optional JSON object evaluation context."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Explain the rules that apply to an action and context."""
+    from molecule_ranker.platform.policy import PolicyEngine
+
+    context = _parse_policy_context(context_json)
+    payload = PolicyEngine.default().explain(action, context)
+    if json_output:
+        _echo_json(payload)
+        return
+    result = payload["result"]
+    typer.echo(f"Policy action: {action}")
+    typer.echo(f"Status: {result['status']}")
+    for rule in payload["rules"]:
+        typer.echo(f"- {rule['rule_id']}: {rule['message']}")
+
+
 @api_app.command("export-openapi")
 def api_export_openapi_command(
     output: Annotated[
@@ -2339,6 +2576,10 @@ def api_export_openapi_command(
     ] = Path("."),
 ) -> None:
     """Export the frozen V1 OpenAPI schema."""
+    _write_openapi_schema(output=output, root_dir=root_dir)
+
+
+def _write_openapi_schema(*, output: Path, root_dir: Path) -> Path:
     from molecule_ranker.server import create_app
 
     target = output.resolve()
@@ -2346,6 +2587,142 @@ def api_export_openapi_command(
     schema = create_app(root_dir=root_dir).openapi()
     target.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n")
     typer.echo(str(target))
+    return target
+
+
+@v2_app.command("export-openapi")
+def v2_export_openapi_command(
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output OpenAPI JSON file."),
+    ] = Path("openapi-v2.json"),
+    root_dir: Annotated[
+        Path,
+        typer.Option(
+            "--root",
+            file_okay=False,
+            dir_okay=True,
+            help="Repository or workspace root.",
+        ),
+    ] = Path("."),
+) -> None:
+    """Export the frozen V2 OpenAPI schema."""
+    _write_openapi_schema(output=output, root_dir=root_dir)
+
+
+@v2_app.command("export-api-contract")
+def v2_export_api_contract_command(
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output OpenAPI JSON file."),
+    ] = Path("openapi-v2.json"),
+    root_dir: Annotated[
+        Path,
+        typer.Option(
+            "--root",
+            file_okay=False,
+            dir_okay=True,
+            help="Repository or workspace root.",
+        ),
+    ] = Path("."),
+) -> None:
+    """Export the frozen V2 API contract OpenAPI schema."""
+    _write_openapi_schema(output=output, root_dir=root_dir)
+
+
+@v2_app.command("validate-contracts")
+def v2_validate_contracts_command(
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional V2 contract manifest output."),
+    ] = None,
+) -> None:
+    """Validate the frozen V2.0 enterprise release contracts."""
+    from molecule_ranker.v2 import (
+        export_v2_release_manifest,
+        validate_v2_release_contracts,
+        write_v2_release_manifest,
+    )
+
+    report = validate_v2_release_contracts()
+    if output is not None:
+        target = write_v2_release_manifest(output)
+        report = {**report, "output": str(target)}
+    if json_output:
+        _echo_json(report)
+    else:
+        typer.echo(f"V2 contract validation: {'pass' if report['valid'] else 'fail'}")
+        typer.echo(f"Contracts: {report['contract_count']}")
+        typer.echo(f"Artifact schemas: {report['artifact_schema_count']}")
+        typer.echo(f"API routes: {report['api_route_count']}")
+        if output is None:
+            typer.echo(json.dumps(export_v2_release_manifest(), indent=2, sort_keys=True))
+        else:
+            typer.echo(f"Manifest: {report['output']}")
+    if not report["valid"]:
+        raise typer.Exit(code=1)
+
+
+@v2_app.command("release-gate")
+def v2_release_gate_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Repository or release root."),
+    ] = Path("."),
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            dir_okay=True,
+            help="Directory for v2_release_gate.json and v2_release_gate.md.",
+        ),
+    ] = Path("."),
+    evidence_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--evidence-dir",
+            file_okay=False,
+            dir_okay=True,
+            help="Optional directory containing check_id.json evidence markers.",
+        ),
+    ] = None,
+    run_expensive_checks: Annotated[
+        bool,
+        typer.Option(
+            "--run-expensive-checks/--no-run-expensive-checks",
+            help=(
+                "Run golden workflow, red-team, DR, backup, and audit checks "
+                "when evidence is absent."
+            ),
+        ),
+    ] = True,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Run the V2.0 enterprise release gate."""
+    from molecule_ranker.v2.release_gate import V2ReleaseGateConfig, run_v2_release_gate
+
+    report = run_v2_release_gate(
+        V2ReleaseGateConfig(
+            root_dir=root_dir,
+            output_dir=output_dir,
+            evidence_dir=evidence_dir,
+            run_expensive_checks=run_expensive_checks,
+        )
+    )
+    if json_output:
+        _echo_json(report)
+    else:
+        typer.echo(f"V2 release gate: {report['status']}")
+        typer.echo(f"Checks: {report['summary']['pass']} pass, {report['summary']['fail']} fail")
+        typer.echo(f"JSON: {(output_dir / 'v2_release_gate.json').resolve()}")
+        typer.echo(f"Markdown: {(output_dir / 'v2_release_gate.md').resolve()}")
+        for check in report["checks"]:
+            if check["status"] != "pass":
+                typer.echo(f"- fail: {check['check_id']}: {check['message']}")
+    if report["status"] != "pass":
+        raise typer.Exit(code=1)
 
 
 @graph_app.command("export")
@@ -2826,8 +3203,7 @@ def hypothesis_gaps_command(
         "schema_version": "1.6",
         "evidence_gaps": {
             hypothesis.hypothesis_id: [
-                gap.model_dump(mode="json")
-                for gap in analyze_hypothesis_evidence_gaps(hypothesis)
+                gap.model_dump(mode="json") for gap in analyze_hypothesis_evidence_gaps(hypothesis)
             ]
             for hypothesis in loaded
         },
@@ -2962,8 +3338,7 @@ def hypothesis_report_command(
         for hypothesis in loaded
     }
     criteria = {
-        hypothesis.hypothesis_id: build_falsification_criteria(hypothesis)
-        for hypothesis in loaded
+        hypothesis.hypothesis_id: build_falsification_criteria(hypothesis) for hypothesis in loaded
     }
     questions = {
         hypothesis.hypothesis_id: plan_research_questions(
@@ -3134,9 +3509,7 @@ def campaign_plan_command(
         Path | None,
         typer.Option("--campaign", exists=True, dir_okay=False, help="Campaign JSON bundle."),
     ] = None,
-    budget_assay_slots: Annotated[
-        int | None, typer.Option("--budget-assay-slots", min=0)
-    ] = None,
+    budget_assay_slots: Annotated[int | None, typer.Option("--budget-assay-slots", min=0)] = None,
     budget_review_hours: Annotated[
         float | None, typer.Option("--budget-review-hours", min=0.0)
     ] = None,
@@ -3343,8 +3716,7 @@ def campaign_status_command(
             "campaign": campaign.model_dump(mode="json"),
             "stage_gates": store.list_stage_gates(campaign_id),
             "events": [
-                event.model_dump(mode="json")
-                for event in store.list_execution_events(campaign_id)
+                event.model_dump(mode="json") for event in store.list_execution_events(campaign_id)
             ],
         }
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -3634,8 +4006,7 @@ def _load_campaign_bundle_cli(path: Path) -> dict[str, Any]:
             CampaignObjective.model_validate(item) for item in payload.get("objectives", [])
         ],
         "work_packages": [
-            CampaignWorkPackage.model_validate(item)
-            for item in payload.get("work_packages", [])
+            CampaignWorkPackage.model_validate(item) for item in payload.get("work_packages", [])
         ],
         "source_artifacts": payload.get("source_artifacts", {}),
     }
@@ -5384,6 +5755,53 @@ def platform_backup_verify(
     _emit_backup_verification_result(result, json_output=json_output)
 
 
+@platform_cli_app.command("dr-drill")
+def platform_dr_drill(
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="DR drill output directory."),
+    ] = Path(".molecule-ranker/disaster-recovery"),
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option("--database-url", envvar="MOLECULE_RANKER_DATABASE_URL"),
+    ] = None,
+    db_path: Annotated[Path | None, typer.Option("--db-path")] = None,
+    key_project_ids: Annotated[
+        list[str] | None,
+        typer.Option("--project-id", help="Repeatable key project ID to validate after restore."),
+    ] = None,
+    key_artifact_ids: Annotated[
+        list[str] | None,
+        typer.Option("--artifact-id", help="Repeatable key artifact ID to validate after restore."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the V2.0 disaster recovery backup/restore drill."""
+    from molecule_ranker.platform.disaster_recovery import run_disaster_recovery_drill
+
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    report = run_disaster_recovery_drill(
+        database,
+        output_dir=output_dir,
+        key_project_ids=key_project_ids or [],
+        key_artifact_ids=key_artifact_ids or [],
+    )
+    payload = report.to_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"DR drill: {report.status.upper()}")
+        typer.echo(f"Report: {report.report_path}")
+        for check_id, check in report.checks.items():
+            typer.echo(f"{check['status'].upper():<4} {check_id}: {check['message']}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
 @platform_cli_app.command("export-project")
 def platform_export_project(
     project_id: Annotated[str, typer.Argument(help="Project ID to export.")],
@@ -5671,6 +6089,95 @@ def user_list(
         )
 
 
+@auth_oidc_app.command("test")
+def auth_oidc_test(
+    issuer: Annotated[str, typer.Option("--issuer", help="Expected OIDC issuer.")],
+    client_id: Annotated[str, typer.Option("--client-id", help="OIDC client ID/audience.")],
+    discovery_path: Annotated[
+        Path,
+        typer.Option("--discovery-path", exists=True, dir_okay=False, help="Discovery JSON file."),
+    ],
+    jwks_path: Annotated[
+        Path | None,
+        typer.Option("--jwks-path", exists=True, dir_okay=False, help="Optional JWKS JSON file."),
+    ] = None,
+    id_token: Annotated[
+        str | None,
+        typer.Option("--id-token", help="Optional ID token to validate."),
+    ] = None,
+    allowed_email_domain: Annotated[
+        list[str] | None,
+        typer.Option("--allowed-email-domain", help="Repeatable allowed email domain."),
+    ] = None,
+    client_secret: Annotated[
+        str | None,
+        typer.Option("--client-secret", help="Optional secret presence check; never printed."),
+    ] = None,
+    allow_insecure_http_for_dev: Annotated[
+        bool,
+        typer.Option("--allow-insecure-http-for-dev", help="Allow localhost HTTP for dev."),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Validate OIDC discovery/JWKS wiring and optionally an ID token."""
+    from molecule_ranker.platform.auth import OIDCConfig
+    from molecule_ranker.platform.sso import (
+        StaticOIDCMetadataProvider,
+        redacted_oidc_diagnostic,
+        validate_id_token,
+        validate_oidc_discovery_document,
+    )
+
+    discovery = json.loads(discovery_path.read_text())
+    jwks = json.loads(jwks_path.read_text()) if jwks_path else {"keys": []}
+    config = OIDCConfig(
+        issuer=issuer,
+        client_id=client_id,
+        discovery_url=str(discovery_path),
+        allowed_email_domains=allowed_email_domain or [],
+        allow_insecure_http_for_dev=allow_insecure_http_for_dev,
+    )
+    provider = StaticOIDCMetadataProvider(discovery=discovery, jwks=jwks)
+    try:
+        document = validate_oidc_discovery_document(config, discovery)
+        identity = (
+            validate_id_token(
+                id_token,
+                config=config,
+                provider=provider,
+                discovery=document,
+            )
+            if id_token
+            else None
+        )
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "error": str(exc),
+            "client_credential_configured": bool(client_secret),
+        }
+        if json_output:
+            _echo_json(redacted_oidc_diagnostic(payload))
+            raise typer.Exit(code=1) from exc
+        typer.echo(f"OIDC test failed: {payload['error']}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "ok": True,
+        "issuer": document.issuer,
+        "jwks_uri": document.jwks_uri,
+        "client_credential_configured": bool(client_secret),
+        "validated_subject": identity.subject if identity else None,
+        "validated_email": identity.email if identity else None,
+    }
+    if json_output:
+        _echo_json(redacted_oidc_diagnostic(payload))
+        return
+    typer.echo("OIDC discovery validated.")
+    if identity:
+        typer.echo(f"Validated subject: {identity.subject}")
+
+
+@auth_service_account_app.command("create")
 @auth_token_app.command("create")
 def auth_token_create(
     name: Annotated[str, typer.Option("--name", help="Service account token name.")],
@@ -5743,6 +6250,7 @@ def auth_token_create(
     typer.echo("Store this value now; it cannot be retrieved later.")
 
 
+@auth_service_account_app.command("revoke")
 @auth_token_app.command("revoke")
 def auth_token_revoke(
     token_id: Annotated[str, typer.Option("--token-id", help="Service account token ID.")],
@@ -5782,6 +6290,85 @@ def auth_token_revoke(
         _echo_json(payload)
         return
     typer.echo(f"Revoked token: {token_id}")
+
+
+@auth_sessions_app.command("list")
+def auth_sessions_list(
+    include_revoked: Annotated[
+        bool,
+        typer.Option("--include-revoked/--active-only", help="Include revoked sessions."),
+    ] = True,
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List hosted auth sessions without refresh-token material."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    payload = {"sessions": database.list_auth_sessions(include_revoked=include_revoked)}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo("Session ID\tUser ID\tExpires at\tRevoked at")
+    for session in payload["sessions"]:
+        typer.echo(
+            "\t".join(
+                [
+                    session["session_id"],
+                    session["user_id"],
+                    session["expires_at"],
+                    str(session["revoked_at"]),
+                ]
+            )
+        )
+
+
+@auth_sessions_app.command("revoke")
+def auth_sessions_revoke(
+    session_id: Annotated[str, typer.Option("--session-id", help="Session ID to revoke.")],
+    actor_user_id: Annotated[
+        str,
+        typer.Option("--actor-user-id", help="Admin user revoking the session."),
+    ],
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Project root directory."),
+    ] = Path("."),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            envvar="MOLECULE_RANKER_DATABASE_URL",
+            help="SQLAlchemy database URL. Supports sqlite:/// and postgresql+psycopg://.",
+        ),
+    ] = None,
+    db_path: Annotated[
+        Path | None,
+        typer.Option("--db-path", help="SQLite platform database path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Revoke a hosted auth session by ID."""
+    database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
+    database.revoke_auth_session(session_id=session_id, actor_user_id=actor_user_id)
+    payload = {"revoked": True, "session_id": session_id}
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Revoked session: {session_id}")
 
 
 @experiment_app.command("import")
@@ -11873,8 +12460,7 @@ def _render_portfolio_cli_report(
                         **candidate.metadata,
                         "portfolio_selection_status": (
                             "selected"
-                            if candidate.portfolio_candidate_id
-                            in selection.selected_candidate_ids
+                            if candidate.portfolio_candidate_id in selection.selected_candidate_ids
                             else "not_selected"
                         ),
                     }
@@ -13036,6 +13622,18 @@ def _run_engineering_command(command: list[str], *, cwd: Path) -> dict[str, Any]
 
 def _echo_json(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _parse_policy_context(value: str | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter("--context-json must be a valid JSON object.") from exc
+    if not isinstance(payload, dict):
+        raise typer.BadParameter("--context-json must be a valid JSON object.")
+    return payload
 
 
 def _parse_cli_datetime(value: str) -> datetime:

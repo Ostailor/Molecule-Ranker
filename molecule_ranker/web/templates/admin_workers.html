@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Workers</h1>
+  <p class="muted">Server, background worker, and Codex worker operational status.</p>
+</header>
+<section class="section">
+  <h2>Queue backlog</h2>
+  <div class="panel">
+    <p>Queued jobs: {{ queue_backlog }}</p>
+    <p>Codex worker: {{ codex_status.status_counts | tojson }}</p>
+  </div>
+</section>
+<section class="section">
+  <h2>Status counts</h2>
+  <pre>{{ status_counts | tojson(indent=2) }}</pre>
+</section>
+<section class="section">
+  <h2>Job type counts</h2>
+  <pre>{{ type_counts | tojson(indent=2) }}</pre>
+</section>
+{% endblock %}

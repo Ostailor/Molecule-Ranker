@@ -83,16 +83,21 @@ CACHE_MARKERS = (".cache", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy
 SENSITIVE_PATH_PREFIXES = (
     "/auth",
     "/api/v1/auth",
+    "/api/v2/auth",
     "/login",
     "/logout",
     "/projects/",
     "/api/v1/projects/",
+    "/api/v2/projects/",
     "/codex",
     "/api/v1/codex",
+    "/api/v2/codex",
     "/jobs/run-next",
     "/api/v1/jobs/run-next",
+    "/api/v2/jobs/run-next",
     "/admin",
     "/api/v1/admin",
+    "/api/v2/admin",
     "/data",
 )
 
@@ -273,7 +278,10 @@ def _rate_limited_response(
     path = request.url.path
     limit: int | None = None
     bucket = ""
-    if path.startswith("/auth") or path.startswith("/api/v1/auth") or path in {"/login", "/logout"}:
+    if path.startswith(("/auth", "/api/v1/auth", "/api/v2/auth")) or path in {
+        "/login",
+        "/logout",
+    }:
         limit = config.auth_rate_limit
         bucket = "auth"
     elif "/codex" in path or path.startswith("/codex"):

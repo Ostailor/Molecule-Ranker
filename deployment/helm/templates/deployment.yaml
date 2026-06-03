@@ -1,0 +1,242 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: molecule-ranker-server
+  labels:
+    app: molecule-ranker
+    component: server
+    app.kubernetes.io/version: {{ .Values.image.tag | quote }}
+spec:
+  replicas: {{ .Values.replicaCount.server }}
+  selector:
+    matchLabels:
+      app: molecule-ranker
+      component: server
+  template:
+    metadata:
+      labels:
+        app: molecule-ranker
+        component: server
+    spec:
+      securityContext:
+{{ toYaml .Values.securityContext | indent 8 }}
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.artifacts.claimName }}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.storage.claimName }}
+        - name: projects
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.projects.claimName }}
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["web"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+          env:
+            - name: MOLECULE_RANKER_HOSTED
+              value: {{ .Values.env.hosted | quote }}
+            - name: MOLECULE_RANKER_HOST
+              value: "0.0.0.0"
+            - name: MOLECULE_RANKER_PORT
+              value: {{ .Values.service.targetPort | quote }}
+            - name: MOLECULE_RANKER_ALLOW_PUBLIC_BIND
+              value: "true"
+            - name: MOLECULE_RANKER_ROOT
+              value: {{ .Values.persistence.projects.mountPath }}
+            - name: MOLECULE_RANKER_ARTIFACT_ROOT
+              value: {{ .Values.persistence.artifacts.mountPath }}
+            - name: MOLECULE_RANKER_STORAGE_ROOT
+              value: {{ .Values.persistence.storage.mountPath }}
+            - name: MOLECULE_RANKER_EXTERNAL_WRITES_ENABLED
+              value: {{ .Values.env.externalWritesEnabled | quote }}
+            - name: MOLECULE_RANKER_ENABLE_CODEX_WORKER
+              value: {{ .Values.env.enableCodexWorker | quote }}
+            - name: MOLECULE_RANKER_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretRefs.existingSecret }}
+                  key: {{ .Values.secretRefs.authSecretKey }}
+            - name: MOLECULE_RANKER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretRefs.existingSecret }}
+                  key: {{ .Values.secretRefs.databaseUrlKey }}
+          volumeMounts:
+            - name: artifacts
+              mountPath: {{ .Values.persistence.artifacts.mountPath }}
+            - name: storage
+              mountPath: {{ .Values.persistence.storage.mountPath }}
+            - name: projects
+              mountPath: {{ .Values.persistence.projects.mountPath }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          resources:
+{{ toYaml .Values.resources.server | indent 12 }}
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | indent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: molecule-ranker-worker
+  labels:
+    app: molecule-ranker
+    component: worker
+    app.kubernetes.io/version: {{ .Values.image.tag | quote }}
+spec:
+  replicas: {{ .Values.replicaCount.worker }}
+  selector:
+    matchLabels:
+      app: molecule-ranker
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: molecule-ranker
+        component: worker
+    spec:
+      securityContext:
+{{ toYaml .Values.securityContext | indent 8 }}
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.artifacts.claimName }}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.storage.claimName }}
+        - name: projects
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.projects.claimName }}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker"]
+          env:
+            - name: MOLECULE_RANKER_HOSTED
+              value: {{ .Values.env.hosted | quote }}
+            - name: MOLECULE_RANKER_ROOT
+              value: {{ .Values.persistence.projects.mountPath }}
+            - name: MOLECULE_RANKER_ARTIFACT_ROOT
+              value: {{ .Values.persistence.artifacts.mountPath }}
+            - name: MOLECULE_RANKER_STORAGE_ROOT
+              value: {{ .Values.persistence.storage.mountPath }}
+            - name: MOLECULE_RANKER_EXTERNAL_WRITES_ENABLED
+              value: {{ .Values.env.externalWritesEnabled | quote }}
+            - name: MOLECULE_RANKER_ENABLE_CODEX_WORKER
+              value: "false"
+            - name: MOLECULE_RANKER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretRefs.existingSecret }}
+                  key: {{ .Values.secretRefs.databaseUrlKey }}
+          volumeMounts:
+            - name: artifacts
+              mountPath: {{ .Values.persistence.artifacts.mountPath }}
+            - name: storage
+              mountPath: {{ .Values.persistence.storage.mountPath }}
+            - name: projects
+              mountPath: {{ .Values.persistence.projects.mountPath }}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "molecule-ranker db check --database-url \"$MOLECULE_RANKER_DATABASE_URL\""]
+          livenessProbe:
+            exec:
+              command: ["molecule-ranker", "worker", "--help"]
+          resources:
+{{ toYaml .Values.resources.worker | indent 12 }}
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | indent 12 }}
+{{- if .Values.codexWorker.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: molecule-ranker-codex-worker
+  labels:
+    app: molecule-ranker
+    component: codex-worker
+    app.kubernetes.io/version: {{ .Values.image.tag | quote }}
+spec:
+  replicas: {{ .Values.codexWorker.replicas }}
+  selector:
+    matchLabels:
+      app: molecule-ranker
+      component: codex-worker
+  template:
+    metadata:
+      labels:
+        app: molecule-ranker
+        component: codex-worker
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+{{ toYaml .Values.securityContext | indent 8 }}
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.artifacts.claimName }}
+            readOnly: true
+        - name: projects
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.projects.claimName }}
+            readOnly: true
+        - name: codex-storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.codexWorker.claimName }}
+        - name: codex-runtime-secrets
+          secret:
+            secretName: {{ .Values.codexWorker.runtimeSecretName }}
+            optional: true
+      containers:
+        - name: codex-worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker", "--job-types", {{ .Values.codexWorker.jobTypes | quote }}]
+          env:
+            - name: MOLECULE_RANKER_ENABLE_CODEX_WORKER
+              value: "true"
+            - name: MOLECULE_RANKER_EXTERNAL_WRITES_ENABLED
+              value: "false"
+            - name: MOLECULE_RANKER_CODEX_WORKER_WORKSPACE_ROOT
+              value: /data/storage/codex-worker
+            - name: MOLECULE_RANKER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretRefs.existingSecret }}
+                  key: {{ .Values.secretRefs.databaseUrlKey }}
+          volumeMounts:
+            - name: artifacts
+              mountPath: {{ .Values.persistence.artifacts.mountPath }}
+              readOnly: true
+            - name: projects
+              mountPath: {{ .Values.persistence.projects.mountPath }}
+              readOnly: true
+            - name: codex-storage
+              mountPath: {{ .Values.persistence.codexWorker.mountPath }}
+            - name: codex-runtime-secrets
+              mountPath: /run/molecule-ranker/codex
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "molecule-ranker db check --database-url \"$MOLECULE_RANKER_DATABASE_URL\""]
+          livenessProbe:
+            exec:
+              command: ["molecule-ranker", "worker", "--help"]
+          resources:
+{{ toYaml .Values.resources.codexWorker | indent 12 }}
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | indent 12 }}
+{{- end }}

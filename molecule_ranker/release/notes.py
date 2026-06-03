@@ -15,18 +15,19 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V1.9 upgrades the V1.8 validated internal research platform with "
-            "enterprise/internal pilot readiness: usability polish, performance "
-            "optimization, reliability hardening, operational readiness, pilot "
-            "onboarding, admin/support workflows, better error messages, robust "
-            "job retry/resume/cancel expectations, dashboard workflow improvements, "
-            "dataset/artifact migration safety, deployment diagnostics, monitoring "
-            "and alerting guidance, pilot feedback capture, support bundle "
-            "generation, and pre-V2.0 readiness validation. V1.9 does not add "
-            "major new science capabilities and does not expand molecule generation, "
-            "docking, ADMET, external connectors, or predictive modeling except "
-            "for stability and usability improvements. The validated internal "
-            "research platform MVP boundary remains intact: "
+            "V2.0 ships molecule-ranker as a validated enterprise discovery "
+            "operating system. The release stabilizes enterprise contracts, "
+            "production deployment, security controls, identity and access control, "
+            "tenant/project isolation, validation evidence packages, operational "
+            "runbooks, disaster recovery, governance and audit readiness, "
+            "performance and reliability targets, release certification workflows, "
+            "stable APIs and SDK behavior, enterprise admin controls, end-to-end "
+            "synthetic demo workflows, and V2.0 documentation and training. V2.0 "
+            "does not add major new science capabilities and does not expand "
+            "molecule generation, docking, ADMET, graph reasoning, model training, "
+            "external integrations, or campaign planning except for stability, "
+            "validation, security, and enterprise readiness. The enterprise "
+            "research boundary remains intact: "
             "campaign plans, hypotheses, research questions, graph paths, portfolio "
             "recommendations, structure workflows, docking scores, model predictions, "
             "and generated molecules are planning or prioritization signals, not "
@@ -70,11 +71,15 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "FrozenPredictionSet, ProspectiveValidationRun, EvaluationMetric, "
             "EvaluationReport, DecisionQualityReport, and ReproducibilityManifest "
             "schemas for V1.8.",
-            "- V1.9 pilot readiness reports covering usability, performance, "
+            "- V2.0 release gates for enterprise contracts, production deployment, "
+            "security, identity and access, tenant/project isolation, validation "
+            "evidence packages, runbooks, disaster recovery, governance, reliability "
+            "targets, certification workflows, stable APIs/SDK, admin controls, demo "
+            "workflows, and training.",
+            "- Inherited V1.9 pilot readiness reports covering usability, performance, "
             "reliability, operations, onboarding, admin/support, error messaging, "
             "job control, dashboard workflows, migration safety, deployment "
-            "diagnostics, monitoring, pilot feedback, support bundles, and pre-V2 "
-            "validation.",
+            "diagnostics, monitoring, pilot feedback, and support bundles.",
             "- Support bundle manifests that list safe diagnostics without file "
             "contents, environment variables, cache files, API keys, service "
             "tokens, credentials, or plaintext secrets.",
@@ -126,8 +131,9 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- Codex outputs are assistant artifacts, not biomedical evidence",
             "- Codex output must not become evidence, assay results, molecules, "
             "scores, benchmark results, or decisions",
-            "- V1.9 pilot feedback is operational feedback, not biomedical evidence",
-            "- V1.9 support bundles are diagnostics manifests, not evidence packages",
+            "- V2.0 validation evidence packages are software/process validation artifacts",
+            "- V2.0 enterprise validation is not clinical validation",
+            "- V2.0 support bundles are diagnostics manifests, not biomedical evidence",
             "",
             "## Contracts",
             "",

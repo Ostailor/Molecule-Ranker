@@ -1,0 +1,167 @@
+name: molecule-ranker-enterprise
+
+x-molecule-ranker-common: &molecule-ranker-common
+  image: ${MOLECULE_RANKER_IMAGE:-molecule-ranker:2.0.0}
+  build:
+    context: ..
+    dockerfile: deployment/Dockerfile
+  user: "1000:1000"
+  restart: unless-stopped
+  init: true
+  read_only: false
+  environment: &molecule-ranker-env
+    MOLECULE_RANKER_HOSTED: "true"
+    MOLECULE_RANKER_ROOT: /data/projects
+    MOLECULE_RANKER_ARTIFACT_ROOT: /data/artifacts
+    MOLECULE_RANKER_STORAGE_ROOT: /data/storage
+    MOLECULE_RANKER_HOST: 0.0.0.0
+    MOLECULE_RANKER_PORT: "8765"
+    MOLECULE_RANKER_ALLOW_PUBLIC_BIND: "true"
+    MOLECULE_RANKER_EXTERNAL_WRITES_ENABLED: "false"
+    MOLECULE_RANKER_ENABLE_CODEX_WORKER: "false"
+    MOLECULE_RANKER_LOG_FORMAT: json
+    MOLECULE_RANKER_LOG_DESTINATION: stdout
+    MOLECULE_RANKER_AUTH_SECRET_FILE: /run/secrets/auth_secret
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: ${POSTGRES_DB:-molecule_ranker}
+    POSTGRES_USER: ${POSTGRES_USER:-molecule_ranker}
+    POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+  volumes:
+    - artifact-storage:/data/artifacts
+    - platform-storage:/data/storage
+    - project-storage:/data/projects
+  secrets:
+    - source: auth_secret
+      target: auth_secret
+    - source: postgres_password
+      target: postgres_password
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "25m"
+      max-file: "5"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-molecule_ranker}
+      POSTGRES_USER: ${POSTGRES_USER:-molecule_ranker}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - max_connections=100
+      - -c
+      - wal_level=replica
+      - -c
+      - log_destination=stderr
+      - -c
+      - logging_collector=off
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    secrets:
+      - source: postgres_password
+        target: postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+        reservations:
+          memory: 512m
+
+  molecule-ranker-server:
+    <<: *molecule-ranker-common
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${MOLECULE_RANKER_BIND:-127.0.0.1}:8765:8765"
+    command: ["web"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3).read()\nurllib.request.urlopen('http://127.0.0.1:8765/ready', timeout=3).read()\nPY",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+        reservations:
+          memory: 512m
+
+  molecule-ranker-worker:
+    <<: *molecule-ranker-common
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["worker"]
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3g
+        reservations:
+          memory: 1g
+
+  molecule-ranker-codex-worker:
+    <<: *molecule-ranker-common
+    profiles: ["codex"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *molecule-ranker-env
+      MOLECULE_RANKER_ENABLE_CODEX_WORKER: "true"
+      MOLECULE_RANKER_CODEX_WORKER_WORKSPACE_ROOT: /data/storage/codex-worker
+      MOLECULE_RANKER_CODEX_PROMPT_SECRET_REDACTION: "true"
+    volumes:
+      - artifact-storage:/data/artifacts:ro
+      - codex-worker-storage:/data/storage
+      - project-storage:/data/projects:ro
+    command: ["worker", "--job-types", "codex_task"]
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2g
+        reservations:
+          memory: 512m
+
+volumes:
+  postgres-data:
+  artifact-storage:
+  platform-storage:
+  project-storage:
+  codex-worker-storage:
+
+secrets:
+  auth_secret:
+    file: ${MOLECULE_RANKER_AUTH_SECRET_FILE:-./secrets/auth_secret}
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_FILE:-./secrets/postgres_password}

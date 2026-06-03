@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <h1>Project permissions</h1>
+  <p class="muted">Project access grants by user, team, or organization principal.</p>
+</header>
+<table>
+  <thead>
+    <tr><th>Project</th><th>Principal type</th><th>Principal ID</th><th>Role</th><th>Granted by</th><th>Granted at</th></tr>
+  </thead>
+  <tbody>
+    {% for item in permissions %}
+      <tr>
+        <td>{{ item.project_id }}</td>
+        <td>{{ item.principal_type }}</td>
+        <td>{{ item.principal_id }}</td>
+        <td>{{ item.role }}</td>
+        <td>{{ item.granted_by }}</td>
+        <td>{{ item.granted_at }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6">No project permissions.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

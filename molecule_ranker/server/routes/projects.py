@@ -83,6 +83,12 @@ def create_project(
         )
     workspace = store.create(workspace_id=request.workspace_id, name=request.name)
     if bool(http_request.app.state.hosted_mode) and not existed:
+        http_request.app.state.platform_database.register_project_workspace(
+            project_id=workspace.workspace_id,
+            name=workspace.name,
+            root_dir=str(store.root_dir),
+            actor_user_id=user.user_id,
+        )
         http_request.app.state.platform_database.grant_project_permission(
             project_id=workspace.workspace_id,
             role="owner",

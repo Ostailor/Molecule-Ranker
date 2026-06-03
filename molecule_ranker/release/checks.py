@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from molecule_ranker import __version__
 
-RELEASE_STAGE = "validated_internal_research_platform_mvp"
+RELEASE_STAGE = "validated_enterprise_discovery_operating_system"
 API_CONTRACT_VERSION = "api.v1"
 ARTIFACT_CONTRACT_VERSION = "artifacts.v1"
 DATA_CONTRACT_VERSION = "data-contracts.v1"
@@ -45,6 +45,12 @@ ReleaseCategory = Literal[
     "migration",
     "monitoring",
     "readiness",
+    "identity_access",
+    "tenant_isolation",
+    "governance",
+    "sdk",
+    "admin_controls",
+    "training",
 ]
 ReleaseCheckStatus = Literal["pass", "warn", "fail"]
 
@@ -60,6 +66,10 @@ SCIENTIFIC_INTEGRITY_CONSTRAINTS = (
     "no fake citations",
     "no Codex-generated biomedical truth",
     "no generated molecules presented as validated actives",
+    "no generated molecule activity, safety, or efficacy claims",
+    "no docking or model prediction overclaims",
+    "no benchmark or prospective validation overclaims",
+    "enterprise validation artifacts are software/process validation artifacts only",
 )
 
 
@@ -492,6 +502,206 @@ V1_RELEASE_GATES: tuple[ReleaseGate, ...] = (
     ),
 )
 
+V2_RELEASE_GATES: tuple[ReleaseGate, ...] = (
+    ReleaseGate(
+        "v2-stable-enterprise-release-contracts",
+        "contract",
+        "V2.0 release contracts are stable and explicitly scoped to enterprise operations.",
+        (
+            "pyproject.toml",
+            "molecule_ranker/release/manifest.py",
+            "molecule_ranker/release/checks.py",
+            "docs/v2.0-enterprise-release.md",
+            "docs/contracts/v2.0-enterprise-contracts.md",
+        ),
+    ),
+    ReleaseGate(
+        "v2-production-grade-deployment",
+        "deployment",
+        "Production deployment paths cover container, process, config, health, and diagnostics.",
+        (
+            "deployment/Dockerfile",
+            "deployment/README.md",
+            "deployment/k8s",
+            "deployment/systemd",
+            "docs/runbooks/deployment.md",
+            "docs/runbooks/production_config.md",
+            "docs/runbooks/deployment_diagnostics.md",
+        ),
+    ),
+    ReleaseGate(
+        "v2-security-hardening",
+        "security",
+        "Security hardening covers hosted controls, guardrails, redaction, and incident response.",
+        (
+            "molecule_ranker/platform/security_audit.py",
+            "molecule_ranker/server/security.py",
+            "molecule_ranker/validation/guardrail_audit.py",
+            "tests_validation/test_security_audit.py",
+            "tests_validation/test_guardrail_audit.py",
+            "docs/admin/security_checklist.md",
+            "docs/runbooks/security_incidents.md",
+        ),
+    ),
+    ReleaseGate(
+        "v2-enterprise-identity-access-controls",
+        "identity_access",
+        "Enterprise identity and access controls cover auth, service accounts, RBAC, and admins.",
+        (
+            "molecule_ranker/platform/auth.py",
+            "molecule_ranker/platform/rbac.py",
+            "molecule_ranker/platform/admin.py",
+            "molecule_ranker/server/routes/auth.py",
+            "docs/admin/users_and_roles.md",
+            "docs/admin/service_accounts.md",
+            "tests/test_platform_governance.py",
+        ),
+    ),
+    ReleaseGate(
+        "v2-tenant-project-isolation",
+        "tenant_isolation",
+        "Tenant and project isolation are enforced for hosted API, dashboard, artifacts, and jobs.",
+        (
+            "molecule_ranker/platform/tenancy.py",
+            "molecule_ranker/server/dependencies.py",
+            "molecule_ranker/server/routes/projects.py",
+            "docs/admin/project_permissions.md",
+            "docs/admin/organizations_and_teams.md",
+            "tests/test_platform_governance.py",
+            "tests/test_integration_hosted_api_dashboard.py",
+        ),
+    ),
+    ReleaseGate(
+        "v2-validation-evidence-packages",
+        "validation",
+        "Validation evidence packages capture deterministic software/process evidence only.",
+        (
+            "molecule_ranker/validation/runner.py",
+            "molecule_ranker/validation/golden_workflows.py",
+            "molecule_ranker/release/manifest.py",
+            "docs/v2.0-validation-evidence-packages.md",
+            "tests_validation/test_golden_hosted.py",
+            "tests/test_release_packaging.py",
+        ),
+    ),
+    ReleaseGate(
+        "v2-operational-runbooks",
+        "runbook",
+        "Operational runbooks cover deployment, workers, monitoring, support, and escalation.",
+        (
+            "docs/runbooks/deployment.md",
+            "docs/runbooks/worker_operations.md",
+            "docs/runbooks/monitoring_alerting.md",
+            "docs/runbooks/support_bundle.md",
+            "docs/runbooks/troubleshooting.md",
+        ),
+    ),
+    ReleaseGate(
+        "v2-disaster-recovery-backup-verification",
+        "backup_restore",
+        "Disaster recovery requires backup creation, restore verification, and retention controls.",
+        (
+            "molecule_ranker/platform/backup.py",
+            "tests/test_platform_backup.py",
+            "docs/runbooks/backup_restore.md",
+            "docs/admin/retention_and_delete.md",
+        ),
+    ),
+    ReleaseGate(
+        "v2-governance-audit-readiness",
+        "governance",
+        "Governance and audit readiness cover audit logs, retention, exports, and support review.",
+        (
+            "molecule_ranker/platform/audit.py",
+            "molecule_ranker/platform/retention.py",
+            "molecule_ranker/platform/export.py",
+            "docs/admin/audit_logs.md",
+            "docs/admin/retention_and_delete.md",
+            "tests/test_platform_governance.py",
+        ),
+    ),
+    ReleaseGate(
+        "v2-performance-reliability-targets",
+        "reliability",
+        "Performance and reliability targets are documented, observable, and release checked.",
+        (
+            "molecule_ranker/platform/readiness.py",
+            "molecule_ranker/platform/observability.py",
+            "molecule_ranker/pilot/ops_observability.py",
+            "docs/pilot/performance_tuning.md",
+            "docs/pilot/reliability_operations.md",
+            "tests/test_platform_observability.py",
+            "tests/test_performance_profile_v19.py",
+        ),
+    ),
+    ReleaseGate(
+        "v2-release-certification-workflows",
+        "packaging",
+        "Release certification workflows produce manifests, notes, checks, and gate evidence.",
+        (
+            "molecule_ranker/release/checks.py",
+            "molecule_ranker/release/notes.py",
+            "docs/runbooks/release_process.md",
+            "docs/v2.0-enterprise-release.md",
+            "tests/test_release_packaging.py",
+        ),
+    ),
+    ReleaseGate(
+        "v2-stable-api-and-sdk",
+        "sdk",
+        "Stable APIs and SDK documentation preserve V1 API compatibility for enterprise clients.",
+        (
+            "molecule_ranker/contracts/api_contracts.py",
+            "molecule_ranker/client/api_client.py",
+            "molecule_ranker/client/models.py",
+            "docs/contracts/v2.0-enterprise-contracts.md",
+            "docs/enterprise_sdk.md",
+            "tests/test_api_contracts_v1.py",
+            "tests/test_client_sdk_v19.py",
+        ),
+    ),
+    ReleaseGate(
+        "v2-enterprise-admin-controls",
+        "admin_controls",
+        "Enterprise admin controls cover users, roles, service accounts, audit, support, and jobs.",
+        (
+            "molecule_ranker/platform/admin.py",
+            "molecule_ranker/web/templates/admin_organizations.html",
+            "molecule_ranker/web/templates/admin_service_accounts.html",
+            "molecule_ranker/web/templates/admin_support.html",
+            "docs/admin/support_workflows.md",
+            "docs/runbooks/admin-operator.md",
+        ),
+    ),
+    ReleaseGate(
+        "v2-end-to-end-enterprise-demo",
+        "demo",
+        "End-to-end enterprise demo workflows are synthetic, offline, and clearly non-evidence.",
+        (
+            "examples/v2_0_enterprise_demo/README.md",
+            "examples/v1_9_pilot_demo/scripts/bootstrap.sh",
+            "examples/v1_9_pilot_demo/scripts/run_demo_workflows.sh",
+            "examples/v1_9_pilot_demo/scripts/generate_support_bundle.sh",
+            "examples/v1_9_pilot_demo/synthetic_data/source_manifest.json",
+        ),
+    ),
+    ReleaseGate(
+        "v2-documentation-training-material",
+        "training",
+        "V2.0 documentation and training material cover operators, admins, and users.",
+        (
+            "README.md",
+            "docs/v2.0-training.md",
+            "docs/user/overview.md",
+            "docs/pilot/user_training.md",
+            "docs/pilot/onboarding_checklist.md",
+            "docs/admin/security_checklist.md",
+        ),
+    ),
+)
+
+RELEASE_GATES = V2_RELEASE_GATES
+
 _CRITICAL_TODO_RE = re.compile(
     r"\b(?:TODO|FIXME|XXX)\s*(?:\([^)]*\))?\s*:\s*.{0,80}\b(?:critical|blocker|release)\b",
     re.I,
@@ -508,7 +718,7 @@ _TEXT_SUFFIXES = {".py", ".toml", ".yaml", ".yml", ".json", ".md", ".sh", ".env"
 def evaluate_release_readiness(root_dir: str | Path = ".") -> dict[str, Any]:
     root = Path(root_dir)
     gate_results = []
-    for gate in V1_RELEASE_GATES:
+    for gate in RELEASE_GATES:
         file_evidence = [
             evidence
             for evidence in gate.required_evidence
@@ -580,13 +790,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "1.9.0":
-        return ReleaseCheck("version", "Version is 1.9.0", "pass", "Package version is 1.9.0.")
+    if __version__ == "2.0.0":
+        return ReleaseCheck("version", "Version is 2.0.0", "pass", "Package version is 2.0.0.")
     return ReleaseCheck(
         "version",
-        "Version is 1.9.0",
+        "Version is 2.0.0",
         "fail",
-        f"Package version is {__version__}, expected 1.9.0.",
+        f"Package version is {__version__}, expected 2.0.0.",
     )
 
 
@@ -780,8 +990,11 @@ def _check_required_docs(root: Path) -> ReleaseCheck:
         "docs/admin/security_checklist.md",
         "docs/admin/users_and_roles.md",
         "docs/admin/support_workflows.md",
-        "docs/contracts/v1.0-api-and-artifacts.md",
-        "docs/v1.9-pilot-readiness.md",
+        "docs/contracts/v2.0-enterprise-contracts.md",
+        "docs/v2.0-enterprise-release.md",
+        "docs/v2.0-validation-evidence-packages.md",
+        "docs/v2.0-training.md",
+        "docs/enterprise_sdk.md",
     )
     missing = [path for path in required if not (root / path).exists()]
     return _required_paths_check("docs", "Platform documentation exists", required, missing)
@@ -816,23 +1029,23 @@ def _check_pilot_readiness(root: Path) -> ReleaseCheck:
     if not report["ready"]:
         return ReleaseCheck(
             "pilot_readiness",
-            "V1.9 pilot readiness passes",
+            "V2.0 enterprise readiness passes",
             "fail",
-            "V1.9 pilot readiness evidence is incomplete.",
+            "V2.0 requires complete inherited pilot readiness evidence.",
             {"areas": report["areas"]},
         )
     if report["science_capability_expansion"]:
         return ReleaseCheck(
             "pilot_readiness",
-            "V1.9 pilot readiness passes",
+            "V2.0 enterprise readiness passes",
             "fail",
-            "V1.9 readiness must not add science capability expansion.",
+            "V2.0 readiness must not add science capability expansion.",
         )
     return ReleaseCheck(
         "pilot_readiness",
-        "V1.9 pilot readiness passes",
+        "V2.0 enterprise readiness passes",
         "pass",
-        "V1.9 enterprise/internal pilot readiness evidence is complete.",
+        "Inherited pilot readiness evidence is complete for V2.0 enterprise certification.",
         {
             "pilot_readiness_version": report["pilot_readiness_version"],
             "area_count": len(report["areas"]),
@@ -845,7 +1058,7 @@ def _check_readme(root: Path) -> ReleaseCheck:
     if not readme.exists():
         return ReleaseCheck("readme", "README updated", "fail", "README.md is missing.")
     text = readme.read_text(errors="ignore").lower()
-    required = ("v1.9", "enterprise/internal pilot", "validated internal research platform mvp")
+    required = ("v2.0", "enterprise discovery operating system", "no major new science")
     missing = [phrase for phrase in required if phrase not in text]
     if "no medical advice" not in text and "does not provide medical advice" not in text:
         missing.append("no medical advice")
@@ -854,10 +1067,10 @@ def _check_readme(root: Path) -> ReleaseCheck:
             "readme",
             "README updated",
             "fail",
-            "README.md is missing required V1.9 release language.",
+            "README.md is missing required V2.0 release language.",
             {"missing_phrases": missing},
         )
-    return ReleaseCheck("readme", "README updated", "pass", "README.md documents V1.9 scope.")
+    return ReleaseCheck("readme", "README updated", "pass", "README.md documents V2.0 scope.")
 
 
 def _check_docker_build_available(root: Path, *, run_commands: bool) -> ReleaseCheck:
@@ -1086,6 +1299,7 @@ def _is_allowed_secret_placeholder(value: str) -> bool:
         "redacted",
         "change-me",
         "readiness-password",
+        "release-gate-password",
         "test-secret",
         "dummy",
         "local",

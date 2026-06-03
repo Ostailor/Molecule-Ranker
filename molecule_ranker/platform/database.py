@@ -697,8 +697,41 @@ class PlatformDatabase:
                     last_used_at=None,
                     metadata_json=_redact_json(metadata or {}),
                 )
-            )
+        )
         return session_id
+
+    def list_auth_sessions(self, *, include_revoked: bool = True) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            query = select(
+                auth_sessions.c.session_id,
+                auth_sessions.c.user_id,
+                auth_sessions.c.created_at,
+                auth_sessions.c.expires_at,
+                auth_sessions.c.revoked_at,
+                auth_sessions.c.last_used_at,
+                auth_sessions.c.metadata_json,
+            )
+            if not include_revoked:
+                query = query.where(auth_sessions.c.revoked_at.is_(None))
+            rows = connection.execute(
+                query.order_by(auth_sessions.c.created_at.desc())
+            ).mappings().fetchall()
+        return [
+            {
+                "session_id": str(row["session_id"]),
+                "user_id": str(row["user_id"]),
+                "created_at": _aware(row["created_at"]).isoformat(),
+                "expires_at": _aware(row["expires_at"]).isoformat(),
+                "revoked_at": _aware(row["revoked_at"]).isoformat()
+                if row["revoked_at"]
+                else None,
+                "last_used_at": _aware(row["last_used_at"]).isoformat()
+                if row["last_used_at"]
+                else None,
+                "metadata": _redact_json(dict(row["metadata_json"] or {})),
+            }
+            for row in rows
+        ]
 
     def refresh_auth_session(self, *, refresh_token: str) -> tuple[UserAccount, str]:
         now = _now()
@@ -954,6 +987,90 @@ class PlatformDatabase:
                 .first()
             )
         return _user(row) if row else None
+
+    def get_user_by_email(self, email: str) -> UserAccount | None:
+        normalized = email.strip().lower()
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(select(users).where(users.c.email == normalized))
+                .mappings()
+                .first()
+            )
+        return _user(row) if row else None
+
+    def upsert_oidc_user(
+        self,
+        *,
+        email: str,
+        subject: str,
+        issuer: str,
+        roles: list[str],
+        display_name: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> UserAccount:
+        normalized = email.strip().lower()
+        now = _now()
+        is_admin = "platform_admin" in set(roles)
+        redacted_metadata = _redact_json(
+            {
+                **(metadata or {}),
+                "oidc_subject": subject,
+                "oidc_issuer": issuer,
+                "roles": sorted(set(roles)),
+            }
+        )
+        with self.engine.begin() as connection:
+            row = (
+                connection.execute(select(users).where(users.c.email == normalized))
+                .mappings()
+                .first()
+            )
+            if row is None:
+                user_id = f"user-{uuid.uuid4().hex[:16]}"
+                connection.execute(
+                    insert(users).values(
+                        user_id=user_id,
+                        email=normalized,
+                        display_name=display_name or normalized.split("@", 1)[0],
+                        password_hash=None,
+                        password_salt=None,
+                        is_active=True,
+                        is_admin=is_admin,
+                        auth_provider="oidc",
+                        created_at=now,
+                        updated_at=now,
+                        last_login_at=now,
+                        metadata_json=redacted_metadata,
+                    )
+                )
+                event_type = "oidc_user_created"
+            else:
+                user_id = str(row["user_id"])
+                connection.execute(
+                    update(users)
+                    .where(users.c.user_id == user_id)
+                    .values(
+                        display_name=display_name or row["display_name"],
+                        is_admin=is_admin,
+                        auth_provider="oidc",
+                        updated_at=now,
+                        last_login_at=now,
+                        metadata_json=redacted_metadata,
+                    )
+                )
+                event_type = "oidc_user_login"
+        self.write_audit(
+            event_type,
+            actor_user_id=user_id,
+            summary=f"OIDC login for {normalized}.",
+            object_type="user",
+            object_id=user_id,
+            metadata={"issuer": issuer, "roles": sorted(set(roles))},
+        )
+        user = self.get_user(user_id)
+        if user is None:
+            raise PlatformDatabaseError("OIDC user could not be loaded.")
+        return user
 
     def list_users(self) -> list[UserAccount]:
         with self.engine.connect() as connection:
@@ -1223,6 +1340,63 @@ class PlatformDatabase:
                 metadata={"membership_id": membership_id},
             )
         return removed
+
+    def register_project_workspace(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        root_dir: str | None = None,
+        org_id: str = "default",
+        actor_user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        now = _now()
+        redacted_metadata = _redact_json(metadata or {})
+        with self.engine.begin() as connection:
+            existing = (
+                connection.execute(
+                    select(project_workspaces.c.project_id).where(
+                        project_workspaces.c.project_id == project_id
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if existing is None:
+                connection.execute(
+                    insert(project_workspaces).values(
+                        project_id=project_id,
+                        org_id=org_id,
+                        name=name,
+                        root_dir=root_dir,
+                        created_at=now,
+                        updated_at=now,
+                        metadata_json=redacted_metadata,
+                    )
+                )
+            else:
+                connection.execute(
+                    update(project_workspaces)
+                    .where(project_workspaces.c.project_id == project_id)
+                    .values(
+                        org_id=org_id,
+                        name=name,
+                        root_dir=root_dir,
+                        updated_at=now,
+                        metadata_json=redacted_metadata,
+                    )
+                )
+        self.write_audit(
+            "project_workspace_registered",
+            actor_user_id=actor_user_id,
+            org_id=org_id,
+            project_id=project_id,
+            summary=f"Registered project workspace {project_id}.",
+            object_type="project",
+            object_id=project_id,
+            metadata={"project_id": project_id},
+        )
 
     def grant_project_permission(
         self,

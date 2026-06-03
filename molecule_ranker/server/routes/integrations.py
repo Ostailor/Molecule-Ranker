@@ -23,6 +23,10 @@ from molecule_ranker.integrations.store import IntegrationStore
 from molecule_ranker.integrations.sync import SyncRequest
 from molecule_ranker.integrations.worker import enqueue_integration_sync_job
 from molecule_ranker.platform.db import PlatformDatabase
+from molecule_ranker.platform.isolation import (
+    IsolationViolation,
+    require_connector_access,
+)
 from molecule_ranker.platform.rbac import has_permission
 from molecule_ranker.platform.schemas import UserAccount
 from molecule_ranker.server.dependencies import current_user, platform_database
@@ -287,7 +291,15 @@ def create_integration_credential(
     user: Annotated[UserAccount, Depends(current_user)],
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> dict[str, Any]:
-    _require_permission(user, database, "integration:manage_credentials")
+    if request.connector_id:
+        _require_connector_namespace(
+            user,
+            database,
+            request.connector_id,
+            permission="integration:manage_credentials",
+        )
+    else:
+        _require_permission(user, database, "integration:manage_credentials")
     credential = database.create_integration_credential(request, actor_user_id=user.user_id)
     return {"credential": credential.model_dump(mode="json")}
 
@@ -348,7 +360,7 @@ def integration_connector_health(
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> dict[str, Any]:
     connector_config = _connector_or_404(database, connector_id)
-    _require_integration_read(user, database)
+    _require_connector_namespace(user, database, connector_id, permission="integration:read")
     health = create_connector(connector_config).health_check()
     return {"health": health.model_dump(mode="json")}
 
@@ -361,7 +373,7 @@ def integration_sync_preview(
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> dict[str, Any]:
     connector_config = _connector_or_404(database, connector_id)
-    _require_integration_sync(user, database)
+    _require_connector_namespace(user, database, connector_id, permission="integration:sync")
     mode = "dry_run" if request.dry_run else connector_config.mode
     if mode == "write_enabled":
         raise HTTPException(status_code=403, detail="Preview cannot run write-enabled sync.")
@@ -400,10 +412,16 @@ def enqueue_integration_sync(
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> dict[str, Any]:
     connector_config = _connector_or_404(database, connector_id)
+    connector_namespace = _require_connector_namespace(
+        user,
+        database,
+        connector_id,
+        permission="integration:sync",
+    )
     sync_request = request.sync_request.model_copy(
         update={
-            "org_id": request.sync_request.org_id,
-            "project_id": request.sync_request.project_id,
+            "org_id": connector_namespace.org_id or request.sync_request.org_id,
+            "project_id": connector_namespace.project_id,
             "requested_by_user_id": user.user_id,
         }
     )
@@ -433,12 +451,19 @@ def integration_webhook_ingest(
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> dict[str, Any]:
     connector_config = _connector_or_404(database, connector_id)
-    _require_integration_sync(user, database)
+    connector_namespace = _require_connector_namespace(
+        user,
+        database,
+        connector_id,
+        permission="integration:sync",
+    )
     sync_job = database.start_integration_sync_job(
         connector_id=connector_id,
         actor_user_id=user.user_id,
         direction="import",
         mode="dry_run" if connector_config.mode != "read_only" else "read_only",
+        org_id=connector_namespace.org_id or "default",
+        project_id=connector_namespace.project_id,
         metadata={"event_type": request.event_type},
     )
     record = ExternalRecordEnvelope(
@@ -541,6 +566,24 @@ def _system_connector_config(system: ExternalSystem) -> ConnectorConfig:
         config=system.metadata,
         sandbox=system.default_mode != "write_enabled",
     )
+
+
+def _require_connector_namespace(
+    user: UserAccount,
+    database: PlatformDatabase,
+    connector_id: str,
+    *,
+    permission: str,
+):
+    try:
+        return require_connector_access(
+            database,
+            user,
+            connector_id=connector_id,
+            permission=permission,
+        )
+    except IsolationViolation as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _public_connector(connector: ConnectorConfig) -> dict[str, Any]:

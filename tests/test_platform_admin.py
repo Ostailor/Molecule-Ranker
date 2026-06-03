@@ -22,16 +22,25 @@ def test_admin_dashboard_pages_require_admin(tmp_path: Path) -> None:
     _web_login(client, "viewer@example.com", "Viewer-password-1")
 
     for path in [
+        "/dashboard/admin",
         "/dashboard/admin/users",
         "/dashboard/admin/organizations",
         "/dashboard/admin/teams",
         "/dashboard/admin/memberships",
+        "/dashboard/admin/roles",
         "/dashboard/admin/service-accounts",
+        "/dashboard/admin/project-permissions",
+        "/dashboard/admin/integrations",
         "/dashboard/admin/audit",
         "/dashboard/admin/jobs",
+        "/dashboard/admin/workers",
         "/dashboard/admin/health",
         "/dashboard/admin/codex-worker",
+        "/dashboard/admin/policies",
         "/dashboard/admin/support",
+        "/dashboard/admin/backup-restore",
+        "/dashboard/admin/slo",
+        "/dashboard/admin/release-validation",
         "/dashboard/admin/feedback",
     ]:
         response = client.get(path)
@@ -148,6 +157,87 @@ def test_service_account_token_not_recoverable_after_creation(tmp_path: Path) ->
     assert listed.status_code == 200
     assert "access_token" not in listed.text
     assert token not in listed.text
+
+
+def test_enterprise_admin_console_pages_render_and_show_rbac_policy_context(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    app = cast(Any, client.app)
+    admin = app.state.platform_database.list_users()[0]
+    app.state.platform_database.grant_project_permission(
+        project_id="project-1",
+        role="viewer",
+        actor_user_id=admin.user_id,
+        user_id=admin.user_id,
+    )
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    expectations = {
+        "/dashboard/admin/roles": ["RBAC matrix", "project_owner", "artifact:export"],
+        "/dashboard/admin/project-permissions": ["Project permissions", "project-1", "viewer"],
+        "/dashboard/admin/integrations": [
+            "Integration administration",
+            "Dry-run/read-only by default",
+        ],
+        "/dashboard/admin/workers": ["Workers", "Queue backlog", "Codex worker"],
+        "/dashboard/admin/policies": [
+            "Policy explanations",
+            "generated_molecules_require_review_before_export",
+        ],
+        "/dashboard/admin/backup-restore": ["Backup/restore", "Disaster recovery"],
+        "/dashboard/admin/release-validation": [
+            "Release and validation package",
+            "V2 contract validation",
+        ],
+    }
+
+    for path, snippets in expectations.items():
+        response = client.get(path)
+        assert response.status_code == 200, path
+        for snippet in snippets:
+            assert snippet in response.text, f"{snippet} missing from {path}"
+
+
+def test_admin_console_redacts_secrets_from_audit_and_integration_pages(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    app = cast(Any, client.app)
+    admin = app.state.platform_database.list_users()[0]
+    app.state.platform_database.write_audit(
+        "integration_probe",
+        actor_user_id=admin.user_id,
+        summary="Checked integration with authorization=Bearer secret-token-value",
+        metadata={"api_key": "sk-secret-value", "nested": {"password": "plain-secret"}},
+    )
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    audit = client.get("/dashboard/admin/audit")
+    integrations = client.get("/dashboard/admin/integrations")
+
+    assert audit.status_code == 200
+    assert integrations.status_code == 200
+    combined = audit.text + integrations.text
+    assert "secret-token-value" not in combined
+    assert "sk-secret-value" not in combined
+    assert "plain-secret" not in combined
+    assert "[REDACTED]" in combined
+
+
+def test_dashboard_admin_backup_action_is_audited(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    client.cookies.clear()
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.post("/dashboard/admin/backup-restore/verify", follow_redirects=False)
+    audit = client.get("/dashboard/admin/audit")
+
+    assert response.status_code == 303
+    assert audit.status_code == 200
+    assert "admin_support_run_backup_verification" in audit.text
 
 
 def _client(tmp_path: Path) -> TestClient:

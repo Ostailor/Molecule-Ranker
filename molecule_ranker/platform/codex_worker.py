@@ -30,6 +30,10 @@ from molecule_ranker.codex_backbone.guardrails import (
 from molecule_ranker.evaluation.codex_explanations import EVALUATION_CODEX_TASK_TYPES
 from molecule_ranker.platform.database import codex_worker_jobs
 from molecule_ranker.platform.db import PlatformDatabase
+from molecule_ranker.platform.isolation import (
+    IsolationViolation,
+    validate_codex_artifact_scope,
+)
 from molecule_ranker.platform.jobs import JobResult, PlatformJobQueue
 from molecule_ranker.platform.observability import log_event, metrics
 from molecule_ranker.platform.rbac import has_permission
@@ -313,9 +317,27 @@ class CodexWorker:
         work_dir: Path,
     ) -> tuple[CodexRequest, ScopedArtifactContext]:
         workspace = self.workspace_store.load()
+        requested_artifact_ids = _requested_artifact_ids(job.config_snapshot)
+        if requested_artifact_ids is not None:
+            user = self.database.get_user(job.requested_by_user_id)
+            if user is None:
+                raise PermissionError("Requesting user is no longer active.")
+            try:
+                validate_codex_artifact_scope(
+                    self.database,
+                    user,
+                    job_project_id=str(job.project_id),
+                    artifact_ids=requested_artifact_ids,
+                    workspace_artifact_ids={
+                        artifact.artifact_id for artifact in workspace.artifacts
+                    },
+                    allow_workspace_artifacts=True,
+                )
+            except IsolationViolation as exc:
+                raise PermissionError(str(exc)) from exc
         context = self._scoped_artifact_context(
             workspace,
-            requested_artifact_ids=_requested_artifact_ids(job.config_snapshot),
+            requested_artifact_ids=requested_artifact_ids,
             work_dir=work_dir,
         )
         if not context.included:

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from molecule_ranker.campaigns import (
     Campaign,
@@ -38,6 +39,7 @@ from molecule_ranker.models.schemas import (
     ModelPrediction,
     ModelTrainingRun,
 )
+from molecule_ranker.platform.database import project_workspaces
 from molecule_ranker.server import create_app
 from molecule_ranker.workers import PipelineWorker
 from molecule_ranker.workspace.schemas import ArtifactRecord
@@ -135,12 +137,20 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/admin/organizations",
         "/dashboard/admin/teams",
         "/dashboard/admin/memberships",
+        "/dashboard/admin/roles",
         "/dashboard/admin/service-accounts",
+        "/dashboard/admin/project-permissions",
+        "/dashboard/admin/integrations",
         "/dashboard/admin/audit",
         "/dashboard/admin/jobs",
+        "/dashboard/admin/workers",
         "/dashboard/admin/health",
         "/dashboard/admin/codex-worker",
+        "/dashboard/admin/policies",
         "/dashboard/admin/support",
+        "/dashboard/admin/backup-restore",
+        "/dashboard/admin/slo",
+        "/dashboard/admin/release-validation",
         "/dashboard/admin/feedback",
     ]:
         response = client.get(path, follow_redirects=False)
@@ -603,11 +613,24 @@ def test_dashboard_project_creation_form_creates_owned_project(tmp_path: Path) -
     )
     detail = client.get("/dashboard/projects/workspace-created")
     portfolio = client.get("/dashboard/projects/workspace-created/portfolio")
+    app_state = cast(Any, client.app).state
+    with app_state.platform_database.engine.connect() as connection:
+        registered = (
+            connection.execute(
+                select(project_workspaces).where(
+                    project_workspaces.c.project_id == "workspace-created"
+                )
+            )
+            .mappings()
+            .first()
+        )
 
     assert created.status_code == 303
     assert created.headers["location"] == "/dashboard/projects/workspace-created"
     assert detail.status_code == 200
     assert "Created project" in detail.text
+    assert registered is not None
+    assert registered["name"] == "Created project"
     assert portfolio.status_code == 200
     assert "<td>Runs</td><td>0</td>" in portfolio.text
     assert "<td>Candidate artifacts</td><td>0</td>" in portfolio.text
@@ -678,12 +701,20 @@ def test_admin_dashboard_pages_render_for_admin(tmp_path: Path) -> None:
         "/dashboard/admin/organizations": "Organizations",
         "/dashboard/admin/teams": "Teams",
         "/dashboard/admin/memberships": "Memberships",
+        "/dashboard/admin/roles": "RBAC matrix",
         "/dashboard/admin/service-accounts": "Service accounts",
+        "/dashboard/admin/project-permissions": "Project permissions",
+        "/dashboard/admin/integrations": "Integration administration",
         "/dashboard/admin/audit": "Audit log",
         "/dashboard/admin/jobs": "Job queue",
+        "/dashboard/admin/workers": "Workers",
         "/dashboard/admin/health": "System health",
         "/dashboard/admin/codex-worker": "Codex worker status",
+        "/dashboard/admin/policies": "Policy explanations",
         "/dashboard/admin/support": "Admin support console",
+        "/dashboard/admin/backup-restore": "Backup/restore",
+        "/dashboard/admin/slo": "SLO dashboard",
+        "/dashboard/admin/release-validation": "Release and validation package",
         "/dashboard/admin/feedback": "Pilot feedback admin",
     }
     for path, snippet in expectations.items():

@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: molecule-ranker-codex-worker
+  labels:
+    app: molecule-ranker
+    component: codex-worker
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: molecule-ranker-codex-worker
+  labels:
+    app: molecule-ranker
+    component: codex-worker
+    app.kubernetes.io/version: "2.0.0"
+  annotations:
+    molecule-ranker.openai.com/optional: "true"
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: molecule-ranker
+      component: codex-worker
+  template:
+    metadata:
+      labels:
+        app: molecule-ranker
+        component: codex-worker
+      annotations:
+        molecule-ranker.openai.com/optional: "true"
+    spec:
+      serviceAccountName: molecule-ranker-codex-worker
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: molecule-ranker-artifacts
+            readOnly: true
+        - name: projects
+          persistentVolumeClaim:
+            claimName: molecule-ranker-projects
+            readOnly: true
+        - name: codex-storage
+          persistentVolumeClaim:
+            claimName: molecule-ranker-codex-worker-storage
+        - name: codex-runtime-secrets
+          secret:
+            secretName: molecule-ranker-codex-runtime
+            optional: true
+      containers:
+        - name: codex-worker
+          image: molecule-ranker:2.0.0
+          imagePullPolicy: IfNotPresent
+          args: ["worker", "--job-types", "codex_task"]
+          env:
+            - name: MOLECULE_RANKER_HOSTED
+              value: "true"
+            - name: MOLECULE_RANKER_ROOT
+              value: /data/projects
+            - name: MOLECULE_RANKER_ARTIFACT_ROOT
+              value: /data/artifacts
+            - name: MOLECULE_RANKER_STORAGE_ROOT
+              value: /data/storage
+            - name: MOLECULE_RANKER_CODEX_WORKER_WORKSPACE_ROOT
+              value: /data/storage/codex-worker
+            - name: MOLECULE_RANKER_ENABLE_CODEX_WORKER
+              value: "true"
+            - name: MOLECULE_RANKER_EXTERNAL_WRITES_ENABLED
+              value: "false"
+            - name: MOLECULE_RANKER_CODEX_PROMPT_SECRET_REDACTION
+              value: "true"
+            - name: MOLECULE_RANKER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: molecule-ranker-secrets
+                  key: database-url
+          volumeMounts:
+            - name: artifacts
+              mountPath: /data/artifacts
+              readOnly: true
+            - name: projects
+              mountPath: /data/projects
+              readOnly: true
+            - name: codex-storage
+              mountPath: /data/storage
+            - name: codex-runtime-secrets
+              mountPath: /run/molecule-ranker/codex
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "molecule-ranker db check --database-url \"$MOLECULE_RANKER_DATABASE_URL\""]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["molecule-ranker", "worker", "--help"]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]

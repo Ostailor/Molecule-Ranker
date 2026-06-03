@@ -3,7 +3,7 @@
 Run diagnostics before and during V1.9 pilots:
 
 - Check `/version`, `/health`, `/ready`, and `/metrics`.
-- Confirm version `1.9.0` and V1 contract identifiers.
+- Confirm version `2.0.0` and V1 contract identifiers.
 - Confirm worker queues can enqueue, claim, fail, cancel, and record audit
   events in a non-live test project.
 - Confirm release checks pass without requiring live external services.

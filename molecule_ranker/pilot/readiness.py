@@ -14,6 +14,7 @@ from molecule_ranker.pilot.schemas import PilotEnvironment, PilotReadinessReport
 from molecule_ranker.pilot.support_bundle import generate_support_bundle_manifest
 from molecule_ranker.platform.database import SCHEMA_VERSION, PlatformDatabase
 from molecule_ranker.platform.jobs import JobResult, PlatformJobQueue
+from molecule_ranker.platform.readiness import ensure_readiness_probe_project
 from molecule_ranker.platform.settings import LOCAL_DEVELOPMENT_SECRET
 from molecule_ranker.release.checks import run_release_checks
 from molecule_ranker.server import create_app
@@ -75,10 +76,10 @@ def run_pilot_readiness_audit(
 
     _add_check(
         checks,
-        "version_is_1_9_0",
-        "pass" if __version__ == "1.9.0" else "fail",
-        "Version is 1.9.0." if __version__ == "1.9.0" else f"Version is {__version__}.",
-        blocker=__version__ != "1.9.0",
+        "version_is_2_0_0",
+        "pass" if __version__ == "2.0.0" else "fail",
+        "Version is 2.0.0." if __version__ == "2.0.0" else f"Version is {__version__}.",
+        blocker=__version__ != "2.0.0",
     )
     _add_migration_check(checks, database)
     _add_writable_path_check(
@@ -381,8 +382,17 @@ def _add_worker_check(
             password="Readiness-password-1",
             roles=["platform_admin", "user"],
         )
+        project_id = ensure_readiness_probe_project(
+            database,
+            user_id=user.user_id,
+            root_dir=config.root_dir,
+        )
         queue = PlatformJobQueue(database)
-        job = queue.enqueue(job_type="dashboard_build", requested_by=user)
+        job = queue.enqueue(
+            job_type="dashboard_build",
+            requested_by=user,
+            project_id=project_id,
+        )
         claimed = queue.claim_next(job_types={"dashboard_build"})
         if claimed is None or claimed.job_id != job.job_id:
             raise RuntimeError("Pilot readiness job was not claimed.")

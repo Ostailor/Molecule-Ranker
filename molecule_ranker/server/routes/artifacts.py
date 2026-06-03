@@ -7,6 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from molecule_ranker.codex_backbone.guardrails import is_secret_path
+from molecule_ranker.platform.isolation import (
+    IsolationViolation,
+    require_workspace_artifact_access,
+)
 from molecule_ranker.platform.rbac import has_permission, require_project_access
 from molecule_ranker.platform.schemas import UserAccount
 from molecule_ranker.server.dependencies import current_user, workspace_store
@@ -78,6 +82,16 @@ def download_project_artifact(
         raise HTTPException(status_code=404, detail="Artifact not found.")
     if bool(request.app.state.hosted_mode):
         database = request.app.state.platform_database
+        try:
+            require_workspace_artifact_access(
+                database,
+                user,
+                workspace=workspace,
+                artifact=artifact,
+                permission="project:read",
+            )
+        except IsolationViolation as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         if _is_pose_artifact(artifact.artifact_type) and not has_permission(
             user,
             "structure:export",

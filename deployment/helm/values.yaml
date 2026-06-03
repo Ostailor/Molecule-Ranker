@@ -1,0 +1,80 @@
+image:
+  repository: molecule-ranker
+  tag: "2.0.0"
+  pullPolicy: IfNotPresent
+
+replicaCount:
+  server: 2
+  worker: 1
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8765
+
+secretRefs:
+  existingSecret: molecule-ranker-secrets
+  authSecretKey: auth-secret
+  databaseUrlKey: database-url
+
+persistence:
+  artifacts:
+    claimName: molecule-ranker-artifacts
+    mountPath: /data/artifacts
+  storage:
+    claimName: molecule-ranker-storage
+    mountPath: /data/storage
+  projects:
+    claimName: molecule-ranker-projects
+    mountPath: /data/projects
+  codexWorker:
+    claimName: molecule-ranker-codex-worker-storage
+    mountPath: /data/storage
+
+env:
+  hosted: "true"
+  externalWritesEnabled: "false"
+  enableCodexWorker: "false"
+  logDestination: stdout
+
+resources:
+  server:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  worker:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+  codexWorker:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+codexWorker:
+  enabled: false
+  replicas: 0
+  runtimeSecretName: molecule-ranker-codex-runtime
+  jobTypes: codex_task
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL

@@ -3,7 +3,7 @@
 Use this runbook to onboard internal pilot users without changing scientific
 scope.
 
-1. Confirm the deployment reports version `1.9.0` and V1 contract identifiers.
+1. Confirm the deployment reports version `2.0.0` and V1 contract identifiers.
 2. Confirm users understand that molecule-ranker is for internal research use
    only.
 3. Confirm generated molecules, rankings, hypotheses, model predictions,

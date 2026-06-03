@@ -1,13 +1,17 @@
 # molecule-ranker
 
-`molecule-ranker` is a validated internal research platform MVP for
-source-backed molecule ranking and research operations. V1.9 is an enterprise
-pilot hardening release: it prepares the validated V1.8 platform for
-enterprise/internal pilot use with usability polish, performance optimization,
-reliability hardening, operational readiness, supportability, migration safety,
-observability, pilot onboarding, and pre-V2.0 readiness validation. It does not
-add major new science capabilities, and it keeps all scientific guardrails
-intact. V1.8 already added scientific evaluation benchmark suites and
+`molecule-ranker` is a validated enterprise discovery operating system for
+internal research teams running source-backed molecule ranking and research
+operations. V2.0 is the enterprise-stable release. It stabilizes the V1.9
+pilot-hardened platform for enterprise release with stable release
+contracts, production-grade deployment, security hardening, enterprise identity
+and access controls, tenant/project isolation, validation evidence packages,
+operational runbooks, disaster recovery, governance and audit readiness,
+performance and reliability targets, release certification workflows, stable
+APIs and SDK, enterprise admin controls, full end-to-end synthetic demo
+workflows, and V2.0 documentation and training. V2.0 does not add major new
+science capabilities, and it keeps all scientific guardrails intact. V1.9
+already added enterprise/internal pilot hardening. V1.8 already added scientific evaluation benchmark suites and
 prospective validation analytics. V1.7 already added closed-loop campaign
 planning and budget-aware execution management. V1.6 already added automated graph-backed hypothesis
 generation and testable research-question planning. V1.5 already added a cross-program
@@ -19,15 +23,18 @@ reproducibility metadata, pose QC, consensus rescoring, interaction profiles,
 structure-aware generated molecule filtering, report cards, and hosted
 structure job guardrails. V1.2 already provides a formal predictive model
 plugin interface, calibrated assay-specific surrogate model artifacts, and
-hosted model training and validation job surfaces. V1.1 already supports
-AgentGraph scientific design
+hosted model training and validation job surfaces. The V2.0 capability set
+therefore includes source-backed ranking, generated hypotheses,
+developability, experiments, review, Codex backbone, integrations, models,
+structure workflows, portfolios, graphs, hypotheses, campaigns, evaluations,
+and enterprise operations. V1.1 already supports AgentGraph scientific design
 workflows, generated-molecule report cards, uncertainty/diversity/readiness
 triage, generator benchmarking, source-backed ranking, generated molecule
 hypotheses, developability triage, literature evidence, experimental feedback,
 review workflows, Codex-backed orchestration, hosted platform mode, and guarded
 external integrations.
 
-V1.9 is for internal research use only. It is not a regulated clinical product.
+V2.0 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
 treat, are safe, bind, inhibit, activate, or are active. Docking scores are not
@@ -52,11 +59,13 @@ structures, poses, binding sites, docking scores, interactions, evidence, assay
 results, citations, molecules, mechanisms, graph nodes, graph edges,
 hypotheses, scores, portfolio optimization outputs, campaign metrics, campaign
 costs, campaign outcomes, benchmark results, labels, metrics, conclusions, or
-advancement decisions. Data
-provenance, audit logs, deterministic validation, and guardrails are core design
-principles.
+advancement decisions. Data provenance, audit logs, deterministic validation,
+guardrails, contracts, and validation packages are core principles. Enterprise
+validation artifacts are software/process validation artifacts, not clinical
+validation, benchmark proof, prospective validation proof, assay results, or
+molecule activity/safety/efficacy evidence.
 
-Given a disease name, V1.9 resolves the disease through public biomedical data
+Given a disease name, V2.0 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -66,22 +75,29 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V1.9
+## Current Scope Through V2.0
 
-V1.9 implements existing-molecule ranking, opt-in generated hypotheses,
+V2.0 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V1.9 adds enterprise/internal pilot hardening:
+external integration primitives. V2.0 adds enterprise release stabilization:
+stable release contracts, production deployment, security hardening, identity
+and access controls, tenant/project isolation, validation evidence packages,
+operational runbooks, disaster recovery verification, governance and audit
+readiness, performance and reliability targets, release certification
+workflows, stable APIs and SDK, enterprise admin controls, end-to-end synthetic
+demo workflows, and documentation/training material. V2.0 does not add major
+new science capabilities, does not expand molecule generation, docking, ADMET,
+graph reasoning, model training, integrations, or campaign planning except for
+stability, validation, security, and enterprise readiness, and preserves all
+scientific guardrails. V1.9 added enterprise/internal pilot hardening:
 usability polish, performance optimization, reliability hardening, operational
 readiness, supportability, pilot onboarding, admin/support workflows, better
 error messages, job retry/resume/cancel robustness, dashboard workflow
 improvements, dataset/artifact migration safety, deployment diagnostics,
 monitoring and alerting, pilot feedback capture, support bundle generation, and
-pre-V2.0 readiness validation. V1.9 does not add major new science
-capabilities, does not expand molecule generation, docking, ADMET, connectors,
-or predictive modeling except for stability and usability work, and preserves
-all scientific guardrails. V1.8 added scientific evaluation benchmarks,
+pre-V2.0 readiness validation. V1.8 added scientific evaluation benchmarks,
 prospective validation analytics, decision-quality reports, guardrail benchmark
 runs, longitudinal performance trends, and reproducibility manifests. V1.7 added
 deterministic closed-loop campaign
@@ -242,7 +258,7 @@ benchmarking, and validation workflows.
 - Let Codex suggest external-ID mappings only as assistant output. Deterministic
   validation against observed source records must confirm mappings before use.
 
-V1.9 does not:
+V2.0 does not:
 
 - Create placeholder molecules.
 - Use fixture biomedical data in production.
@@ -308,12 +324,16 @@ V1.9 does not:
   instructions, provide dosing, or provide patient-treatment guidance.
 - Write to external systems by default. Connector modes default to dry-run,
   read-only, or sandbox; writes/exports require explicit config and permission.
+- Add major new science modules beyond stability, validation, security, and
+  enterprise readiness hardening.
+- Treat enterprise validation packages as clinical validation or biomedical
+  evidence.
 
 Unit tests use mocked data only to test behavior deterministically. Production
 code uses real public biomedical data adapters and fails if required data cannot
 be retrieved.
 
-## Quickstart
+## Enterprise Quickstart
 
 Install dependencies and verify the version:
 
@@ -322,7 +342,14 @@ uv sync --all-groups
 uv run molecule-ranker version
 ```
 
-Current release: `1.9.0`.
+Current release: `2.0.0`.
+
+Confirm the frozen V2.0 contracts and API surface:
+
+```bash
+uv run molecule-ranker v2 validate-contracts
+uv run molecule-ranker api export-openapi --output openapi.json
+```
 
 Run a source-backed ranking workflow locally. Generation, docking, external
 writes, Codex, review workflows, and experimental evidence are disabled unless
@@ -360,24 +387,35 @@ The demo uses clearly fake names such as `ExampleCandidateA`,
 biomedical claims, fake citations, fake assay outcomes, lab protocols, dosing,
 or synthesis instructions.
 
-## V1.9 Enterprise Pilot Hardening
+Run the mocked enterprise golden workflow:
 
-V1.9 prepares molecule-ranker for enterprise/internal pilot use. The release
-focuses on usability, performance, reliability, operational readiness,
-supportability, migrations, observability, pilot onboarding, admin workflows,
-support workflows, and release readiness. It does not introduce major new
-science capabilities, and it does not weaken scientific guardrails. Generated
-molecules remain computational hypotheses, model predictions remain
-prioritization artifacts, benchmark outputs remain evaluation artifacts, and
-Codex output remains separate from evidence, assay results, molecules, scores,
-benchmark results, or decisions.
+```bash
+uv run molecule-ranker validate enterprise-golden
+```
 
-V1.9 is also the bridge to V2.0. The release adds pilot readiness audits,
-support bundles, migration dry-runs, performance baselines, operational alerts,
-feedback capture, and a release gate so teams can validate whether the platform
-is ready for V2.0 enterprise evaluation.
+## V2.0 Enterprise Release
 
-Run the pilot readiness audit:
+V2.0 ships molecule-ranker as a validated enterprise discovery operating
+system. The release focuses on stable contracts, production deployment,
+security, enterprise identity and access controls, tenant/project isolation,
+validation evidence packages, runbooks, disaster recovery, governance, audit
+readiness, performance/reliability targets, release certification, stable APIs
+and SDK, enterprise admin controls, end-to-end synthetic demos, and training.
+No major new science modules are added. It does not introduce major new science
+capabilities, and it does not weaken
+scientific guardrails. Generated molecules remain computational hypotheses,
+model predictions remain prioritization artifacts, benchmark outputs remain
+evaluation artifacts, and Codex output remains separate from evidence, assay
+results, molecules, scores, benchmark results, or decisions.
+
+V2.0 enterprise validation evidence is software/process validation evidence:
+release checks, deterministic golden workflows, contract manifests, security
+and guardrail audits, deployment readiness, backup/restore verification,
+audit/governance evidence, support bundles, and operator runbooks. It is not
+clinical validation and must not be represented as proof that any molecule is
+active, safe, effective, synthesizable, or suitable for treatment.
+
+Run the inherited pilot readiness audit:
 
 ```bash
 uv run molecule-ranker pilot readiness --json
@@ -404,22 +442,26 @@ Run an artifact migration dry-run with backup-aware manifest generation:
 ```bash
 uv run molecule-ranker migrate artifacts \
   --path results/ \
-  --target-version 1.9 \
+  --target-version 2.0 \
   --dry-run
 ```
 
-Run the V1.9 release gate:
+Run the V2.0 release certification checks:
 
 ```bash
-uv run molecule-ranker pilot release-gate --json
+uv run molecule-ranker release check --json
+uv run molecule-ranker release manifest --output release_manifest.json
+uv run molecule-ranker release notes --output RELEASE_NOTES.md
+uv run molecule-ranker v2 release-gate --output-dir release_gate/
 ```
 
-Start the synthetic pilot demo environment:
+Start the synthetic enterprise demo environment:
 
 ```bash
-cd examples/v1_9_pilot_demo
+cd examples/v2_0_enterprise_demo
 ./scripts/bootstrap.sh
-docker compose up
+./scripts/run_demo_workflows.sh
+./scripts/generate_support_bundle.sh
 ```
 
 Submit pilot feedback. Feedback is operational input, not scientific evidence:
@@ -1477,24 +1519,27 @@ consensus, generate a structure report, and verify guardrails. It fails if a
 fixture overclaims binding or validation, invents a docking score, or uses a
 binding-site source without acceptable provenance.
 
-## V1.0 Release Readiness
+## V2.0 Release Readiness
 
-V1.0 release readiness is tracked as machine-readable gates in
-`molecule_ranker.release`. The release manifest declares the validated internal
-research platform scope, scientific-integrity constraints, non-goals, and
-versioned contracts:
+V2.0 release readiness is tracked as machine-readable gates in
+`molecule_ranker.release`. The release manifest declares the validated
+enterprise discovery operating-system scope, scientific-integrity constraints,
+non-goals, and stable versioned contracts:
 
 - API contract: `api.v1`.
 - Artifact contract: `artifacts.v1`.
 - Integration data-contract family: `data-contracts.v1`.
 - Warehouse schema contract: `mr_warehouse_v1.0.0`.
 
-The V1.0 gate set covers golden workflows, release validation, security and
-guardrails, provenance/reproducibility, integration contracts, hosted
-deployment hardening, platform docs, operator runbooks, synthetic demo
-artifacts, backup/restore checks, and release packaging. See
-`docs/v1.0-release-readiness.md`, `docs/contracts/v1.0-api-and-artifacts.md`,
-and the runbooks under `docs/runbooks/`.
+The V2.0 gate set covers enterprise release contracts, production deployment,
+security hardening, identity and access controls, tenant/project isolation,
+validation evidence packages, operational runbooks, disaster recovery and
+backup verification, governance and audit readiness, performance and
+reliability targets, release certification workflows, stable APIs and SDK,
+enterprise admin controls, synthetic end-to-end demo workflows, and V2.0
+documentation/training material. See `docs/v2.0-enterprise-release.md`,
+`docs/contracts/v2.0-enterprise-contracts.md`, and the runbooks under
+`docs/runbooks/`.
 
 ### Golden Workflow Validation
 
@@ -1529,7 +1574,38 @@ artifacts, backup/restore evidence, and packaging metadata. Default validation
 does not call live public APIs, real Benchling or warehouse systems, or live
 Codex.
 
-## Hosted Deployment Quickstart
+### Validation Package Quickstart
+
+Generate the V2.0 software/platform validation package:
+
+```bash
+uv run molecule-ranker validate v2-package --output validation_package/
+uv run molecule-ranker validate v2-package --zip validation_package.zip
+```
+
+The package contains release manifests, contract validation, mocked golden
+workflow evidence, guardrail/security reports, performance and readiness
+summaries, backup/restore verification, support-bundle validation, deployment
+smoke evidence, Codex guardrail evaluation, integration dry-run validation,
+prospective-validation demo evidence, and known limitations. It excludes
+secrets, caches, and full copyrighted source text. It is software/process
+validation evidence, not clinical validation, regulatory approval, or GxP
+compliance unless separately assessed.
+
+### Release Gate Quickstart
+
+Run the V2.0 release gate and write machine-readable and reviewer-readable
+outputs:
+
+```bash
+uv run molecule-ranker v2 release-gate --output-dir release_gate/
+```
+
+The command writes `release_gate/v2_release_gate.json` and
+`release_gate/v2_release_gate.md`. CI systems may provide explicit evidence
+markers for long-running checks through `--evidence-dir`.
+
+## Deployment Quickstart
 
 Create the platform database, create an admin user, and start the hosted
 dashboard locally:
@@ -1566,8 +1642,50 @@ configured; Codex worker jobs are scoped to registered project artifacts and
 require `codex:run` permission. Integrations default to dry-run/read-only and
 external writes require explicit write-enabled configuration and permission.
 
+For enterprise packaging, start from `deployment/README.md`,
+`deployment/docker-compose.enterprise.yml`, `deployment/helm/`, and
+`deployment/hardening.md`. Production deployments should use non-root
+containers, health/readiness probes, separate server and worker processes,
+PostgreSQL, object/artifact storage, secret-manager references, stdout/stderr
+logging, resource limits, verified backup/restore, optional isolated Codex
+workers, and disabled external integration writes by default.
+
+### Backup/Restore Quickstart
+
+Create and verify a backup, restore it, and run the V2.0 DR drill:
+
+```bash
+uv run molecule-ranker platform backup --output backups/platform-backup.zip
+uv run molecule-ranker platform backup-verify backups/platform-backup.zip
+uv run molecule-ranker platform restore --input backups/platform-backup.zip --target-dir restored/
+uv run molecule-ranker platform dr-drill --output-dir dr_drill/
+```
+
+The DR drill creates a backup, verifies its manifest and artifact hashes,
+restores to a temporary environment, checks database migration compatibility,
+loads key projects and artifacts, validates user/role metadata, confirms
+secrets are excluded, runs a smoke workflow, and emits a DR report.
+
 ## Docs Index
 
+- V2 overview: `docs/v2/index.md`
+- V2 quickstart: `docs/v2/quickstart.md`
+- V2 architecture: `docs/v2/architecture.md`
+- V2 security model: `docs/v2/security_model.md`
+- V2 deployment: `docs/v2/deployment.md`
+- V2 admin guide: `docs/v2/admin_guide.md`
+- V2 user guide: `docs/v2/user_guide.md`
+- V2 scientist guide: `docs/v2/scientist_guide.md`
+- V2 reviewer guide: `docs/v2/reviewer_guide.md`
+- V2 operator guide: `docs/v2/operator_guide.md`
+- V2 integration guide: `docs/v2/integration_guide.md`
+- V2 Codex backbone: `docs/v2/codex_backbone.md`
+- V2 data governance: `docs/v2/data_governance.md`
+- V2 validation package: `docs/v2/validation_package.md`
+- V2 backup/restore: `docs/v2/backup_restore.md`
+- V2 troubleshooting: `docs/v2/troubleshooting.md`
+- V2 limitations: `docs/v2/limitations.md`
+- V2 release notes: `docs/v2/release_notes.md`
 - User overview: `docs/user/overview.md`
 - Ranking workflow: `docs/user/ranking_workflow.md`
 - Generated molecules: `docs/user/generated_molecules.md`
@@ -1585,6 +1703,19 @@ external writes require explicit write-enabled configuration and permission.
 - Admin users and roles: `docs/admin/users_and_roles.md`
 - Admin security checklist: `docs/admin/security_checklist.md`
 - V1.0 API and artifact contracts: `docs/contracts/v1.0-api-and-artifacts.md`
+- V2.0 enterprise contracts: `docs/contracts/v2.0-enterprise-contracts.md`
+
+## Training Index
+
+- Admin training: `docs/training/admin_training.md`
+- Scientist training: `docs/training/scientist_training.md`
+- Reviewer training: `docs/training/reviewer_training.md`
+- Operator training: `docs/training/operator_training.md`
+- Integration admin training: `docs/training/integration_admin_training.md`
+- Codex guardrails training: `docs/training/codex_guardrails_training.md`
+- Generated molecule interpretation: `docs/training/generated_molecule_interpretation.md`
+- Model prediction interpretation: `docs/training/model_prediction_interpretation.md`
+- Evaluation interpretation: `docs/training/evaluation_interpretation.md`
 
 ## Runbooks Index
 
@@ -3057,15 +3188,15 @@ does not write a normal `report.md` that looks successful.
 - Source records may use inconsistent identifiers and terminology.
 - Scores are heuristic and not experimentally validated.
 - No wet-lab validation is performed by this software.
-- V1.9 is for internal research use only.
-- V1.9 is not a regulated clinical product.
+- V2.0 is for internal research use only.
+- V2.0 is not a regulated clinical product.
 - Codex is an orchestration and summarization layer, not scientific truth.
 - No clinical recommendation, diagnosis, prescription, dosage, or treatment
   guidance is provided.
 - No synthesis instructions, lab protocols, or experimental execution
   instructions are provided.
-- molecule-ranker does not claim that molecules cure, treat, are safe, or are
-  active.
+- molecule-ranker does not claim that molecules cure, treat, are safe, active,
+  effective, binding, or synthesizable.
 - Approved status does not imply safety or relevance for the queried disease.
 - Absence of evidence is not evidence of absence.
 - Literature evidence can be absent for a candidate; absence is labeled rather
@@ -3091,6 +3222,9 @@ does not write a normal `report.md` that looks successful.
   default.
 - Validation handoff packets are high-level planning artifacts and do not
   include lab protocols.
+- Enterprise validation packages are software/process validation artifacts, not
+  clinical validation, regulatory approval, GxP compliance, benchmark proof, or
+  prospective validation proof.
 
 ## Roadmap
 
@@ -3123,6 +3257,11 @@ does not write a normal `report.md` that looks successful.
   analytics.
 - V1.9: usability, performance, reliability, and enterprise pilot hardening.
 - V2.0: validated enterprise discovery operating system.
+- V2.1: enterprise usability and deployment feedback.
+- V2.2: expanded validated connectors and warehouse/ELN coverage.
+- V2.3: advanced collaborative decision workflows.
+- V3.0: multi-tenant enterprise productization and large-scale validated
+  discovery operations.
 
 ## Development
 

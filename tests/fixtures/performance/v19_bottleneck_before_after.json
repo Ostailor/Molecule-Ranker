@@ -1,6 +1,6 @@
 {
   "fixture_id": "v19-common-bottlenecks-before-after",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "purpose": "Static benchmark fixture for V1.9 operational optimization checks.",
   "comparisons": [
     {

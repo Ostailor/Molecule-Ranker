@@ -15,6 +15,11 @@ from molecule_ranker.campaigns.schemas import contains_procedural_lab_detail
 from molecule_ranker.codex_backbone.guardrails import redact_secrets
 from molecule_ranker.platform.database import artifact_records, platform_jobs
 from molecule_ranker.platform.db import PlatformDatabase, PlatformDatabaseError
+from molecule_ranker.platform.isolation import (
+    IsolationViolation,
+    project_namespace,
+    require_cross_project_permissions,
+)
 from molecule_ranker.platform.observability import log_event, metrics
 from molecule_ranker.platform.rbac import has_permission
 from molecule_ranker.platform.retry_policy import (
@@ -253,6 +258,10 @@ class PlatformJobQueue:
         if job_type not in QUEUE_JOB_TYPES:
             raise PlatformDatabaseError(f"Unsupported job type: {job_type}")
         config = config_snapshot or {}
+        if project_id is not None:
+            namespace = project_namespace(self.database, project_id=project_id)
+            if namespace.org_id:
+                org_id = namespace.org_id
         permission = JOB_PERMISSION[job_type]
         if not requested_by.is_admin and not has_permission(
             requested_by,
@@ -1229,6 +1238,14 @@ def _enforce_hosted_portfolio_policy(
 ) -> None:
     if job_type not in PORTFOLIO_JOB_TYPES:
         return
+    _enforce_cross_project_policy(
+        database=database,
+        requested_by=requested_by,
+        project_id=project_id,
+        config_snapshot=config_snapshot,
+        permission="portfolio:read",
+        domain="portfolio",
+    )
     export_requested = any(
         bool(config_snapshot.get(key))
         for key in (
@@ -1278,27 +1295,23 @@ def _enforce_hosted_graph_policy(
         return
     permission = JOB_PERMISSION[job_type]
     project_ids = _graph_scope_project_ids(project_id, config_snapshot)
-    for scoped_project_id in project_ids:
-        if requested_by.is_admin:
-            continue
-        if not has_permission(
+    try:
+        require_cross_project_permissions(
+            database,
             requested_by,
-            "graph:read",
-            project_id=scoped_project_id,
-            database=database,
-        ):
-            raise PermissionError(
-                f"Missing permission graph:read for graph project {scoped_project_id}."
-            )
-        if not has_permission(
+            project_ids=project_ids,
+            permission="graph:read",
+            domain="graph",
+        )
+        require_cross_project_permissions(
+            database,
             requested_by,
-            permission,
-            project_id=scoped_project_id,
-            database=database,
-        ):
-            raise PermissionError(
-                f"Missing permission {permission} for graph project {scoped_project_id}."
-            )
+            project_ids=project_ids,
+            permission=permission,
+            domain="graph",
+        )
+    except IsolationViolation as exc:
+        raise PermissionError(str(exc)) from exc
     if job_type == "graph_recommendation":
         config_snapshot["graph_recommendations_are_advisory"] = True
         config_snapshot["automatic_decisions_disabled"] = True
@@ -1332,6 +1345,14 @@ def _enforce_hosted_hypothesis_policy(
 ) -> None:
     if job_type not in HYPOTHESIS_JOB_TYPES:
         return
+    _enforce_cross_project_policy(
+        database=database,
+        requested_by=requested_by,
+        project_id=project_id,
+        config_snapshot=config_snapshot,
+        permission="hypothesis:read",
+        domain="hypothesis",
+    )
     if not requested_by.is_admin and project_id is not None and not has_permission(
         requested_by,
         "hypothesis:read",
@@ -1395,6 +1416,14 @@ def _enforce_hosted_campaign_policy(
 ) -> None:
     if job_type not in CAMPAIGN_JOB_TYPES:
         return
+    _enforce_cross_project_policy(
+        database=database,
+        requested_by=requested_by,
+        project_id=project_id,
+        config_snapshot=config_snapshot,
+        permission="campaign:read",
+        domain="campaign",
+    )
     if not requested_by.is_admin and project_id is not None and not has_permission(
         requested_by,
         "campaign:read",
@@ -1542,6 +1571,62 @@ def _graph_scope_project_ids(
         "project_ids",
         "include_project_ids",
         "cross_program_project_ids",
+    ):
+        value = config_snapshot.get(key)
+        if isinstance(value, list):
+            raw_values.extend(value)
+        elif value is not None:
+            raw_values.append(value)
+    if project_id is not None:
+        raw_values.append(project_id)
+    seen: set[str] = set()
+    project_ids: list[str] = []
+    for value in raw_values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        project_ids.append(text)
+    return project_ids
+
+
+def _enforce_cross_project_policy(
+    *,
+    database: PlatformDatabase,
+    requested_by: UserAccount,
+    project_id: str | None,
+    config_snapshot: dict[str, Any],
+    permission: str,
+    domain: str,
+) -> None:
+    project_ids = _cross_program_project_ids(project_id, config_snapshot)
+    if not project_ids:
+        return
+    try:
+        require_cross_project_permissions(
+            database,
+            requested_by,
+            project_ids=project_ids,
+            permission=permission,
+            domain=domain,
+        )
+    except IsolationViolation as exc:
+        raise PermissionError(str(exc)) from exc
+
+
+def _cross_program_project_ids(
+    project_id: str | None,
+    config_snapshot: dict[str, Any],
+) -> list[str]:
+    raw_values: list[Any] = []
+    for key in (
+        "included_project_ids",
+        "project_ids",
+        "include_project_ids",
+        "cross_program_project_ids",
+        "portfolio_project_ids",
+        "hypothesis_project_ids",
+        "campaign_project_ids",
     ):
         value = config_snapshot.get(key)
         if isinstance(value, list):

@@ -79,6 +79,19 @@ def require_permission(permission: str) -> Callable[..., UserAccount]:
         database = platform_database(request)
         org_id = request.path_params.get("org_id")
         project_id = request.path_params.get("project_id")
+        if user.auth_provider == "service_account" and not _service_token_allows(
+            user,
+            permission,
+        ):
+            _audit_permission_denial(
+                request=request,
+                database=database,
+                user=user,
+                permission=permission,
+                org_id=str(org_id) if org_id is not None else None,
+                project_id=str(project_id) if project_id is not None else None,
+            )
+            raise HTTPException(status_code=403, detail="Permission denied.")
         if has_permission(
             user,
             permission,
@@ -87,20 +100,45 @@ def require_permission(permission: str) -> Callable[..., UserAccount]:
             database=database,
         ):
             return user
-        if bool(getattr(request.app.state, "audit_permission_denials", False)):
-            database.write_audit(
-                "permission_denied",
-                actor_user_id=user.user_id,
-                org_id=str(org_id) if org_id is not None else None,
-                project_id=str(project_id) if project_id is not None else None,
-                summary=f"Denied {permission}.",
-                object_type="permission",
-                object_id=permission,
-                metadata={"permission": permission},
-            )
+        _audit_permission_denial(
+            request=request,
+            database=database,
+            user=user,
+            permission=permission,
+            org_id=str(org_id) if org_id is not None else None,
+            project_id=str(project_id) if project_id is not None else None,
+        )
         raise HTTPException(status_code=403, detail="Permission denied.")
 
     return dependency
+
+
+def _service_token_allows(user: UserAccount, permission: str) -> bool:
+    scopes = {str(scope) for scope in user.metadata.get("scopes", [])}
+    return "*" in scopes or permission in scopes
+
+
+def _audit_permission_denial(
+    *,
+    request: Request,
+    database: PlatformDatabase,
+    user: UserAccount,
+    permission: str,
+    org_id: str | None,
+    project_id: str | None,
+) -> None:
+    if not bool(getattr(request.app.state, "audit_permission_denials", False)):
+        return
+    database.write_audit(
+        "permission_denied",
+        actor_user_id=user.user_id,
+        org_id=org_id,
+        project_id=project_id,
+        summary=f"Denied {permission}.",
+        object_type="permission",
+        object_id=permission,
+        metadata={"permission": permission},
+    )
 
 
 def _hosted_user_from_authorization(

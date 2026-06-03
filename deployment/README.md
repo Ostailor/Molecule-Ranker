@@ -1,62 +1,85 @@
-# molecule-ranker V1.0 Deployment
+# molecule-ranker V2.0 Enterprise Deployment
 
-V1.0 is a validated internal research-platform MVP. It is not a regulated clinical product and
-does not provide medical advice, dosing, synthesis instructions, lab protocols, or
-patient treatment guidance.
+molecule-ranker V2.0 is a validated enterprise discovery operating system for
+internal research teams. It is internal research software, not a regulated
+clinical product. It does not provide medical advice, dosing guidance, synthesis
+instructions, lab protocols, or patient treatment guidance.
 
-## Modes
+V2.0 deployment packaging covers five targets:
 
-### 1. Local CLI mode
+1. Single-node Docker Compose.
+2. Split server/worker Docker Compose.
+3. Kubernetes manifests.
+4. Helm-like templates.
+5. Offline/local deployment guide.
 
-```bash
-molecule-ranker --help
-molecule-ranker db migrate --db-path .molecule-ranker/platform.sqlite
-```
+External integration writes are disabled by default in every enterprise example.
+Enable writes only after admin approval, policy review, and audit readiness.
 
-Use this for single-user/local workflows. Local SQLite metadata remains supported.
+## Container Image
 
-### 2. Local web mode
-
-```bash
-molecule-ranker serve \
-  --root . \
-  --host 127.0.0.1 \
-  --port 8765 \
-  --hosted \
-  --platform-db-path .molecule-ranker/platform.sqlite \
-  --auth-secret "$MOLECULE_RANKER_AUTH_SECRET"
-```
-
-The server binds to `127.0.0.1` by default. Binding to `0.0.0.0` requires
-`--allow-public-bind` and should only be used behind approved internal network controls.
-
-### 3. Docker Compose internal deployment
+Build the V2.0 image from the repository root:
 
 ```bash
-cp .env.example .env
-# edit .env with values from your secret manager
-docker compose up --build
+docker build -f deployment/Dockerfile -t molecule-ranker:2.0.0 .
 ```
 
-The production compose file uses PostgreSQL through `MOLECULE_RANKER_DATABASE_URL`.
-The dev compose file uses SQLite fallback:
+The image:
+
+- Runs as the non-root `molecule-ranker` user.
+- Exposes `/health`, `/ready`, `/version`, and `/metrics`.
+- Logs to stdout/stderr.
+- Stores data only in mounted `/data/artifacts`, `/data/storage`, and
+  `/data/projects` paths.
+- Does not bake auth, OIDC, Codex, database, or service-token secrets into the
+  image.
+
+## Single-Node Docker Compose
+
+Use the enterprise compose file for an all-in-one internal node with Postgres,
+server, worker, and shared volumes:
 
 ```bash
-docker compose -f docker-compose.dev.yml up --build
+mkdir -p deployment/secrets
+printf '%s' "$POSTGRES_PASSWORD_FROM_SECRET_MANAGER" > deployment/secrets/postgres_password
+printf '%s' "$MOLECULE_RANKER_AUTH_SECRET_FROM_SECRET_MANAGER" > deployment/secrets/auth_secret
+docker compose -f deployment/docker-compose.enterprise.yml up --build
 ```
 
-Enable the optional Codex worker only when the host has a controlled Codex CLI
-authentication setup:
+The server binds to `127.0.0.1:8765` unless `MOLECULE_RANKER_BIND` is set.
+Run behind an approved TLS reverse proxy or private network ingress.
+
+## Split Server/Worker Docker Compose
+
+The same file separates runtime concerns:
 
 ```bash
-docker compose --profile codex up codex-worker
+docker compose -f deployment/docker-compose.enterprise.yml up molecule-ranker-server
+docker compose -f deployment/docker-compose.enterprise.yml up molecule-ranker-worker
 ```
 
-### 4. Kubernetes manifests
+The optional Codex worker is isolated behind a profile and mounts artifacts and
+projects read-only:
 
-Templates are under `deployment/k8s/`. Apply your own namespace, image registry,
-TLS secret, network policy, persistent volume claims, and secret manager integration
-before use.
+```bash
+docker compose -f deployment/docker-compose.enterprise.yml --profile codex up molecule-ranker-codex-worker
+```
+
+Codex remains an orchestration/summarization backbone. It cannot create
+evidence, assay results, molecules, scores, or review decisions.
+
+## Kubernetes Manifests
+
+Static manifests are under `deployment/k8s/`:
+
+- `deployment.yaml`: server and non-Codex worker.
+- `codex-worker.yaml`: optional Codex worker, scaled to zero by default.
+- `service.yaml`: internal ClusterIP service for the server.
+- `ingress.yaml`: TLS ingress example.
+- `secret.example.yaml`: placeholder key names only.
+
+Apply real secrets through your secret manager or ExternalSecret controller,
+then apply storage, workloads, service, and ingress:
 
 ```bash
 kubectl apply -f deployment/k8s/secret.example.yaml
@@ -65,101 +88,86 @@ kubectl apply -f deployment/k8s/service.yaml
 kubectl apply -f deployment/k8s/ingress.yaml
 ```
 
-`secret.example.yaml` is a placeholder. Do not commit generated secrets.
+Do not apply `secret.example.yaml` with real values committed to git.
 
-## Storage
+## Helm-Like Template
 
-The container declares and compose mounts three durable paths:
-
-- `/data/artifacts`: exported artifacts and transcript artifacts.
-- `/data/storage`: platform metadata, SQLite fallback, worker scratch roots.
-- `/data/projects`: project/review/experiment workspace data.
-
-Do not expose cache directories, `.env` files, or credential mounts through artifact
-download routes or dashboards.
-
-## Database
-
-Hosted deployments should use PostgreSQL:
+The chart-like package lives under `deployment/helm/`. Render with Helm or use
+the templates as a controlled starting point:
 
 ```bash
-export MOLECULE_RANKER_DATABASE_URL='postgresql+psycopg://...'
-molecule-ranker db migrate --database-url "$MOLECULE_RANKER_DATABASE_URL"
+helm template molecule-ranker deployment/helm \
+  --set secretRefs.existingSecret=molecule-ranker-secrets \
+  --set image.repository=registry.example.internal/molecule-ranker \
+  --set image.tag=2.0.0
 ```
 
-Dev/local deployments can omit `MOLECULE_RANKER_DATABASE_URL` and use:
+Default values include resource limits and set
+`MOLECULE_RANKER_EXTERNAL_WRITES_ENABLED=false`.
+
+## Terraform Scaffold
+
+`deployment/terraform/` provides a minimal Kubernetes namespace/PVC and
+secret-reference contract. Production teams should wire it to their approved
+provider, managed Postgres, storage class, and secret manager.
+
+## Offline/Local Deployment
+
+For offline/local deployment:
+
+1. Mirror `molecule-ranker:2.0.0` into the internal registry or load it with
+   `docker load`.
+2. Pre-create secret files or Kubernetes secret-manager entries from offline
+   approved material.
+3. Use `deployment/docker-compose.enterprise.yml` with local volumes, or render
+   `deployment/helm/` into an offline cluster.
+4. Run `molecule-ranker platform readiness`, `molecule-ranker ops slo-report`,
+   and `molecule-ranker platform dr-drill` before handing the environment to
+   users.
+
+## Health, Readiness, And SLOs
+
+- Liveness: `GET /health`.
+- Readiness: `GET /ready`.
+- Version and contracts: `GET /version`.
+- Metrics: `GET /metrics`.
+- SLO report: `molecule-ranker ops slo-report`.
+
+V2.0 readiness should confirm version `2.0.0`, `/api/v2`, V2 artifact
+contracts, policy enforcement, isolation audit, backup verification, and release
+gate status.
+
+## Backup And Restore
+
+Back up Postgres and the artifact/project/platform volumes as one coordinated
+operation. Restore into a temporary environment first, then run:
 
 ```bash
-molecule-ranker db migrate --db-path /data/storage/platform.sqlite
+molecule-ranker platform restore --help
+molecule-ranker platform dr-drill --json
+molecule-ranker validate v2-package --output validation_package/
 ```
 
-## Health and readiness
+Backups and support bundles must exclude cache directories, `.env` files, Codex
+runtime credentials, service tokens, OIDC secrets, and secret-manager mounts.
 
-Use:
+## Resource Limits
 
-- `GET /health` for process liveness.
-- `GET /ready` for hosted database readiness.
-- `GET /version` for deployed version and contract checks. A V1.0 deployment
-  must report `version=1.0.0`, `api_contract_version=api.v1`,
-  `artifact_contract_version=artifacts.v1`,
-  `data_contract_version=data-contracts.v1`, and
-  `warehouse_contract_version=mr_warehouse_v1.0.0`.
+Default examples document these starting limits:
 
-The Dockerfile health check uses `/health`; Kubernetes readiness uses `/ready`.
+- Server: 2 CPU, 2 GiB memory.
+- Worker: 2 CPU, 3 GiB memory.
+- Codex worker: 1 CPU, 2 GiB memory.
+- Postgres compose service: 2 CPU, 2 GiB memory.
 
-## Backup, restore, and disaster recovery
+Tune from observed SLO reports and job profiles. Do not remove resource limits
+to mask queue or memory pressure.
 
-Before every V1.0 release cut and after every hosted deployment:
+## Production Notes
 
-- Back up the platform database with the organization-approved PostgreSQL dump
-  mechanism, or copy the SQLite database only after stopping writers.
-- Back up `/data/artifacts`, `/data/projects`, and `/data/storage` together so
-  artifact manifests, hashes, run metadata, and review workspaces remain
-  consistent.
-- Exclude cache directories, `.env` files, local Codex credentials, API keys,
-  service tokens, and secret-manager mounts from backup artifacts.
-- Restore into an isolated environment first, then run database migrations,
-  `molecule-ranker db check`, `GET /ready`, `GET /version`, and one synthetic
-  project export before allowing users back in.
-- Record restore time, data-loss window, package hashes, and operator identity
-  in the incident or release log.
-
-## Codex CLI worker
-
-Codex execution in hosted mode must run through the queued Codex worker. API routes
-must not invoke Codex subprocesses directly.
-
-Credential handling:
-
-- Do not bake Codex, OpenAI, ChatGPT, or other LLM credentials into the image.
-- Do not commit Codex credentials to this repo.
-- Do not put credentials in `.env.example`, Kubernetes example secrets, artifacts,
-  dashboard text, audit metadata, or Codex prompts.
-- If your organization allows hosted Codex execution, provide credentials through an
-  approved runtime mechanism outside project artifact paths, and restrict worker
-  filesystem access to the mounted storage paths.
-
-## Core commands
-
-```bash
-molecule-ranker serve
-molecule-ranker worker run
-molecule-ranker db migrate
-```
-
-The container entrypoint maps:
-
-- `web` to `molecule-ranker serve`
-- `worker` to `molecule-ranker worker run`
-- `cli` to arbitrary `molecule-ranker` commands
-
-## Reverse proxy and systemd
-
-Examples:
-
-- `deployment/nginx.example.conf`
-- `deployment/systemd/molecule-ranker.service`
-- `deployment/systemd/molecule-ranker-worker.service`
-
-Keep TLS termination, identity provider integration, and network allowlisting in your
-organization-managed infrastructure.
+- Use HTTPS in production.
+- Keep logs on stdout/stderr and aggregate them centrally.
+- Keep external integration writes disabled by default.
+- Keep Codex worker optional, scoped, and isolated.
+- Use secret references through environment/secret manager mechanisms.
+- Run the release gate before promoting V2.0 deployment artifacts.

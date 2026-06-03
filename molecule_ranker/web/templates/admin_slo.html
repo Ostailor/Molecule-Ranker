@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading"><h1>SLO dashboard</h1></header>
+<section class="section">
+  <div class="panel">
+    <p>Enterprise SLO reporting is platform operational evidence. Metrics are redacted and exclude secrets, tokens, and biomedical claims.</p>
+    <p><strong>Overall status:</strong> <span class="status-badge status-{{ report.status }}">{{ report.status }}</span></p>
+    <p><strong>Generated:</strong> {{ report.generated_at }}</p>
+  </div>
+</section>
+<section class="section">
+  <h2>Service level objectives</h2>
+  <table>
+    <thead><tr><th>SLO</th><th>Status</th><th>Observed</th><th>Target</th><th>Bad events</th></tr></thead>
+    <tbody>
+      {% for item in report.measurements %}
+        <tr>
+          <td>{{ item.name }}</td>
+          <td><span class="status-badge status-{{ item.status }}">{{ item.status }}</span></td>
+          <td>{{ item.observed_value }} {{ item.unit }}</td>
+          <td>{{ item.comparator }} {{ item.target }}</td>
+          <td>{{ item.bad_events }} / {{ item.total_events }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="section">
+  <h2>Error budget summary</h2>
+  <pre>{{ report.error_budget_summary | tojson(indent=2) }}</pre>
+</section>
+{% endblock %}

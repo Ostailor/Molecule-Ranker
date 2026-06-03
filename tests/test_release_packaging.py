@@ -20,10 +20,10 @@ from molecule_ranker.release.notes import render_release_notes
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_release_manifest_contains_v1_packaging_fields() -> None:
+def test_release_manifest_contains_v2_packaging_fields() -> None:
     manifest = build_release_manifest(ROOT)
 
-    assert manifest["version"] == __version__ == "1.9.0"
+    assert manifest["version"] == __version__ == "2.0.0"
     assert manifest["git_commit"]
     assert manifest["build_timestamp"].endswith("Z")
     assert manifest["artifact_contract_version"] == ARTIFACT_CONTRACT_REGISTRY_VERSION
@@ -54,12 +54,12 @@ def test_release_check_verifies_packaging_without_live_services() -> None:
     }
 
 
-def test_release_notes_render_v1_stabilization_scope() -> None:
+def test_release_notes_render_v2_enterprise_scope() -> None:
     notes = render_release_notes(build_release_manifest(ROOT))
 
-    assert "# molecule-ranker 1.9.0 Release Notes" in notes
-    assert "enterprise/internal pilot readiness" in notes
-    assert "validated internal research platform MVP" in notes
+    assert "# molecule-ranker 2.0.0 Release Notes" in notes
+    assert "validated enterprise discovery operating system" in notes
+    assert "stable APIs and SDK" in notes
     assert "research use only" in notes
     assert "no medical advice" in notes
     assert "generated molecules require validation" in notes
@@ -82,8 +82,8 @@ def test_release_packaging_cli_writes_manifest_and_notes(tmp_path: Path) -> None
 
     assert manifest_result.exit_code == 0, manifest_result.output
     assert notes_result.exit_code == 0, notes_result.output
-    assert json.loads(manifest_path.read_text())["version"] == "1.9.0"
-    assert "molecule-ranker 1.9.0 Release Notes" in notes_path.read_text()
+    assert json.loads(manifest_path.read_text())["version"] == "2.0.0"
+    assert "molecule-ranker 2.0.0 Release Notes" in notes_path.read_text()
 
 
 def test_release_check_cli_reports_machine_readable_results() -> None:
@@ -92,4 +92,4 @@ def test_release_check_cli_reports_machine_readable_results() -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["status"] == "pass"
-    assert payload["version"] == "1.9.0"
+    assert payload["version"] == "2.0.0"

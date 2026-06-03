@@ -26,7 +26,7 @@ molecule-ranker serve --hosted --host 127.0.0.1 --port 8765
 - `db migrate` reports the current schema migration.
 - `platform readiness` returns `"status": "pass"`.
 - `/health`, `/ready`, `/version`, and `/metrics` return HTTP 200.
-- `/version` reports `1.9.0` and V1 contract identifiers.
+- `/version` reports `2.0.0` and V1 contract identifiers.
 
 ## Failure Modes
 

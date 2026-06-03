@@ -41,15 +41,17 @@ class OIDCConfig(BaseModel):
     client_id: str | None = None
     client_secret_env_var: str | None = None
     redirect_url: str | None = None
+    discovery_url: str | None = None
+    allowed_email_domains: list[str] = Field(default_factory=list)
+    group_role_mapping: dict[str, list[str]] = Field(default_factory=dict)
+    session_ttl_seconds: int = Field(default=8 * 60 * 60, gt=0)
+    require_https: bool = True
+    allow_insecure_http_for_dev: bool = False
+    jwks_cache_ttl_seconds: int = Field(default=5 * 60, gt=0)
 
     @property
     def enabled(self) -> bool:
-        return bool(
-            self.issuer
-            and self.client_id
-            and self.client_secret_env_var
-            and self.redirect_url
-        )
+        return bool(self.issuer and self.client_id and (self.discovery_url or self.redirect_url))
 
 
 class AuthTokenConfig(BaseModel):

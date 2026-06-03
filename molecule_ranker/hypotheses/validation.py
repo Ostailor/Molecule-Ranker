@@ -91,7 +91,7 @@ def detect_hypothesis_guardrail_violations(text: str) -> list[str]:
                 r"\b(?:protocol|synthesis route|reagent|concentration|temperature|"
                 r"incubat(?:e|ion)|animal dosing|human dosing|dose|step-by-step|"
                 r"\d+(?:\.\d+)?\s*(?:um|µm|mm|nm|mg/kg|hours?|hrs?|minutes?|mins?)|"
-                r"\d+(?:\.\d+)?\s*(?:°?\s*c|celsius))\b",
+                r"\d+(?:\.\d+)?(?:\s*°\s*c|\s+c\b|\s+celsius))\b",
                 re.I,
             ),
             "Hypothesis output must not provide lab protocols, synthesis routes, reagents, "

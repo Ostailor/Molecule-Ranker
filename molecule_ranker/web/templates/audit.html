@@ -6,7 +6,7 @@
 </header>
 <table>
   <thead>
-    <tr><th>Timestamp</th><th>Actor</th><th>Project</th><th>Event</th><th>Object</th><th>Summary</th></tr>
+    <tr><th>Timestamp</th><th>Actor</th><th>Project</th><th>Event</th><th>Object</th><th>Summary</th><th>Metadata</th></tr>
   </thead>
   <tbody>
     {% for event in events %}
@@ -17,9 +17,10 @@
         <td>{{ event.event_type }}</td>
         <td>{{ event.object_type }}:{{ event.object_id }}</td>
         <td>{{ event.summary }}</td>
+        <td><code>{{ event.metadata | tojson }}</code></td>
       </tr>
     {% else %}
-      <tr><td colspan="6">No audit events recorded.</td></tr>
+      <tr><td colspan="7">No audit events recorded.</td></tr>
     {% endfor %}
   </tbody>
 </table>

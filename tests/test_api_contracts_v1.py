@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from typer.testing import CliRunner
 
 from molecule_ranker.cli import app
@@ -13,6 +14,7 @@ from molecule_ranker.contracts.api_contracts import (
     API_CONTRACTS,
     list_api_contracts,
 )
+from molecule_ranker.platform.database import project_workspaces
 from molecule_ranker.server import create_app
 
 
@@ -71,6 +73,19 @@ def test_v1_aliases_expose_health_project_and_auth_routes(tmp_path: Path) -> Non
 
     assert created.status_code == 200
     assert created.json()["workspace_id"] == "workspace-v1"
+    app_state = cast(Any, client.app).state
+    with app_state.platform_database.engine.connect() as connection:
+        registered = (
+            connection.execute(
+                select(project_workspaces).where(
+                    project_workspaces.c.project_id == "workspace-v1"
+                )
+            )
+            .mappings()
+            .first()
+        )
+    assert registered is not None
+    assert registered["name"] == "V1 workspace"
     projects = client.get("/api/v1/projects", headers=headers)
     assert projects.status_code == 200
     assert projects.json()["projects"][0]["workspace_id"] == "workspace-v1"
@@ -104,7 +119,7 @@ def test_api_export_openapi_cli_writes_v1_schema(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     payload = json.loads(output.read_text())
-    assert payload["info"]["version"] == "1.9.0"
+    assert payload["info"]["version"] == "2.0.0"
     assert "/api/v1/health" in payload["paths"]
     assert "/api/v1/projects" in payload["paths"]
 

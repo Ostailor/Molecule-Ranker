@@ -5,12 +5,14 @@ import os
 import shutil
 import uuid
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi.testclient import TestClient
+from sqlalchemy import insert, select
 
-from molecule_ranker.platform.database import SCHEMA_VERSION, PlatformDatabase
+from molecule_ranker.platform.database import SCHEMA_VERSION, PlatformDatabase, project_workspaces
 from molecule_ranker.platform.jobs import JobResult, PlatformJobQueue
 from molecule_ranker.platform.settings import LOCAL_DEVELOPMENT_SECRET
 from molecule_ranker.server import create_app
@@ -27,6 +29,7 @@ RETENTION_KEYS = (
     "assay_result_retention_days",
 )
 DEFAULT_RETENTION_DAYS = 365
+READINESS_PROBE_PROJECT_ID = "internal-readiness-probe"
 
 
 @dataclass(frozen=True)
@@ -545,10 +548,16 @@ def _add_background_worker_check(
             password="Readiness-password-1",
             roles=["platform_admin", "user"],
         )
+        project_id = ensure_readiness_probe_project(
+            database,
+            user_id=user.user_id,
+            root_dir=config.root_dir,
+        )
         queue = PlatformJobQueue(database)
         enqueued = queue.enqueue(
             job_type="dashboard_build",
             requested_by=user,
+            project_id=project_id,
             priority="high",
             metadata={"readiness_probe": True},
         )
@@ -699,6 +708,44 @@ def _parse_optional_int(value: str | None, *, default: int | None) -> int | None
     return int(value)
 
 
+def ensure_readiness_probe_project(
+    database: PlatformDatabase,
+    *,
+    user_id: str,
+    root_dir: Path,
+) -> str:
+    now = datetime.now(UTC)
+    with database.engine.begin() as connection:
+        existing = (
+            connection.execute(
+                select(project_workspaces.c.project_id).where(
+                    project_workspaces.c.project_id == READINESS_PROBE_PROJECT_ID
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if existing is None:
+            connection.execute(
+                insert(project_workspaces).values(
+                    project_id=READINESS_PROBE_PROJECT_ID,
+                    org_id="default",
+                    name="Internal readiness probe",
+                    root_dir=str(root_dir),
+                    created_at=now,
+                    updated_at=now,
+                    metadata_json={"internal_readiness_probe": True},
+                )
+            )
+    database.grant_project_permission(
+        project_id=READINESS_PROBE_PROJECT_ID,
+        role="owner",
+        actor_user_id=user_id,
+        user_id=user_id,
+    )
+    return READINESS_PROBE_PROJECT_ID
+
+
 def _parse_list(value: str | None) -> list[str]:
     if value is None:
         return []
@@ -727,6 +774,7 @@ __all__ = [
     "ReadinessConfig",
     "ReadinessReport",
     "ReadinessStatus",
+    "ensure_readiness_probe_project",
     "run_platform_doctor",
     "run_readiness_checks",
     "run_smoke_test",
