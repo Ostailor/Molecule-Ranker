@@ -2,5 +2,5 @@ apiVersion: v2
 name: molecule-ranker
 description: Helm-like deployment template for molecule-ranker V2.0 enterprise installations.
 type: application
-version: 2.2.0
-appVersion: "2.2.0"
+version: 2.3.0
+appVersion: "2.3.0"

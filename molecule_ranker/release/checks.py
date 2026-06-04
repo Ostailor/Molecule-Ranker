@@ -790,13 +790,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "2.2.0":
-        return ReleaseCheck("version", "Version is 2.2.0", "pass", "Package version is 2.2.0.")
+    if __version__ == "2.3.0":
+        return ReleaseCheck("version", "Version is 2.3.0", "pass", "Package version is 2.3.0.")
     return ReleaseCheck(
         "version",
-        "Version is 2.2.0",
+        "Version is 2.3.0",
         "fail",
-        f"Package version is {__version__}, expected 2.2.0.",
+        f"Package version is {__version__}, expected 2.3.0.",
     )
 
 

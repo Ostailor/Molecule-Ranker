@@ -723,7 +723,7 @@ def _pack(name: str, skills: list[ToolEcosystemSkill]) -> SkillPack:
         skill_pack_id=f"builtins.skill_pack.{name}",
         package_id="builtins.skill_packs",
         name=name,
-        version="2.2.0",
+        version="2.3.0",
         skills=[skill.as_manifest_entry() for skill in skills],
         required_tools=required_tools,
         guardrails=guardrails,

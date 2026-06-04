@@ -504,10 +504,11 @@ class MoleculeRankerV2Client:
                 response = self._http_client.request(
                     method,
                     self._url(path),
-                    params=_drop_none(params),
-                    json=json,
-                    headers=request_headers,
-                    timeout=self.timeout,
+                    **self._request_kwargs(
+                        params=params,
+                        json=json,
+                        headers=request_headers,
+                    ),
                 )
                 self.last_request_id = (
                     _header(response.headers, "x-request-id") or request_headers["X-Request-ID"]
@@ -591,9 +592,29 @@ class MoleculeRankerV2Client:
 
         return httpx.Client(base_url=self.base_url, timeout=self.timeout)
 
+    def _request_kwargs(
+        self,
+        *,
+        params: Mapping[str, Any] | None,
+        json: Mapping[str, Any] | None,
+        headers: Mapping[str, str],
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "params": _drop_none(params),
+            "json": json,
+            "headers": headers,
+        }
+        if not _is_starlette_test_client(self._http_client):
+            kwargs["timeout"] = self.timeout
+        return kwargs
+
 
 def _drop_none(values: Mapping[str, Any] | None) -> dict[str, Any]:
     return {key: value for key, value in dict(values or {}).items() if value is not None}
+
+
+def _is_starlette_test_client(client: Any) -> bool:
+    return client.__class__.__module__.startswith("starlette.testclient")
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:

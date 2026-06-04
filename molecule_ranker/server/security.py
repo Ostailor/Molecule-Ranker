@@ -92,6 +92,7 @@ SENSITIVE_PATH_PREFIXES = (
     "/codex",
     "/api/v1/codex",
     "/api/v2/codex",
+    "/api/v2/subagents",
     "/jobs/run-next",
     "/api/v1/jobs/run-next",
     "/api/v2/jobs/run-next",

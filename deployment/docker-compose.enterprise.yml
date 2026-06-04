@@ -1,7 +1,7 @@
 name: molecule-ranker-enterprise
 
 x-molecule-ranker-common: &molecule-ranker-common
-  image: ${MOLECULE_RANKER_IMAGE:-molecule-ranker:2.2.0}
+  image: ${MOLECULE_RANKER_IMAGE:-molecule-ranker:2.3.0}
   build:
     context: ..
     dockerfile: deployment/Dockerfile

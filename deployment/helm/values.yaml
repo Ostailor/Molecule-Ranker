@@ -1,6 +1,6 @@
 image:
   repository: molecule-ranker
-  tag: "2.2.0"
+  tag: "2.3.0"
   pullPolicy: IfNotPresent
 
 replicaCount:

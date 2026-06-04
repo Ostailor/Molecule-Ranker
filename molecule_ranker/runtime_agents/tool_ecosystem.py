@@ -27,7 +27,7 @@ class ToolManifest(BaseModel):
     skill_pack_ids: list[str] = Field(default_factory=list)
     workflow_template_ids: list[str] = Field(default_factory=list)
     mcp_namespace: str
-    required_runtime_version: str = ">=2.2.0"
+    required_runtime_version: str = ">=2.3.0"
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("tools")

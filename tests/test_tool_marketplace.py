@@ -165,7 +165,7 @@ def _write_package(
         side_effect_summary={"none": 1},
         scientific_guardrail_tags=["no_evidence_creation"],
         license=None,
-        metadata={"requires_molecule_ranker": ">=2.2.0"},
+        metadata={"requires_molecule_ranker": ">=2.3.0"},
     )
     package = ToolPackage(
         package_id="safe-package",

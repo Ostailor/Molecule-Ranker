@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -49,6 +50,8 @@ from molecule_ranker.platform.schemas import UserAccount
 from molecule_ranker.runtime_agents.hosted import RuntimeAgentHostedStore
 from molecule_ranker.server.dependencies import platform_database, workspace_store
 from molecule_ranker.server.security import reject_suspicious_identifier, safe_artifact_path
+from molecule_ranker.subagents.hosted import SubagentHostedStore
+from molecule_ranker.subagents.messaging import check_message_safety
 from molecule_ranker.tool_ecosystem.dashboard import (
     ToolDashboardSnapshot,
     approval_for_package,
@@ -90,6 +93,10 @@ templates.env.filters["safe_dashboard_text"] = safe_dashboard_text
 ACCESS_COOKIE = "mr_access_token"
 REFRESH_COOKIE = "mr_refresh_token"
 CSRF_COOKIE = "mr_csrf_token"
+SUBAGENT_SECRET_TOKEN_RE = re.compile(
+    r"\b(?:sk|pk|token|secret|api[_-]?key)[-_][A-Za-z0-9._-]+\b",
+    re.I,
+)
 
 
 def require_dashboard_user(request: Request) -> UserAccount:
@@ -792,6 +799,182 @@ def agent_audit_dashboard_page(
             ],
         ),
     )
+
+
+@router.get("/dashboard/subagents/sessions", response_class=HTMLResponse)
+def subagent_sessions_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    store = _subagent_store(request)
+    sessions = [
+        session
+        for session in store.list_sessions()
+        if _can_view_subagent_session(database, user, _subagent_project_id(session))
+    ]
+    return _subagent_dashboard_html(
+        "Subagent sessions",
+        _subagent_nav()
+        + _table(
+            ["Session", "Project", "Skill", "Status", "Goal"],
+            [
+                [
+                    _link(
+                        "/dashboard/subagents/sessions/"
+                        + quote(session.multi_agent_session_id),
+                        session.multi_agent_session_id,
+                    ),
+                    _subagent_project_id(session) or "",
+                    session.metadata.get("skill_name", ""),
+                    session.status,
+                    session.user_goal,
+                ]
+                for session in sessions
+            ],
+            empty_message="No subagent sessions are visible.",
+        ),
+    )
+
+
+@router.get("/dashboard/subagents/sessions/{session_id}", response_class=HTMLResponse)
+def subagent_session_detail_dashboard_page(
+    session_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    store = _subagent_store(request)
+    session = _subagent_session_or_404(store, session_id)
+    if not _can_view_subagent_session(database, user, _subagent_project_id(session)):
+        raise HTTPException(status_code=403, detail="Subagent permission denied.")
+    messages = store.list_messages(session_id)
+    results = store.list_results(session_id)
+    critiques = store.list_critiques(session_id)
+    consensus = store.list_consensus(session_id)
+    approval_rows = [
+        [
+            task.task_id,
+            task.assigned_subagent_id,
+            task.risk_level,
+            "required" if task.requires_human_approval else "",
+        ]
+        for task in session.tasks
+        if task.requires_human_approval
+    ]
+    guardrail_rows = [
+        [
+            critique.critique_id,
+            critique.critic_subagent_id,
+            "passed" if critique.passed else "failed",
+            "; ".join(critique.findings),
+        ]
+        for critique in critiques
+        if critique.critique_type == "scientific_guardrail"
+        or critique.metadata.get("required_for_high_risk")
+        or critique.metadata.get("non_overridable")
+    ]
+    body = (
+        _subagent_nav()
+        + f"<h2>Session timeline</h2><p>{_h(session.user_goal)}</p>"
+        + _table(
+            ["Task", "Subagent", "Status", "Risk", "Dependencies"],
+            [
+                [
+                    task.task_id,
+                    task.assigned_subagent_id,
+                    task.status,
+                    task.risk_level,
+                    ", ".join(task.metadata.get("dependencies", [])),
+                ]
+                for task in session.tasks
+            ],
+        )
+        + "<h2>Task graph</h2>"
+        + _table(
+            ["From", "To", "Tools", "Artifacts"],
+            [
+                [
+                    ", ".join(task.metadata.get("dependencies", [])) or "root",
+                    task.task_id,
+                    ", ".join(task.allowed_tool_names),
+                    ", ".join(task.input_artifact_ids),
+                ]
+                for task in session.tasks
+            ],
+        )
+        + "<h2>Subagent messages</h2>"
+        + _table(
+            ["From", "To", "Type", "Content", "Artifacts"],
+            [
+                [
+                    message.from_subagent_id,
+                    message.to_subagent_id or "broadcast",
+                    message.message_type,
+                    _sanitized_subagent_message_content(message),
+                    ", ".join(message.referenced_artifact_ids),
+                ]
+                for message in messages
+            ],
+        )
+        + "<h2>Subagent results</h2>"
+        + _table(
+            ["Result", "Subagent", "Status", "Confidence", "Output"],
+            [
+                [
+                    result.result_id,
+                    result.subagent_id,
+                    result.status,
+                    result.confidence,
+                    result.output_text,
+                ]
+                for result in results
+            ],
+            empty_message="No subagent results have been stored.",
+        )
+        + "<h2>Critiques</h2>"
+        + _table(
+            ["Critique", "Critic", "Type", "Passed", "Findings"],
+            [
+                [
+                    critique.critique_id,
+                    critique.critic_subagent_id,
+                    critique.critique_type,
+                    critique.passed,
+                    "; ".join(critique.findings),
+                ]
+                for critique in critiques
+            ],
+            empty_message="No critiques have been stored.",
+        )
+        + "<h2>Consensus summary</h2>"
+        + _table(
+            ["Consensus", "Status", "Human review", "Summary"],
+            [
+                [
+                    item.consensus_id,
+                    item.consensus_status,
+                    item.human_review_required,
+                    item.summary,
+                ]
+                for item in consensus
+            ],
+            empty_message="No consensus summary is available.",
+        )
+        + "<h2>Approval queue</h2>"
+        + _table(
+            ["Task", "Subagent", "Risk", "Approval"],
+            approval_rows,
+            empty_message="No subagent approvals are pending.",
+        )
+        + "<h2>Guardrail findings</h2>"
+        + _table(
+            ["Critique", "Sentinel", "Status", "Finding"],
+            guardrail_rows,
+            empty_message="No guardrail findings are visible.",
+        )
+    )
+    return _subagent_dashboard_html("Subagent session detail", body)
 
 
 @router.post("/dashboard/projects/create")
@@ -3646,7 +3829,7 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
         "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
@@ -3791,7 +3974,7 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
         "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
@@ -3826,7 +4009,7 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
         "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
@@ -3878,7 +4061,7 @@ def _campaign_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
         "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
@@ -4321,7 +4504,7 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
         "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
@@ -4899,7 +5082,7 @@ def _evaluation_dashboard_shell(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
         "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
@@ -5142,7 +5325,7 @@ def _hypothesis_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
         "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
@@ -5332,6 +5515,79 @@ def _can_view_agent_session(
     return has_permission(user, "agent:read", project_id=project_id, database=database)
 
 
+def _subagent_store(request: Request) -> SubagentHostedStore:
+    return SubagentHostedStore(request.app.state.root_dir)
+
+
+def _subagent_session_or_404(
+    store: SubagentHostedStore,
+    session_id: str,
+) -> Any:
+    try:
+        return store.get_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Subagent session not found.") from exc
+
+
+def _subagent_project_id(session: Any) -> str | None:
+    project_id = session.metadata.get("project_id")
+    return str(project_id) if project_id else None
+
+
+def _can_view_subagent_session(
+    database: PlatformDatabase,
+    user: UserAccount,
+    project_id: str | None,
+) -> bool:
+    return has_permission(user, "subagent:read", project_id=project_id, database=database)
+
+
+def _sanitized_subagent_message_content(message: Any) -> str:
+    report = check_message_safety(
+        message.content,
+        referenced_artifact_ids=message.referenced_artifact_ids,
+    )
+    redacted = str(redact_for_log(report.sanitized_content))
+    return SUBAGENT_SECRET_TOKEN_RE.sub("[REDACTED]", redacted)
+
+
+def _subagent_dashboard_html(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>"
+        + escape(title)
+        + " · molecule-ranker</title>"
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.3.0-dashboard-1">'
+        + "</head><body><div class=\"shell\"><header class=\"topbar\">"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.3</div>"
+        + "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        + _link("/dashboard", "Projects")
+        + _link("/dashboard/subagents/sessions", "Subagent sessions")
+        + _link("/dashboard/agent/sessions", "Runtime agents")
+        + _link("/dashboard/admin", "Admin")
+        + "</nav></div></header><main class=\"content\">"
+        + "<aside class=\"research-disclaimer\">Subagents are operational specialists, "
+        + "not scientific truth sources. Outputs must remain artifact-grounded, "
+        + "guardrail-checked, and human-reviewable.</aside>"
+        + "<header class=\"page-heading\"><h1>"
+        + escape(title)
+        + "</h1></header>"
+        + body
+        + "</main></div></body></html>"
+    )
+
+
+def _subagent_nav() -> str:
+    return (
+        "<nav class=\"section\">"
+        + _link("/dashboard/subagents/sessions", "Subagent sessions")
+        + _link("/dashboard/subagents/sessions", "Approval queue")
+        + _link("/dashboard/subagents/sessions", "Guardrail findings")
+        + "</nav>"
+    )
+
+
 def _agent_dashboard_html(title: str, body: str) -> HTMLResponse:
     return HTMLResponse(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -5339,7 +5595,7 @@ def _agent_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.2.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.3.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
         + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.2</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
@@ -5446,7 +5702,7 @@ def _tool_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.2.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.3.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
         + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.2</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"

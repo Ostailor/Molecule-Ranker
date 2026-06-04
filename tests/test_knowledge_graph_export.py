@@ -42,8 +42,10 @@ def test_csv_export_writes_nodes_and_edges_with_labels(tmp_path: Path) -> None:
 
     assert paths["nodes"].exists()
     assert paths["edges"].exists()
-    nodes = list(csv.DictReader(paths["nodes"].open()))
-    edges = list(csv.DictReader(paths["edges"].open()))
+    with paths["nodes"].open() as nodes_file:
+        nodes = list(csv.DictReader(nodes_file))
+    with paths["edges"].open() as edges_file:
+        edges = list(csv.DictReader(edges_file))
 
     generated = next(row for row in nodes if row["entity_id"] == "generated_molecule:gen1")
     assert generated["computational_hypothesis"] == "True"

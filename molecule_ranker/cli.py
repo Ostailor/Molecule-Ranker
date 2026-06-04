@@ -448,7 +448,15 @@ feedback_app = typer.Typer(
     no_args_is_help=True,
 )
 agent_app = typer.Typer(
-    help="V2.2 Codex runtime-agent planning, execution, approval, and audit commands.",
+    help="V2.3 Codex runtime-agent and specialist multi-agent operations commands.",
+    no_args_is_help=True,
+)
+subagents_app = typer.Typer(
+    help="V2.3 specialized Codex subagent operations commands.",
+    no_args_is_help=True,
+)
+subagents_session_app = typer.Typer(
+    help="Inspect multi-agent subagent session artifacts.",
     no_args_is_help=True,
 )
 marketplace_app = typer.Typer(
@@ -510,6 +518,7 @@ app.add_typer(support_app, name="support")
 app.add_typer(ops_app, name="ops")
 app.add_typer(feedback_app, name="feedback")
 app.add_typer(agent_app, name="agent")
+app.add_typer(subagents_app, name="subagents")
 app.add_typer(marketplace_app, name="marketplace")
 app.add_typer(tool_app, name="tool")
 model_app.add_typer(model_dataset_app, name="dataset")
@@ -536,6 +545,7 @@ tool_app.add_typer(tool_package_app, name="package")
 tool_app.add_typer(tool_mcp_app, name="mcp")
 tool_app.add_typer(tool_skills_app, name="skills")
 tool_app.add_typer(tool_workflows_app, name="workflows")
+subagents_app.add_typer(subagents_session_app, name="session")
 
 
 @app.callback()
@@ -547,6 +557,298 @@ def main() -> None:
 def version() -> None:
     """Print the package version."""
     typer.echo(__version__)
+
+
+@subagents_app.command("profiles")
+def subagents_profiles(
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """List built-in subagent profiles."""
+
+    from molecule_ranker.subagents.registry import SubagentRegistry
+
+    profiles = [
+        {
+            "subagent_id": profile.subagent_id,
+            "name": profile.name,
+            "role": profile.role,
+            "description": profile.description,
+            "allowed_tool_categories": profile.allowed_tool_categories,
+            "denied_tool_categories": profile.denied_tool_categories,
+            "required_permissions": profile.required_permissions,
+            "default_autonomy_level": profile.default_autonomy_level,
+            "can_delegate": profile.can_delegate,
+            "can_execute_tools": profile.can_execute_tools,
+            "guardrail_profile": profile.guardrail_profile,
+        }
+        for profile in SubagentRegistry().list_profiles()
+    ]
+    if json_output:
+        _echo_json({"profiles": profiles})
+        return
+    for profile in profiles:
+        typer.echo(f"{profile['subagent_id']}: {profile['name']} ({profile['role']})")
+
+
+@subagents_app.command("run")
+def subagents_run(
+    goal: Annotated[
+        str | None,
+        typer.Option("--goal", help="User goal for multi-agent scientific operations."),
+    ] = None,
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    skill: Annotated[
+        str | None,
+        typer.Option("--skill", help="Built-in multi-agent skill to expand."),
+    ] = None,
+    autonomy: Annotated[
+        Literal[
+            "observe_only",
+            "suggest_only",
+            "execute_safe_tools",
+            "execute_with_approval",
+            "full_auto_restricted",
+        ],
+        typer.Option("--autonomy", help="Requested autonomy level."),
+    ] = "suggest_only",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Create a planned session without executing tasks."),
+    ] = False,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Root directory for session artifacts."),
+    ] = Path(".molecule-ranker/subagents"),
+) -> None:
+    """Create or execute a multi-agent subagent session."""
+
+    if goal is None and skill is None:
+        raise typer.BadParameter("--goal is required when --skill is not supplied")
+    user_goal = goal or f"Run multi-agent skill {skill}."
+    if dry_run:
+        session = (
+            _subagent_skill_session(
+                skill_name=skill,
+                user_goal=user_goal,
+                project_id=project_id,
+                autonomy=autonomy,
+                dry_run=True,
+            )
+            if skill is not None
+            else _subagent_goal_dry_run_session(
+                user_goal=user_goal,
+                project_id=project_id,
+                autonomy=autonomy,
+            )
+        )
+        session_dir = _subagent_write_session_artifacts(output_dir, session)
+        _echo_json(
+            {
+                "session_id": session.multi_agent_session_id,
+                "status": session.status,
+                "dry_run": True,
+                "skill": skill,
+                "project_id": project_id,
+                "output_dir": str(output_dir),
+                "session_dir": str(session_dir),
+                "session_path": str(session_dir / "multi_agent_session.json"),
+            }
+        )
+        return
+
+    from molecule_ranker.subagents.executor import MultiAgentRuntimeExecutor
+
+    planned_session = (
+        _subagent_skill_session(
+            skill_name=skill,
+            user_goal=user_goal,
+            project_id=project_id,
+            autonomy=autonomy,
+            dry_run=False,
+        )
+        if skill is not None
+        else None
+    )
+    execution = MultiAgentRuntimeExecutor().execute(
+        user_goal=user_goal,
+        tasks=planned_session.tasks if planned_session is not None else None,
+        artifacts=_subagent_artifacts_for_session(planned_session),
+        visible_artifact_ids=(
+            _subagent_expected_artifacts(planned_session) if planned_session is not None else None
+        ),
+        scoped_artifact_ids=(
+            _subagent_expected_artifacts(planned_session) if planned_session is not None else None
+        ),
+        project_id=project_id,
+    )
+    execution.session.metadata.update(
+        {
+            "skill_name": skill,
+            "project_id": project_id,
+            "autonomy": autonomy,
+            "dry_run": False,
+        }
+    )
+    session_dir = _subagent_write_session_artifacts(output_dir, execution.session)
+    _echo_json(
+        {
+            "session_id": execution.session.multi_agent_session_id,
+            "status": execution.session.status,
+            "dry_run": False,
+            "skill": skill,
+            "project_id": project_id,
+            "output_dir": str(output_dir),
+            "session_dir": str(session_dir),
+            "session_path": str(session_dir / "multi_agent_session.json"),
+        }
+    )
+
+
+@subagents_session_app.command("show")
+def subagents_session_show(
+    session_id: Annotated[str, typer.Argument(help="Multi-agent session ID.")],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Root directory for session artifacts."),
+    ] = Path(".molecule-ranker/subagents"),
+) -> None:
+    """Show a multi-agent session."""
+
+    session, session_dir = _subagent_load_session(output_dir, session_id)
+    _echo_json(
+        {
+            "session": session.model_dump(mode="json"),
+            "session_dir": str(session_dir),
+        }
+    )
+
+
+@subagents_session_app.command("audit")
+def subagents_session_audit(
+    session_id: Annotated[str, typer.Argument(help="Multi-agent session ID.")],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Root directory for session artifacts."),
+    ] = Path(".molecule-ranker/subagents"),
+) -> None:
+    """Show audit events for a multi-agent session."""
+
+    session, _session_dir = _subagent_load_session(output_dir, session_id)
+    _echo_json(
+        {
+            "session_id": session.multi_agent_session_id,
+            "audit_events": _subagent_audit_events(session),
+        }
+    )
+
+
+@subagents_session_app.command("messages")
+def subagents_session_messages(
+    session_id: Annotated[str, typer.Argument(help="Multi-agent session ID.")],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Root directory for session artifacts."),
+    ] = Path(".molecule-ranker/subagents"),
+) -> None:
+    """Show inter-agent messages for a multi-agent session."""
+
+    session, _session_dir = _subagent_load_session(output_dir, session_id)
+    _echo_json(
+        {
+            "session_id": session.multi_agent_session_id,
+            "messages": [message.model_dump(mode="json") for message in session.messages],
+        }
+    )
+
+
+@subagents_app.command("critique")
+def subagents_critique(
+    result_id: Annotated[str, typer.Option("--result-id", help="Subagent result ID.")],
+    critic: Annotated[
+        str,
+        typer.Option("--critic", help="Critic subagent role or ID."),
+    ] = "guardrail_sentinel",
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Root directory for session artifacts."),
+    ] = Path(".molecule-ranker/subagents"),
+) -> None:
+    """Critique a saved subagent result."""
+
+    from molecule_ranker.subagents.critique import review_result
+
+    session, session_dir, result = _subagent_find_result(output_dir, result_id)
+    task = next((task for task in session.tasks if task.task_id == result.task_id), None)
+    expected_output_schema = task.expected_output_schema if task is not None else None
+    known_artifact_ids = set(result.artifact_ids)
+    if task is not None:
+        known_artifact_ids.update(task.input_artifact_ids)
+    critiques = review_result(
+        result,
+        critic_subagent_id=_subagent_normalize_subagent_id(critic),
+        expected_output_schema=expected_output_schema,
+        known_artifact_ids=known_artifact_ids,
+    )
+    existing_ids = {critique.critique_id for critique in session.critiques}
+    session.critiques.extend(
+        critique for critique in critiques if critique.critique_id not in existing_ids
+    )
+    _subagent_write_session_artifacts(session_dir.parent, session)
+    _echo_json(
+        {
+            "result_id": result.result_id,
+            "session_id": session.multi_agent_session_id,
+            "critique_count": len(critiques),
+            "critiques": [critique.model_dump(mode="json") for critique in critiques],
+        }
+    )
+
+
+@subagents_app.command("consensus")
+def subagents_consensus(
+    session_id: Annotated[str, typer.Option("--session-id", help="Multi-agent session ID.")],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Root directory for session artifacts."),
+    ] = Path(".molecule-ranker/subagents"),
+) -> None:
+    """Synthesize consensus for a saved multi-agent session."""
+
+    from molecule_ranker.subagents.consensus import synthesize_critique_consensus
+
+    session, session_dir = _subagent_load_session(output_dir, session_id)
+    consensus = synthesize_critique_consensus(
+        parent_session_id=session.multi_agent_session_id,
+        task_ids=[task.task_id for task in session.tasks],
+        results=session.results,
+        critiques=session.critiques,
+        high_risk=any(task.risk_level in {"high", "critical"} for task in session.tasks),
+    )
+    session.consensus.append(consensus)
+    session.status = "awaiting_human_review" if consensus.human_review_required else "succeeded"
+    session.completed_at = datetime.now(UTC)
+    _subagent_write_session_artifacts(session_dir.parent, session)
+    _echo_json(
+        {
+            "session_id": session.multi_agent_session_id,
+            "consensus": consensus.model_dump(mode="json"),
+        }
+    )
+
+
+@subagents_app.command("eval")
+def subagents_eval(
+    suite: Annotated[str, typer.Option("--suite", help="Subagent eval suite.")] = "default",
+) -> None:
+    """Run deterministic multi-agent subagent eval checks."""
+
+    from molecule_ranker.subagents.evals import run_multi_agent_eval_suite
+
+    try:
+        result = run_multi_agent_eval_suite(suite=suite)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _echo_json(result.model_dump(mode="json"))
 
 
 @agent_app.command("start")
@@ -847,6 +1149,313 @@ def agent_explain(
     _echo_json(status_payload)
 
 
+@agent_app.command("specialists")
+def agent_specialists(
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """List V2.3 specialist Codex subagent roles."""
+
+    from molecule_ranker.runtime_agents.multi_agent import specialist_roster_summary
+
+    payload = {"specialists": specialist_roster_summary()}
+    if json_output:
+        _echo_json(payload)
+        return
+    for specialist in payload["specialists"]:
+        typer.echo(
+            f"{specialist['agent_id']}: {specialist['display_name']} "
+            f"({specialist['sandbox_profile']})"
+        )
+
+
+@agent_app.command("delegate")
+def agent_delegate(
+    specialist_id: Annotated[
+        str,
+        typer.Option("--specialist-id", help="V2.3 specialist agent ID."),
+    ],
+    goal: Annotated[str, typer.Option("--goal", help="Delegated specialist objective.")],
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    artifact_id: Annotated[
+        list[str] | None,
+        typer.Option("--artifact-id", help="Artifact ID visible to the specialist."),
+    ] = None,
+    tool_name: Annotated[
+        list[str] | None,
+        typer.Option("--tool-name", help="Approved runtime tool to allow for this task."),
+    ] = None,
+    autonomy: Annotated[
+        Literal[
+            "dry_run",
+            "suggest_only",
+            "execute_safe_tools",
+            "execute_with_approval",
+            "full_auto_restricted",
+        ],
+        typer.Option("--autonomy", help="Runtime execution mode."),
+    ] = "dry_run",
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for runtime artifacts."),
+    ] = Path(".molecule-ranker/runtime-agent"),
+) -> None:
+    """Delegate a task to a V2.3 specialist and optionally execute approved tools."""
+
+    from molecule_ranker.runtime_agents.multi_agent import MultiAgentScientificOrchestrator
+    from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
+
+    registry = RuntimeToolRegistry.default()
+    artifacts = [{"artifact_id": item} for item in artifact_id or []]
+    orchestrator = MultiAgentScientificOrchestrator(
+        tool_registry=registry,
+        tool_handlers={
+            spec.tool_name: _agent_cli_tool_handler
+            for spec in registry.list_tools()
+            if spec.category != "codex"
+        },
+    )
+    delegation = orchestrator.delegate_task(
+        specialist_id=specialist_id,
+        objective=goal,
+        session_id=f"runtime-session-{uuid.uuid4().hex[:12]}",
+        delegated_by="user",
+        current_artifacts=artifacts,
+        scoped_artifact_ids=artifact_id or [],
+        requested_tool_names=tool_name,
+        project_id=project_id,
+        user_permissions=_agent_all_permissions(registry),
+    )
+    if autonomy != "dry_run":
+        delegation = orchestrator.execute_delegation(
+            delegation,
+            mode=autonomy,  # type: ignore[arg-type]
+            actor="user",
+        )
+    _agent_write_specialist_outputs(output_dir, delegation)
+    _echo_json(
+        {
+            "task_id": delegation.task.task_id,
+            "specialist_id": delegation.task.specialist_id,
+            "plan_id": delegation.plan.plan_id,
+            "status": delegation.task.status,
+            "execution_status": delegation.execution.status if delegation.execution else "not_run",
+            "output_dir": str(output_dir),
+        }
+    )
+
+
+def _subagent_skill_session(
+    *,
+    skill_name: str | None,
+    user_goal: str,
+    project_id: str | None,
+    autonomy: str,
+    dry_run: bool,
+) -> Any:
+    if skill_name is None:
+        raise typer.BadParameter("--skill is required for skill session expansion")
+    from molecule_ranker.subagents.skills import expand_multi_agent_skill
+
+    session = expand_multi_agent_skill(skill_name, user_goal=user_goal)
+    session.metadata.update(
+        {
+            "skill_name": skill_name,
+            "project_id": project_id,
+            "autonomy": autonomy,
+            "dry_run": dry_run,
+        }
+    )
+    return session
+
+
+def _subagent_goal_dry_run_session(
+    *,
+    user_goal: str,
+    project_id: str | None,
+    autonomy: str,
+) -> Any:
+    from molecule_ranker.subagents.coordinator import MultiAgentCoordinator
+    from molecule_ranker.subagents.schemas import (
+        MultiAgentSession,
+        SubagentConsensus,
+        SubagentMessage,
+    )
+
+    session_id = f"multi-agent-session-{uuid.uuid4().hex[:12]}"
+    coordinator = MultiAgentCoordinator()
+    supervisor = coordinator.choose_supervisor(user_goal)
+    tasks = coordinator.decompose_goal(
+        user_goal=user_goal,
+        parent_session_id=session_id,
+        mode="supervisor_delegated",
+        scoped_artifact_ids=["user-goal"],
+    )
+    for index, task in enumerate(tasks):
+        task.metadata["dependencies"] = [tasks[index - 1].task_id] if index else []
+    messages = [
+        SubagentMessage(
+            message_id=f"subagent-message-{uuid.uuid4().hex[:12]}",
+            parent_session_id=session_id,
+            from_subagent_id=supervisor.subagent_id,
+            to_subagent_id=task.assigned_subagent_id,
+            message_type="task_request",
+            content=task.objective,
+            referenced_artifact_ids=task.input_artifact_ids,
+            referenced_entity_ids=[],
+            referenced_tool_names=task.allowed_tool_names,
+            created_at=datetime.now(UTC),
+            metadata={"task_id": task.task_id},
+        )
+        for task in tasks
+    ]
+    consensus = SubagentConsensus(
+        consensus_id=f"subagent-consensus-{uuid.uuid4().hex[:12]}",
+        parent_session_id=session_id,
+        task_ids=[task.task_id for task in tasks],
+        participating_subagent_ids=[task.assigned_subagent_id for task in tasks],
+        consensus_status="inconclusive",
+        summary="Dry-run session queued; execution and critique pending.",
+        agreements=[],
+        disagreements=[],
+        recommended_next_actions=["Execute queued subagent tasks with scoped runtime."],
+        human_review_required=any(task.requires_human_approval for task in tasks),
+        metadata={"coordination_mode": "supervisor_delegated"},
+    )
+    now = datetime.now(UTC)
+    return MultiAgentSession(
+        multi_agent_session_id=session_id,
+        runtime_session_id=None,
+        user_goal=user_goal,
+        supervisor_subagent_id=supervisor.subagent_id,
+        subagent_ids=sorted(
+            {task.assigned_subagent_id for task in tasks} | {supervisor.subagent_id}
+        ),
+        tasks=tasks,
+        messages=messages,
+        results=[],
+        critiques=[],
+        consensus=[consensus],
+        status="queued",
+        started_at=now,
+        completed_at=None,
+        metadata={
+            "project_id": project_id,
+            "autonomy": autonomy,
+            "dry_run": True,
+            "coordination_mode": "supervisor_delegated",
+        },
+    )
+
+
+def _subagent_artifacts_for_session(session: Any | None) -> list[dict[str, Any]] | None:
+    if session is None:
+        return None
+    return [
+        {
+            "artifact_id": artifact_id,
+            "artifact_type": "multi_agent_skill_input",
+            "summary": f"Scoped input artifact {artifact_id}.",
+            "redacted": False,
+        }
+        for artifact_id in _subagent_expected_artifacts(session)
+    ]
+
+
+def _subagent_expected_artifacts(session: Any) -> list[str]:
+    artifact_ids: list[str] = []
+    for task in session.tasks:
+        artifact_ids.extend(task.input_artifact_ids)
+    return list(dict.fromkeys(artifact_ids))
+
+
+def _subagent_write_session_artifacts(output_dir: Path, session: Any) -> Path:
+    from molecule_ranker.subagents.executor import write_multi_agent_runtime_artifacts
+
+    session_dir = output_dir / session.multi_agent_session_id
+    write_multi_agent_runtime_artifacts(session_dir, session)
+    return session_dir
+
+
+def _subagent_load_session(output_dir: Path, session_id: str) -> tuple[Any, Path]:
+    from molecule_ranker.subagents.schemas import MultiAgentSession
+
+    path = _subagent_session_path(output_dir, session_id)
+    session = MultiAgentSession.model_validate(_read_cli_json(path))
+    return session, path.parent
+
+
+def _subagent_session_path(output_dir: Path, session_id: str) -> Path:
+    direct_path = output_dir / session_id / "multi_agent_session.json"
+    if direct_path.exists():
+        return direct_path
+    flat_path = output_dir / "multi_agent_session.json"
+    if flat_path.exists():
+        payload = _read_cli_json(flat_path)
+        if payload.get("multi_agent_session_id") == session_id:
+            return flat_path
+    if output_dir.exists():
+        for path in sorted(output_dir.glob("*/multi_agent_session.json")):
+            payload = _read_cli_json(path)
+            if payload.get("multi_agent_session_id") == session_id:
+                return path
+    raise typer.BadParameter(f"Multi-agent session not found: {session_id}")
+
+
+def _subagent_find_result(output_dir: Path, result_id: str) -> tuple[Any, Path, Any]:
+    from molecule_ranker.subagents.schemas import MultiAgentSession, SubagentResult
+
+    if not output_dir.exists():
+        raise typer.BadParameter(f"Subagent output directory not found: {output_dir}")
+    for path in sorted(output_dir.glob("*/multi_agent_session.json")):
+        session = MultiAgentSession.model_validate(_read_cli_json(path))
+        results = list(session.results)
+        result_path = path.parent / "subagent_results.json"
+        if result_path.exists():
+            results.extend(
+                SubagentResult.model_validate(item) for item in _read_cli_json(result_path)
+            )
+        for result in results:
+            if result.result_id == result_id:
+                if not any(item.result_id == result.result_id for item in session.results):
+                    session.results.append(result)
+                return session, path.parent, result
+    raise typer.BadParameter(f"Subagent result not found: {result_id}")
+
+
+def _subagent_normalize_subagent_id(value: str) -> str:
+    normalized = value.replace("_", "-")
+    if normalized == "guardrail-sentinel":
+        return normalized
+    return normalized
+
+
+def _subagent_audit_events(session: Any) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    raw_events = session.metadata.get("audit_events", [])
+    if isinstance(raw_events, list):
+        events.extend(item for item in raw_events if isinstance(item, dict))
+    raw_message_events = session.metadata.get("message_audit_events", [])
+    if isinstance(raw_message_events, list):
+        events.extend(item for item in raw_message_events if isinstance(item, dict))
+    if not events:
+        events.extend(
+            {
+                "event_id": f"audit-{message.message_id}",
+                "event_type": f"message_{message.message_type}",
+                "actor": message.from_subagent_id,
+                "summary": message.content,
+                "timestamp": message.created_at.isoformat(),
+                "metadata": {
+                    "to_subagent_id": message.to_subagent_id,
+                    "referenced_artifact_ids": message.referenced_artifact_ids,
+                    "referenced_tool_names": message.referenced_tool_names,
+                },
+            }
+            for message in session.messages
+        )
+    return events
+
+
 def _agent_session(
     *,
     goal: str,
@@ -1050,6 +1659,42 @@ def _agent_write_outputs(
         execution_result=execution_result,
         approvals=approvals,
         guardrail_report=guardrail_report,
+    )
+
+
+def _agent_write_specialist_outputs(output_dir: Path, delegation: Any) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_cli_json(
+        output_dir / "specialist_delegation_task.json",
+        delegation.task.model_dump(mode="json"),
+    )
+    _write_cli_json(
+        output_dir / "runtime_action_plan.json",
+        delegation.plan.model_dump(mode="json"),
+    )
+    if delegation.execution is not None:
+        _write_cli_json(
+            output_dir / "runtime_tool_results.json",
+            [result.model_dump(mode="json") for result in delegation.execution.results],
+        )
+    if delegation.output is not None:
+        _write_cli_json(
+            output_dir / "specialist_output.json",
+            delegation.output.model_dump(mode="json"),
+        )
+    if delegation.critiques:
+        _write_cli_json(
+            output_dir / "specialist_critiques.json",
+            [critique.model_dump(mode="json") for critique in delegation.critiques],
+        )
+    if delegation.escalations:
+        _write_cli_json(
+            output_dir / "specialist_human_escalations.json",
+            [escalation.model_dump(mode="json") for escalation in delegation.escalations],
+        )
+    _write_cli_json(
+        output_dir / "runtime_audit_log.json",
+        [event.model_dump(mode="json") for event in delegation.audit_events],
     )
 
 
