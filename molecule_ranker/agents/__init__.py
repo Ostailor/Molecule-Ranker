@@ -5,6 +5,7 @@ from molecule_ranker.agents.disease_resolver import DiseaseResolverAgent
 from molecule_ranker.agents.evidence_scoring import EvidenceScoringAgent
 from molecule_ranker.agents.experiment_readiness import ExperimentReadinessAgent
 from molecule_ranker.agents.experimental_evidence import ExperimentalEvidenceAgent
+from molecule_ranker.agents.failure_diagnosis import FailureDiagnosisAgent
 from molecule_ranker.agents.hypothesis_generation import HypothesisGenerationAgent
 from molecule_ranker.agents.literature_evidence import LiteratureEvidenceAgent
 from molecule_ranker.agents.medicinal_chemistry_critic import MedicinalChemistryCriticAgent
@@ -13,6 +14,8 @@ from molecule_ranker.agents.novel_molecule import NovelMoleculeAgent
 from molecule_ranker.agents.oracle_scoring import OracleScoringAgent
 from molecule_ranker.agents.portfolio_optimization import PortfolioOptimizationAgent
 from molecule_ranker.agents.predictive_model import PredictiveModelAgent
+from molecule_ranker.agents.regression_check import RegressionCheckAgent
+from molecule_ranker.agents.repair_planner import RepairPlannerAgent
 from molecule_ranker.agents.report_writer import ReportWriterAgent
 from molecule_ranker.agents.review_workspace import ReviewWorkspaceAgent
 from molecule_ranker.agents.scientific_design import (
@@ -32,6 +35,7 @@ __all__ = [
     "DevelopabilityAssessmentAgent",
     "EvidenceScoringAgent",
     "ExperimentalEvidenceAgent",
+    "FailureDiagnosisAgent",
     "HypothesisGenerationAgent",
     "LiteratureEvidenceAgent",
     "MoleculeRetrievalAgent",
@@ -46,6 +50,8 @@ __all__ = [
     "OracleScoringAgent",
     "PortfolioOptimizationAgent",
     "PredictiveModelAgent",
+    "RegressionCheckAgent",
+    "RepairPlannerAgent",
     "ScientificDesignPlannerAgent",
     "SeedAndScaffoldSelectionAgent",
     "UncertaintyAndDiversityAgent",

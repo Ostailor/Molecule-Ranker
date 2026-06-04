@@ -4,11 +4,17 @@ import json
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from molecule_ranker.agent_repair.diagnosis import FailureDiagnosisAgent
+from molecule_ranker.agent_repair.evaluators import OutputEvaluator, PlanEvaluator
+from molecule_ranker.agent_repair.executor import RepairExecutor
+from molecule_ranker.agent_repair.repair_planner import RepairPlannerAgent
+from molecule_ranker.agent_repair.schemas import RepairAction, RepairExecution, RepairPlan
 from molecule_ranker.runtime_agents.guardrails import RuntimeGuardrailChecker
 from molecule_ranker.runtime_agents.schemas import (
     RuntimeActionPlan,
@@ -35,6 +41,7 @@ ExecutionStatus = Literal[
     "approval_required",
     "policy_blocked",
 ]
+AutoRepairMode = Literal["suggest_only", "safe_only", "with_approval"]
 ToolHandler = Callable[[RuntimeActionStep, RuntimeToolSpec], RuntimeToolResult | dict[str, Any]]
 SAFE_SIDE_EFFECT_LEVELS = {"none", "artifact_write", "external_read"}
 SCIENTIFIC_OUTPUT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -51,6 +58,16 @@ SCIENTIFIC_OUTPUT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "Tool output appears to invent quantitative assay results.",
     ),
 )
+
+
+class RuntimeRepairConfig(BaseModel):
+    enable_self_evaluation: bool = True
+    enable_auto_repair: bool = False
+    auto_repair_mode: AutoRepairMode = "suggest_only"
+    max_repair_attempts_per_step: int = Field(default=2, ge=0)
+    max_total_repair_attempts: int = Field(default=5, ge=0)
+    require_regression_after_repair: bool = True
+    repair_log_dir: str | None = None
 
 
 class CancellationToken:
@@ -84,10 +101,16 @@ class RuntimeActionExecutor:
         *,
         registry: RuntimeToolRegistry | None = None,
         tool_handlers: dict[str, ToolHandler] | None = None,
+        repair_config: RuntimeRepairConfig | dict[str, Any] | None = None,
     ) -> None:
         self.registry = registry or RuntimeToolRegistry.default()
         self.tool_handlers = tool_handlers or {}
         self.guardrails = RuntimeGuardrailChecker(registry=self.registry)
+        self.repair_config = _repair_config(repair_config)
+        self.plan_evaluator = PlanEvaluator(registry=self.registry)
+        self.output_evaluator = OutputEvaluator(registry=self.registry)
+        self.failure_diagnoser = FailureDiagnosisAgent()
+        self.repair_planner = RepairPlannerAgent(tool_registry=self.registry)
 
     def execute(
         self,
@@ -138,6 +161,10 @@ class RuntimeActionExecutor:
         artifact_ids: list[str] = []
         job_ids: list[str] = []
         warnings: list[str] = []
+        repair_logs: list[dict[str, Any]] = []
+        repair_attempts_by_step: dict[str, int] = {}
+        total_repair_attempts = 0
+        config = _effective_repair_config(self.repair_config, plan)
 
         for step in sorted(plan.steps, key=lambda item: item.step_index):
             if token.cancelled:
@@ -264,6 +291,53 @@ class RuntimeActionExecutor:
                 )
 
             step.status = "running"
+            if config.enable_self_evaluation:
+                pre_eval = self.plan_evaluator.evaluate(
+                    _single_step_plan_payload(plan, step),
+                    approvals=approved,
+                )
+                audit_events.append(
+                    _audit(
+                        plan,
+                        "runtime_step_self_evaluation_pre",
+                        actor,
+                        "Pre-execution self-evaluation completed.",
+                        object_type="RuntimeActionStep",
+                        object_id=step.step_id,
+                        metadata=pre_eval.model_dump(mode="json"),
+                    )
+                )
+                if not pre_eval.passed:
+                    result = _result_for_step(
+                        step,
+                        status="policy_blocked",
+                        error_summary="Pre-execution self-evaluation failed.",
+                    )
+                    results.append(result)
+                    step.status = "failed"
+                    audit_events.append(
+                        _audit(
+                            plan,
+                            "runtime_step_policy_blocked",
+                            actor,
+                            result.error_summary or "",
+                            object_type="RuntimeActionStep",
+                            object_id=step.step_id,
+                            metadata=pre_eval.model_dump(mode="json"),
+                        )
+                    )
+                    return _execution_result(
+                        plan=plan,
+                        mode=mode,
+                        status="policy_blocked",
+                        results=results,
+                        artifact_ids=artifact_ids,
+                        job_ids=job_ids,
+                        warnings=warnings,
+                        audit_events=audit_events,
+                        started_at=started_at,
+                        metadata={"repair_logs": repair_logs},
+                    )
             audit_events.append(
                 _audit(
                     plan,
@@ -296,6 +370,24 @@ class RuntimeActionExecutor:
                     tool_result.warnings.extend(ecosystem_warnings)
                     tool_result.error_summary = "; ".join(ecosystem_warnings)
                 self._record_tool_usage(spec, tool_result, actor, plan)
+                if config.enable_self_evaluation:
+                    post_eval = self.output_evaluator.evaluate(
+                        tool_result,
+                        tool_name=step.tool_name,
+                        known_artifacts=set(tool_result.artifact_ids),
+                        output_schema=spec.output_schema,
+                    )
+                    audit_events.append(
+                        _audit(
+                            plan,
+                            "runtime_step_self_evaluation_post",
+                            actor,
+                            "Post-execution self-evaluation completed.",
+                            object_type="RuntimeToolResult",
+                            object_id=tool_result.result_id,
+                            metadata=post_eval.model_dump(mode="json"),
+                        )
+                    )
                 if tool_result.status == "succeeded":
                     step.status = "succeeded"
                     step.result_id = tool_result.result_id
@@ -328,6 +420,43 @@ class RuntimeActionExecutor:
                         metadata=_tool_audit_metadata(spec),
                     )
                 )
+                repaired_result = self._attempt_repair_for_failure(
+                    plan=plan,
+                    step=step,
+                    spec=spec,
+                    failed_result=tool_result,
+                    actor=actor,
+                    mode=mode,
+                    approvals=approved,
+                    config=config,
+                    repair_logs=repair_logs,
+                    audit_events=audit_events,
+                    repair_attempts_by_step=repair_attempts_by_step,
+                    total_repair_attempts=total_repair_attempts,
+                )
+                total_repair_attempts = repaired_result.total_repair_attempts
+                if repaired_result.repaired and repaired_result.retry_result is not None:
+                    retry_result = repaired_result.retry_result
+                    retry_result.metadata["repair_retry_for_result_id"] = tool_result.result_id
+                    self._record_tool_usage(spec, retry_result, actor, plan)
+                    results.append(retry_result)
+                    if retry_result.status == "succeeded":
+                        step.status = "succeeded"
+                        step.result_id = retry_result.result_id
+                        artifact_ids.extend(retry_result.artifact_ids)
+                        job_ids.extend(retry_result.job_ids)
+                        audit_events.append(
+                            _audit(
+                                plan,
+                                "runtime_step_repaired",
+                                actor,
+                                f"{step.tool_name} succeeded after repair.",
+                                object_type="RuntimeToolResult",
+                                object_id=retry_result.result_id,
+                                metadata={"repair_attempted": True},
+                            )
+                        )
+                        continue
                 if _step_optional(step):
                     warnings.append(tool_result.error_summary or f"{step.tool_name} failed.")
                     continue
@@ -342,6 +471,7 @@ class RuntimeActionExecutor:
                     warnings=warnings,
                     audit_events=audit_events,
                     started_at=started_at,
+                    metadata={"repair_logs": repair_logs},
                 )
             except Exception as exc:
                 result = _result_for_step(step, status="failed", error_summary=str(exc))
@@ -360,6 +490,43 @@ class RuntimeActionExecutor:
                         metadata=_tool_audit_metadata(spec),
                     )
                 )
+                repaired_result = self._attempt_repair_for_failure(
+                    plan=plan,
+                    step=step,
+                    spec=spec,
+                    failed_result=result,
+                    actor=actor,
+                    mode=mode,
+                    approvals=approved,
+                    config=config,
+                    repair_logs=repair_logs,
+                    audit_events=audit_events,
+                    repair_attempts_by_step=repair_attempts_by_step,
+                    total_repair_attempts=total_repair_attempts,
+                )
+                total_repair_attempts = repaired_result.total_repair_attempts
+                if repaired_result.repaired and repaired_result.retry_result is not None:
+                    retry_result = repaired_result.retry_result
+                    retry_result.metadata["repair_retry_for_result_id"] = result.result_id
+                    self._record_tool_usage(spec, retry_result, actor, plan)
+                    results.append(retry_result)
+                    if retry_result.status == "succeeded":
+                        step.status = "succeeded"
+                        step.result_id = retry_result.result_id
+                        artifact_ids.extend(retry_result.artifact_ids)
+                        job_ids.extend(retry_result.job_ids)
+                        audit_events.append(
+                            _audit(
+                                plan,
+                                "runtime_step_repaired",
+                                actor,
+                                f"{step.tool_name} succeeded after repair.",
+                                object_type="RuntimeToolResult",
+                                object_id=retry_result.result_id,
+                                metadata={"repair_attempted": True},
+                            )
+                        )
+                        continue
                 if _step_optional(step):
                     warnings.append(str(exc))
                     continue
@@ -374,6 +541,7 @@ class RuntimeActionExecutor:
                     warnings=warnings,
                     audit_events=audit_events,
                     started_at=started_at,
+                    metadata={"repair_logs": repair_logs},
                 )
 
         audit_events.append(
@@ -389,6 +557,155 @@ class RuntimeActionExecutor:
             warnings=warnings,
             audit_events=audit_events,
             started_at=started_at,
+            metadata={"repair_logs": repair_logs},
+        )
+
+    def _attempt_repair_for_failure(
+        self,
+        *,
+        plan: RuntimeActionPlan,
+        step: RuntimeActionStep,
+        spec: RuntimeToolSpec,
+        failed_result: RuntimeToolResult,
+        actor: str,
+        mode: ExecutionMode,
+        approvals: set[str],
+        config: RuntimeRepairConfig,
+        repair_logs: list[dict[str, Any]],
+        audit_events: list[RuntimeAgentAuditEvent],
+        repair_attempts_by_step: dict[str, int],
+        total_repair_attempts: int,
+    ) -> _RuntimeRepairAttempt:
+        if total_repair_attempts >= config.max_total_repair_attempts:
+            log = _repair_log(
+                step=step,
+                failed_result=failed_result,
+                status="max_attempts_exceeded",
+                message="Maximum total repair attempts reached.",
+            )
+            repair_logs.append(log)
+            self._write_repair_logs(config, repair_logs)
+            return _RuntimeRepairAttempt(
+                repaired=False,
+                retry_result=None,
+                total_repair_attempts=total_repair_attempts,
+            )
+        step_attempts = repair_attempts_by_step.get(step.step_id, 0)
+        if step_attempts >= config.max_repair_attempts_per_step:
+            log = _repair_log(
+                step=step,
+                failed_result=failed_result,
+                status="max_attempts_exceeded",
+                message="Maximum repair attempts for step reached.",
+            )
+            repair_logs.append(log)
+            self._write_repair_logs(config, repair_logs)
+            return _RuntimeRepairAttempt(
+                repaired=False,
+                retry_result=None,
+                total_repair_attempts=total_repair_attempts,
+            )
+
+        repair_attempts_by_step[step.step_id] = step_attempts + 1
+        total_repair_attempts += 1
+        diagnosis = self.failure_diagnoser.diagnose(
+            failed_tool_result=failed_result,
+            recent_audit_events=audit_events,
+            tool_usage_record={"tool_name": step.tool_name, "step_id": step.step_id},
+        )
+        repair_plan = self.repair_planner.plan_repair(
+            diagnosis,
+            runtime_session={"session_id": plan.session_id, "autonomy_level": mode},
+            user_autonomy_level=_repair_autonomy(config),
+        )
+        repair_plan = _runtime_safe_repair_plan(repair_plan, spec=spec)
+        repair_execution: RepairExecution | None = None
+        retry_result: RuntimeToolResult | None = None
+        repair_status = "suggested"
+        if config.enable_auto_repair and _repair_execution_mode(config) != "suggest_only":
+            repair_execution = RepairExecutor(
+                tool_registry=self.registry,
+                tool_handlers=self._repair_tool_handlers(),
+            ).execute(
+                repair_plan,
+                mode=_repair_execution_mode(config),
+                approvals=approvals,
+            )
+            if repair_execution.status == "succeeded" and _safe_to_retry_step(spec):
+                retry_result = _normalize_tool_result(step, self._call_tool(step, spec))
+                repair_status = "repaired" if retry_result.status == "succeeded" else "retry_failed"
+            else:
+                repair_status = repair_execution.status
+
+        log = _repair_log(
+            step=step,
+            failed_result=failed_result,
+            status=repair_status,
+            message="Repair pipeline evaluated failed runtime step.",
+            diagnosis=diagnosis.model_dump(mode="json"),
+            repair_plan=repair_plan.model_dump(mode="json"),
+            repair_execution=repair_execution.model_dump(mode="json")
+            if repair_execution is not None
+            else None,
+        )
+        repair_logs.append(log)
+        audit_events.append(
+            _audit(
+                plan,
+                "runtime_step_repair_evaluated",
+                actor,
+                f"Repair pipeline status: {repair_status}.",
+                object_type="RuntimeActionStep",
+                object_id=step.step_id,
+                metadata=log,
+            )
+        )
+        self._write_repair_logs(config, repair_logs)
+        return _RuntimeRepairAttempt(
+            repaired=retry_result is not None and retry_result.status == "succeeded",
+            retry_result=retry_result,
+            total_repair_attempts=total_repair_attempts,
+        )
+
+    def _repair_tool_handlers(self) -> dict[str, Any]:
+        handlers: dict[str, Any] = {}
+        for tool_name, runtime_handler in self.tool_handlers.items():
+            def handler(
+                action: RepairAction,
+                repair_spec: RuntimeToolSpec,
+                *,
+                _runtime_handler: ToolHandler = runtime_handler,
+            ) -> dict[str, Any] | RuntimeToolResult:
+                step = RuntimeActionStep(
+                    step_id=f"repair-step-{uuid4().hex[:12]}",
+                    plan_id=action.repair_action_id,
+                    step_index=0,
+                    action_type=action.action_type,
+                    tool_name=action.tool_name or repair_spec.tool_name,
+                    tool_args=action.tool_args,
+                    requires_approval=action.requires_approval,
+                    approval_reason=action.approval_reason,
+                    expected_outputs=[],
+                    status="pending",
+                    metadata={"repair_action_id": action.repair_action_id},
+                )
+                return _runtime_handler(step, repair_spec)
+
+            handlers[tool_name] = handler
+        return handlers
+
+    def _write_repair_logs(
+        self,
+        config: RuntimeRepairConfig,
+        repair_logs: list[dict[str, Any]],
+    ) -> None:
+        if not config.repair_log_dir:
+            return
+        path = Path(config.repair_log_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "runtime_repair_log.json").write_text(
+            json.dumps({"repair_logs": repair_logs}, indent=2, sort_keys=True),
+            encoding="utf-8",
         )
 
     def _call_tool(
@@ -548,6 +865,7 @@ def _execution_result(
     artifact_ids: list[str] | None = None,
     job_ids: list[str] | None = None,
     warnings: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> RuntimeExecutionResult:
     return RuntimeExecutionResult(
         plan=plan,
@@ -560,6 +878,7 @@ def _execution_result(
         audit_events=audit_events,
         started_at=started_at,
         completed_at=datetime.now(UTC),
+        metadata=metadata or {},
     )
 
 
@@ -601,6 +920,120 @@ def _json_type_matches(value: Any, expected_type: str) -> bool:
 def _scientific_guardrail_warnings(result: RuntimeToolResult) -> list[str]:
     text = json.dumps(result.output, sort_keys=True, default=str)
     return [warning for pattern, warning in SCIENTIFIC_OUTPUT_PATTERNS if pattern.search(text)]
+
+
+class _RuntimeRepairAttempt(BaseModel):
+    repaired: bool
+    retry_result: RuntimeToolResult | None
+    total_repair_attempts: int
+
+
+def _repair_config(raw: RuntimeRepairConfig | dict[str, Any] | None) -> RuntimeRepairConfig:
+    if isinstance(raw, RuntimeRepairConfig):
+        return raw
+    if isinstance(raw, dict):
+        return RuntimeRepairConfig.model_validate(raw)
+    return RuntimeRepairConfig()
+
+
+def _effective_repair_config(
+    base: RuntimeRepairConfig,
+    plan: RuntimeActionPlan,
+) -> RuntimeRepairConfig:
+    payload = plan.metadata.get("runtime_repair_config") or plan.metadata.get("repair_config")
+    if not isinstance(payload, dict):
+        return base
+    return base.model_copy(update=payload)
+
+
+def _repair_execution_mode(config: RuntimeRepairConfig) -> str:
+    if config.auto_repair_mode == "safe_only":
+        return "execute_safe_repairs"
+    if config.auto_repair_mode == "with_approval":
+        return "execute_with_approval"
+    return "suggest_only"
+
+
+def _repair_autonomy(config: RuntimeRepairConfig) -> str:
+    if config.auto_repair_mode == "with_approval":
+        return "execute_with_approval"
+    if config.auto_repair_mode == "safe_only":
+        return "execute_safe_repairs"
+    return "suggest_only"
+
+
+def _safe_to_retry_step(spec: RuntimeToolSpec) -> bool:
+    return spec.side_effect_level in SAFE_SIDE_EFFECT_LEVELS and spec.category != "codex"
+
+
+def _runtime_safe_repair_plan(
+    repair_plan: RepairPlan,
+    *,
+    spec: RuntimeToolSpec,
+) -> RepairPlan:
+    if not _safe_to_retry_step(spec):
+        return repair_plan
+    return repair_plan.model_copy(
+        update={
+            "actions": [
+                RepairAction(
+                    repair_action_id=f"repair-action-{uuid4().hex[:12]}",
+                    action_type="run_regression_check",
+                    target_object_type="tool_call",
+                    target_object_id=spec.tool_name,
+                    tool_name=None,
+                    tool_args={"tool_name": spec.tool_name},
+                    expected_effect="Run targeted regression check before safe retry.",
+                    side_effect_level="none",
+                    requires_approval=False,
+                    approval_reason=None,
+                    risk_level="low",
+                    metadata={"runtime_safe_retry": True},
+                )
+            ],
+            "requires_human_approval": False,
+            "validated": True,
+            "validation_errors": [],
+        }
+    )
+
+
+def _repair_log(
+    *,
+    step: RuntimeActionStep,
+    failed_result: RuntimeToolResult,
+    status: str,
+    message: str,
+    diagnosis: dict[str, Any] | None = None,
+    repair_plan: dict[str, Any] | None = None,
+    repair_execution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "repair_log_id": f"runtime-repair-log-{uuid4().hex[:12]}",
+        "step_id": step.step_id,
+        "tool_name": step.tool_name,
+        "failed_result_id": failed_result.result_id,
+        "status": status,
+        "message": message,
+        "created_at": datetime.now(UTC).isoformat(),
+        "diagnosis": diagnosis,
+        "repair_plan": repair_plan,
+        "repair_execution": repair_execution,
+    }
+
+
+def _single_step_plan_payload(
+    plan: RuntimeActionPlan,
+    step: RuntimeActionStep,
+) -> dict[str, Any]:
+    return {
+        "plan_id": plan.plan_id,
+        "session_id": plan.session_id,
+        "steps": [step.model_dump(mode="python")],
+        "expected_artifacts": list(plan.expected_artifacts),
+        "required_approvals": list(plan.required_approvals),
+        "metadata": plan.metadata,
+    }
 
 
 def _skip_remaining(plan: RuntimeActionPlan, *, from_index: int) -> None:

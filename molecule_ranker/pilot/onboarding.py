@@ -3,7 +3,7 @@ from __future__ import annotations
 
 def pilot_onboarding_checklist() -> list[str]:
     return [
-        "Confirm V2.3.0 version and stable V1 contract identifiers.",
+        "Confirm V2.4.0 version and stable V1 contract identifiers.",
         "Confirm internal research use only boundaries.",
         "Confirm generated molecules remain computational hypotheses.",
         "Confirm Codex outputs are assistant artifacts, not evidence or decisions.",

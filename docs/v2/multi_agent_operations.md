@@ -1,7 +1,8 @@
-# V2.3 Multi-Agent Scientific Operations
+# V2.4 Multi-Agent Scientific Operations
 
-V2.3 adds specialized Codex subagents for operational delegation across the
-existing molecule-ranker runtime-agent and governed tool ecosystem.
+V2.4 adds specialized Codex subagents for operational delegation across the
+existing molecule-ranker runtime-agent and governed tool ecosystem, plus
+self-evaluation and repair-loop agents for recoverable workflow failures.
 
 Subagents are operational specialists. They are not scientific truth sources.
 Every delegated task remains inside the V2 runtime controls: RBAC, policy,
@@ -24,6 +25,11 @@ guardrail checks, and audit logs.
 - Evaluation and validation
 - Guardrail and safety review
 - Platform operations
+- Self-evaluation
+- Failure diagnosis
+- Repair planning
+- Repair execution
+- Regression checking
 
 ## Delegation Contract
 
@@ -42,6 +48,21 @@ A specialist task records:
 Specialists may inspect scoped artifacts, call approved tools, produce
 structured outputs, critique each other, and escalate to human review.
 
+## V2.4 Repair Loop
+
+The repair loop evaluates plans before execution, evaluates outputs after
+execution, diagnoses failed tools, failed jobs, failed validations, missing
+artifacts, and guardrail failures, proposes repair plans, executes safe
+deterministic repairs when policy allows, requests human approval for risky
+repairs, retries recoverable workflows with bounded policies, records reusable
+repair patterns, reruns regression checks, and writes repair audit reports.
+
+Repair is operational. Agents may inspect logs and artifacts, rerun
+deterministic tools, regenerate reports from existing artifacts, rerun
+validation, request missing user input, and create engineering repair plans.
+Agents may not invent evidence, assay results, citations, molecules, graph
+facts, benchmark metrics, or scientific scores.
+
 ## Hard Boundaries
 
 Specialists cannot:
@@ -52,6 +73,7 @@ Specialists cannot:
   generated-molecule assay advancement, or destructive actions
 - bypass deterministic validators, RBAC, policy, approvals, artifact
   validation, guardrails, approved tools, or sandbox boundaries
+- approve their own repairs or hide guardrail failures
 - provide medical advice, lab protocols, synthesis instructions, dosing, or
   patient treatment guidance
 

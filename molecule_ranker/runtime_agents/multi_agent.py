@@ -209,7 +209,7 @@ class SpecialistAgentRegistry:
 
 
 class MultiAgentScientificOrchestrator:
-    """Coordinate V2.3 specialist Codex subagents through runtime-agent controls."""
+    """Coordinate V2.4 specialist Codex subagents through runtime-agent controls."""
 
     def __init__(
         self,

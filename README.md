@@ -1,41 +1,21 @@
 # molecule-ranker
 
-Internal research software for source-backed molecule ranking, generated
-molecule hypotheses, review workflows, governed Codex orchestration, and V2.3
-multi-agent scientific operations with specialized Codex subagents.
+Current version: `2.4.0`.
 
-Current release: `2.3.0`.
+`molecule-ranker` is internal research software for source-backed molecule
+ranking, governed Codex orchestration, review workflows, multi-agent scientific
+operations, and audited workflow repair. It is an enterprise discovery operating system
+for operational research workflows, not a clinical product and not a source of
+scientific truth.
 
-V2.3 adds multi-agent scientific operations while preserving the current release boundary:
-v2.0 enterprise discovery operating system, no major new science, and no medical advice.
-
-## Purpose
-
-`molecule-ranker` helps internal research teams:
-
-- Resolve diseases to public biomedical entities.
-- Retrieve source-backed targets, molecules, and literature.
-- Rank existing molecules with transparent scoring and provenance.
-- Optionally generate in-silico molecule hypotheses.
-- Review developability, experiments, structures, knowledge graph context,
-  portfolios, campaigns, and validation artifacts.
-- Run Codex only through approved tools, policies, approvals, guardrails, and
-  audit trails.
-- Delegate V2.3 work to role-scoped Codex subagents that can critique, revise,
-  form consensus, and escalate to human review.
-
-## Safety Boundary
-
-This is internal research software, not a clinical product. It does not provide
-medical advice, lab protocols, synthesis instructions, dosing, patient treatment
-guidance, or claims that a molecule is safe, active, effective, binding,
-synthesizable, or therapeutic.
-
-Codex and subagents are tool-using operational specialists, not scientific truth
-sources. They cannot invent evidence, assay results, citations, molecules, graph
-facts, model metrics, docking scores, campaign outcomes, or benchmark results.
-Human approval remains required for stage gates, external writes, generated
-molecule advancement, destructive actions, and policy overrides.
+The project keeps a strict research boundary: no major new science is created by
+agents, and the software provides no medical advice, lab protocols, synthesis
+instructions, dosing guidance, patient treatment guidance, or claims that a
+molecule is safe, active, effective, binding, synthesizable, or therapeutic.
+Codex, subagents, and repair loops may inspect artifacts, diagnose failures,
+rerun deterministic tools, request approvals, and repair workflows. They may not
+invent evidence, assay results, citations, molecules, graph facts, benchmark
+metrics, scientific scores, or approvals.
 
 ## Install
 
@@ -48,23 +28,20 @@ uv run molecule-ranker version
 
 ## Run A Ranking
 
-Generation, docking, external writes, Codex, review workflows, and experimental
-evidence are disabled unless explicitly configured or enabled.
-
 ```bash
 uv run molecule-ranker rank "<disease-name>" \
   --top 5 \
   --output-dir results/<disease-slug>
 ```
 
-Common outputs:
+Typical outputs are written under the selected output directory:
 
 - `candidates.json`
 - `report.md`
 - `trace.json`
-- `generated_candidates.json` when generation is enabled
+- `generated_candidates.json` when generation is explicitly enabled
 
-## Run Codex And Subagents
+## Run Codex
 
 Start the governed Codex runtime agent in dry-run mode:
 
@@ -76,13 +53,13 @@ uv run molecule-ranker agent start \
   --output-dir .molecule-ranker/runtime-agent/alzheimer-review
 ```
 
-List built-in V2.3 subagents:
+List available subagent profiles:
 
 ```bash
 uv run molecule-ranker subagents profiles
 ```
 
-Run a dry-run project diagnosis:
+Run a subagent in dry-run mode:
 
 ```bash
 uv run molecule-ranker subagents run \
@@ -92,34 +69,55 @@ uv run molecule-ranker subagents run \
   --dry-run
 ```
 
-Run generated-candidate improvement:
+## Run Repair Workflows
+
+Diagnose a failed job or tool result:
 
 ```bash
-uv run molecule-ranker subagents run \
-  --skill improve_generated_candidates \
-  --project-id project-123 \
-  --autonomy execute_with_approval \
-  --output-dir .molecule-ranker/subagents
+uv run molecule-ranker repair diagnose \
+  --job-id job-123 \
+  --output failure_diagnosis.json
+
+uv run molecule-ranker repair diagnose \
+  --tool-result tool_result.json \
+  --output failure_diagnosis.json
 ```
 
-Inspect a subagent session:
+Create and dry-run a repair plan:
 
 ```bash
-uv run molecule-ranker subagents session show <session_id>
-uv run molecule-ranker subagents session messages <session_id>
-uv run molecule-ranker subagents critique --result-id <result_id> --critic guardrail_sentinel
-uv run molecule-ranker subagents consensus --session-id <session_id>
+uv run molecule-ranker repair plan \
+  --diagnosis failure_diagnosis.json \
+  --mode safe_only \
+  --output repair_plan.json
+
+uv run molecule-ranker repair execute \
+  --repair-plan repair_plan.json \
+  --dry-run \
+  --output repair_execution.json
 ```
 
-Run multi-agent evals:
+Run regression checks and write an auditable repair report:
 
 ```bash
-uv run molecule-ranker subagents eval --suite default
+uv run molecule-ranker repair regression \
+  --repair-execution repair_execution.json \
+  --output regression_checks.json
+
+uv run molecule-ranker repair report \
+  --repair-execution repair_execution.json \
+  --output repair_report.md
+```
+
+Run the repair eval suite:
+
+```bash
+uv run molecule-ranker repair eval --suite default
 ```
 
 ## Run Hosted Mode
 
-Create a local platform database, admin user, and dashboard:
+Create a local platform database and admin user:
 
 ```bash
 uv run molecule-ranker db init --db-path .molecule-ranker/platform.sqlite
@@ -129,7 +127,11 @@ uv run molecule-ranker user create \
   --password "change-me" \
   --role admin \
   --db-path .molecule-ranker/platform.sqlite
+```
 
+Start the hosted dashboard and API:
+
+```bash
 uv run molecule-ranker serve \
   --host 127.0.0.1 \
   --port 8765 \
@@ -141,17 +143,18 @@ Open:
 
 ```text
 http://127.0.0.1:8765/dashboard
-http://127.0.0.1:8765/dashboard/subagents/sessions
+http://127.0.0.1:8765/dashboard/repair
 ```
 
-Hosted subagent APIs are under `/api/v2/subagents/*`.
+Hosted APIs are available under `/api/v2/*`.
 
 ## Verify
 
 ```bash
 uv run ruff check .
 uv run pyright
-uv run molecule-ranker subagents eval --suite default
+uv run molecule-ranker validate repair-guardrails --json
+uv run molecule-ranker repair eval --suite default
 uv run pytest
 ```
 

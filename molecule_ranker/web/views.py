@@ -15,7 +15,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from starlette import status
 
+from molecule_ranker.agent_repair.hosted import RepairHostedStore
 from molecule_ranker.campaigns import CampaignPlan, CampaignStore
+from molecule_ranker.codex_backbone.guardrails import redact_secrets
 from molecule_ranker.integrations.connectors import create_connector
 from molecule_ranker.integrations.store import IntegrationStore
 from molecule_ranker.knowledge_graph import (
@@ -797,6 +799,356 @@ def agent_audit_dashboard_page(
                 ]
                 for event in events
             ],
+        ),
+    )
+
+
+@router.get("/dashboard/agent/reliability", response_class=HTMLResponse)
+def agent_reliability_dashboard_page(
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+) -> Response:
+    del user
+    from molecule_ranker.runtime_agents.repair import run_repair_eval_suite
+
+    eval_result = run_repair_eval_suite()
+    metric_rows = [
+        [key, f"{value:.2f}"] for key, value in sorted(eval_result.metrics.items())
+    ]
+    task_rows = [
+        [
+            result.task_id,
+            result.status,
+            result.report_status,
+            "yes" if result.auto_executed else "no",
+            "yes" if result.approval_required else "no",
+            "yes" if result.blocked_scientific_repair else "no",
+        ]
+        for result in eval_result.task_results
+    ]
+    body = (
+        _agent_nav()
+        + "<h2>Agent reliability dashboard</h2>"
+        + "<p>V2.4 self-evaluation, failure diagnosis, autonomous repair, "
+        + "regression checks, and auditable repair reports.</p>"
+        + "<p>Agents may repair workflows. Agents may not repair scientific truth "
+        + "by inventing missing data.</p>"
+        + "<h2>Repair eval metrics</h2>"
+        + _table(["Metric", "Value"], metric_rows)
+        + "<h2>Repair eval tasks</h2>"
+        + _table(
+            [
+                "Task",
+                "Status",
+                "Repair status",
+                "Auto executed",
+                "Approval required",
+                "Scientific repair blocked",
+            ],
+            task_rows,
+        )
+    )
+    return _agent_dashboard_html("Agent reliability", body)
+
+
+@router.get("/dashboard/repair", response_class=HTMLResponse)
+def repair_overview_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:read")
+    store = _repair_store(request)
+    diagnoses = store.list_diagnoses()
+    plans = store.list_plans()
+    executions = store.list_executions()
+    approvals = store.list_approvals()
+    pending_approvals = [item for item in approvals if item.get("status") == "pending"]
+    body = (
+        _repair_nav()
+        + "<h2>Repair overview</h2>"
+        + "<p>Hosted V2.4 workflow repair. Agents may repair workflows; agents may not "
+        + "repair scientific truth by inventing missing data.</p>"
+        + _table(
+            ["Metric", "Count"],
+            [
+                ["Diagnoses", len(diagnoses)],
+                ["Repair plans", len(plans)],
+                ["Executions", len(executions)],
+                ["Pending approvals", len(pending_approvals)],
+            ],
+        )
+        + "<h2>Recent executions</h2>"
+        + _repair_execution_table(executions)
+    )
+    return _repair_dashboard_html("Repair overview", body)
+
+
+@router.get("/dashboard/repair/failed-jobs", response_class=HTMLResponse)
+def repair_failed_jobs_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:diagnose")
+    diagnoses = _repair_store(request).list_diagnoses()
+    rows = [
+        [
+            _link(f"/dashboard/repair/diagnoses/{quote(item.diagnosis_id)}", item.diagnosis_id),
+            item.failure_object_type,
+            item.failure_object_id,
+            item.failure_category,
+            _repair_text(item.root_cause_summary),
+        ]
+        for item in diagnoses
+        if item.failure_object_type in {"job", "tool_call", "workflow", "validation"}
+    ]
+    return _repair_dashboard_html(
+        "Failed jobs needing diagnosis",
+        _repair_nav()
+        + _table(
+            ["Diagnosis", "Object type", "Object ID", "Category", "Summary"],
+            rows,
+            empty_message="No failed jobs are awaiting diagnosis.",
+        ),
+    )
+
+
+@router.get("/dashboard/repair/diagnoses/{diagnosis_id}", response_class=HTMLResponse)
+def repair_diagnosis_detail_dashboard_page(
+    diagnosis_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:read")
+    diagnosis = _repair_diagnosis_or_404(_repair_store(request), diagnosis_id)
+    body = (
+        _repair_nav()
+        + "<h2>Diagnosis detail</h2>"
+        + _definition_list(
+            {
+                "Diagnosis ID": diagnosis.diagnosis_id,
+                "Object": f"{diagnosis.failure_object_type}:{diagnosis.failure_object_id}",
+                "Category": diagnosis.failure_category,
+                "Repairability": diagnosis.repairability,
+                "Recoverable": diagnosis.recoverable,
+                "Confidence": diagnosis.confidence,
+                "Summary": _repair_text(diagnosis.root_cause_summary),
+            }
+        )
+        + "<h2>Evidence</h2>"
+        + _repair_safe_json(diagnosis.evidence)
+    )
+    return _repair_dashboard_html("Diagnosis detail", body)
+
+
+@router.get("/dashboard/repair/plans/{repair_plan_id}", response_class=HTMLResponse)
+def repair_plan_detail_dashboard_page(
+    repair_plan_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:read")
+    plan = _repair_plan_or_404(_repair_store(request), repair_plan_id)
+    rows = [
+        [
+            action.repair_action_id,
+            action.action_type,
+            action.target_object_type,
+            action.target_object_id,
+            action.side_effect_level,
+            action.requires_approval,
+            action.risk_level,
+        ]
+        for action in plan.actions
+    ]
+    body = (
+        _repair_nav()
+        + "<h2>Repair plan detail</h2>"
+        + _definition_list(
+            {
+                "Plan ID": plan.repair_plan_id,
+                "Diagnosis ID": plan.diagnosis_id,
+                "Summary": _repair_text(plan.plan_summary),
+                "Requires approval": plan.requires_human_approval,
+                "Validated": plan.validated,
+            }
+        )
+        + _table(
+            [
+                "Action",
+                "Type",
+                "Target type",
+                "Target ID",
+                "Side effect",
+                "Approval",
+                "Risk",
+            ],
+            rows,
+        )
+    )
+    return _repair_dashboard_html("Repair plan detail", body)
+
+
+@router.get("/dashboard/repair/approvals", response_class=HTMLResponse)
+def repair_approval_queue_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:approve")
+    approvals = _repair_store(request).list_approvals()
+    return _repair_dashboard_html(
+        "Repair approval queue",
+        _repair_nav()
+        + _table(
+            ["Approval", "Plan", "Action", "Status", "Reason"],
+            [
+                [
+                    item.get("approval_id", ""),
+                    _link(
+                        f"/dashboard/repair/plans/{quote(str(item.get('repair_plan_id', '')))}",
+                        item.get("repair_plan_id", ""),
+                    ),
+                    item.get("repair_action_id", ""),
+                    item.get("status", ""),
+                    _repair_text(item.get("reason", "")),
+                ]
+                for item in approvals
+            ],
+            empty_message="No repair approvals are pending.",
+        ),
+    )
+
+
+@router.get("/dashboard/repair/executions", response_class=HTMLResponse)
+def repair_execution_list_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:read")
+    return _repair_dashboard_html(
+        "Repair execution timeline",
+        _repair_nav() + _repair_execution_table(_repair_store(request).list_executions()),
+    )
+
+
+@router.get("/dashboard/repair/executions/{execution_id}", response_class=HTMLResponse)
+def repair_execution_timeline_dashboard_page(
+    execution_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:read")
+    execution = _repair_execution_or_404(_repair_store(request), execution_id)
+    body = (
+        _repair_nav()
+        + "<h2>Repair execution timeline</h2>"
+        + _definition_list(
+            {
+                "Execution ID": execution.repair_execution_id,
+                "Plan ID": execution.repair_plan_id,
+                "Status": execution.status,
+                "Started": execution.started_at,
+                "Completed": execution.completed_at or "",
+            }
+        )
+        + "<h2>Actions</h2>"
+        + _repair_safe_json(execution.executed_actions)
+        + "<h2>Regression result</h2>"
+        + _table(
+            ["Regression check ID"],
+            [[check_id] for check_id in execution.regression_check_ids],
+            empty_message="No regression checks are linked to this execution.",
+        )
+    )
+    return _repair_dashboard_html("Repair execution timeline", body)
+
+
+@router.get("/dashboard/repair/regression-checks", response_class=HTMLResponse)
+def repair_regression_checks_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:read")
+    checks = _repair_store(request).list_regression_checks()
+    return _repair_dashboard_html(
+        "Regression checks",
+        _repair_nav()
+        + _table(
+            ["Check", "Execution", "Type", "Passed", "Findings"],
+            [
+                [
+                    check.regression_check_id,
+                    check.repair_execution_id or "",
+                    check.check_type,
+                    check.passed,
+                    _repair_text("; ".join(check.findings)),
+                ]
+                for check in checks
+            ],
+            empty_message="No regression checks have been recorded.",
+        ),
+    )
+
+
+@router.get("/dashboard/repair/memory", response_class=HTMLResponse)
+def repair_memory_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:read")
+    memory = _repair_store(request).list_memory()
+    return _repair_dashboard_html(
+        "Repair memory",
+        _repair_nav()
+        + _table(
+            ["Memory", "Category", "Success rate", "Occurrences", "Strategy"],
+            [
+                [
+                    item.memory_id,
+                    item.failure_category,
+                    item.repair_success_rate,
+                    item.occurrence_count,
+                    _repair_text(item.recommended_repair_strategy),
+                ]
+                for item in memory
+            ],
+            empty_message="No repair memory has been recorded.",
+        ),
+    )
+
+
+@router.get("/dashboard/repair/guardrail-failures", response_class=HTMLResponse)
+def repair_guardrail_failures_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_repair_dashboard_permission(database, user, "repair:read")
+    rows = [
+        [
+            _link(f"/dashboard/repair/diagnoses/{quote(item.diagnosis_id)}", item.diagnosis_id),
+            item.failure_object_id,
+            _repair_text(item.root_cause_summary),
+            _repair_text("; ".join(item.warnings)),
+        ]
+        for item in _repair_store(request).list_diagnoses()
+        if item.failure_category in {"guardrail_failed", "unsafe_output"}
+        or item.failure_object_type == "guardrail"
+    ]
+    return _repair_dashboard_html(
+        "Guardrail failures",
+        _repair_nav()
+        + _table(
+            ["Diagnosis", "Object", "Summary", "Warnings"],
+            rows,
+            empty_message="No guardrail repair failures are visible.",
         ),
     )
 
@@ -3829,9 +4181,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.2</div>"
+        "<div class=\"brand\">molecule-ranker V2.4</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3974,9 +4326,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.2</div>"
+        "<div class=\"brand\">molecule-ranker V2.4</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4009,9 +4361,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.2</div>"
+        "<div class=\"brand\">molecule-ranker V2.4</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4061,9 +4413,9 @@ def _campaign_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.2</div>"
+        "<div class=\"brand\">molecule-ranker V2.4</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4504,9 +4856,9 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.2</div>"
+        "<div class=\"brand\">molecule-ranker V2.4</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -5082,9 +5434,9 @@ def _evaluation_dashboard_shell(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.2</div>"
+        "<div class=\"brand\">molecule-ranker V2.4</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -5325,9 +5677,9 @@ def _hypothesis_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.3.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.2</div>"
+        "<div class=\"brand\">molecule-ranker V2.4</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -5558,9 +5910,9 @@ def _subagent_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.3.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.4.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.3</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.4</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/subagents/sessions", "Subagent sessions")
@@ -5595,14 +5947,15 @@ def _agent_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.3.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.4.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.2</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.4</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/agent/sessions", "Agent sessions")
         + _link("/dashboard/agent/approvals", "Approval queue")
         + _link("/dashboard/agent/audit", "Runtime audit")
+        + _link("/dashboard/agent/reliability", "Reliability")
         + _link("/dashboard/admin", "Admin")
         + "</nav></div></header><main class=\"content\">"
         + "<aside class=\"research-disclaimer\">Internal research use only. "
@@ -5622,6 +5975,7 @@ def _agent_nav() -> str:
         + _link("/dashboard/agent/sessions", "Agent sessions")
         + _link("/dashboard/agent/approvals", "Approval queue")
         + _link("/dashboard/agent/audit", "Runtime audit log")
+        + _link("/dashboard/agent/reliability", "Reliability")
         + "</nav>"
     )
 
@@ -5670,6 +6024,141 @@ def _tool_dashboard_permissions(user: UserAccount) -> set[str]:
     return permissions & TOOL_DASHBOARD_PERMISSIONS
 
 
+REPAIR_DASHBOARD_PERMISSIONS = {
+    "repair:read",
+    "repair:diagnose",
+    "repair:plan",
+    "repair:execute",
+    "repair:approve",
+    "repair:admin",
+}
+
+
+def _repair_store(request: Request) -> RepairHostedStore:
+    return RepairHostedStore(request.app.state.root_dir)
+
+
+def _require_repair_dashboard_permission(
+    database: PlatformDatabase,
+    user: UserAccount,
+    permission: str,
+) -> None:
+    permissions = {str(item) for item in user.metadata.get("permissions", [])}
+    if (
+        user.is_admin
+        or "repair:admin" in permissions
+        or "*" in permissions
+        or permission in permissions
+        or has_permission(user, permission, database=database)
+    ):
+        return
+    raise HTTPException(status_code=403, detail=f"Repair permission denied: {permission}")
+
+
+def _repair_dashboard_html(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.4.0-repair-1">'
+        "</head><body><div class=\"shell\"><header class=\"topbar\">"
+        "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.4</div>"
+        "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        + _link("/dashboard", "Projects")
+        + _link("/dashboard/repair", "Repair")
+        + _link("/dashboard/repair/approvals", "Repair approvals")
+        + _link("/dashboard/agent/reliability", "Reliability")
+        + "</nav></div></header><main class=\"content\">"
+        + "<aside class=\"research-disclaimer\">Hosted repair is operational. "
+        + "Repairs may retry workflows and regenerate derived artifacts from existing "
+        + "sources, but must not invent evidence, assay results, citations, molecules, "
+        + "graph facts, or biomedical conclusions.</aside>"
+        + f"<header class=\"page-heading\"><h1>{_h(title)}</h1></header>"
+        + body
+        + "</main></div></body></html>"
+    )
+
+
+def _repair_nav() -> str:
+    links = {
+        "Overview": "/dashboard/repair",
+        "Failed jobs": "/dashboard/repair/failed-jobs",
+        "Approvals": "/dashboard/repair/approvals",
+        "Executions": "/dashboard/repair/executions",
+        "Regression checks": "/dashboard/repair/regression-checks",
+        "Repair memory": "/dashboard/repair/memory",
+        "Guardrail failures": "/dashboard/repair/guardrail-failures",
+    }
+    return (
+        "<nav class=\"section\">"
+        + " ".join(_link(href, label) for label, href in links.items())
+        + "</nav>"
+    )
+
+
+def _repair_execution_table(executions: list[Any]) -> str:
+    return _table(
+        ["Execution", "Plan", "Status", "Approvals", "Regression checks"],
+        [
+            [
+                _link(
+                    f"/dashboard/repair/executions/{quote(execution.repair_execution_id)}",
+                    execution.repair_execution_id,
+                ),
+                _link(
+                    f"/dashboard/repair/plans/{quote(execution.repair_plan_id)}",
+                    execution.repair_plan_id,
+                ),
+                execution.status,
+                ", ".join(execution.approvals_requested),
+                ", ".join(execution.regression_check_ids),
+            ]
+            for execution in executions
+        ],
+        empty_message="No repair executions have been recorded.",
+    )
+
+
+def _repair_safe_json(payload: Any) -> str:
+    return f"<pre>{escape(json.dumps(_repair_sanitize(payload), indent=2, sort_keys=True))}</pre>"
+
+
+def _repair_text(value: Any) -> str:
+    return str(_repair_sanitize(value))
+
+
+def _repair_sanitize(value: Any) -> Any:
+    sanitized = sanitize_for_dashboard(redact_for_log(value))
+    if isinstance(sanitized, dict):
+        return {key: _repair_sanitize(item) for key, item in sanitized.items()}
+    if isinstance(sanitized, list):
+        return [_repair_sanitize(item) for item in sanitized]
+    if isinstance(sanitized, str):
+        return redact_secrets(sanitized)
+    return sanitized
+
+
+def _repair_diagnosis_or_404(store: RepairHostedStore, diagnosis_id: str) -> Any:
+    try:
+        return store.get_diagnosis(diagnosis_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Repair diagnosis not found.") from exc
+
+
+def _repair_plan_or_404(store: RepairHostedStore, repair_plan_id: str) -> Any:
+    try:
+        return store.get_plan(repair_plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Repair plan not found.") from exc
+
+
+def _repair_execution_or_404(store: RepairHostedStore, execution_id: str) -> Any:
+    try:
+        return store.get_execution(execution_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Repair execution not found.") from exc
+
+
 def _tool_runtime_permissions(snapshot: ToolDashboardSnapshot, user: UserAccount) -> set[str]:
     permissions = {str(item) for item in user.metadata.get("permissions", [])}
     if user.is_admin or "*" in permissions or "tool:admin" in permissions:
@@ -5702,9 +6191,9 @@ def _tool_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.3.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.4.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.2</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.4</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/tools", "Tools")

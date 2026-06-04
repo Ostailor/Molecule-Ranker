@@ -26,6 +26,7 @@ def test_tool_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/tools/skills",
         "/dashboard/tools/workflows",
         "/dashboard/tools/mcp-gateway",
+        "/dashboard/agent/reliability",
     ]:
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 303, path
@@ -85,6 +86,18 @@ def test_tool_dashboard_clean_app_does_not_show_seed_packages(tmp_path: Path) ->
     assert "pkg-quarantined-evidence" not in marketplace.text
     assert "No local/internal tool packages installed yet." in marketplace.text
     assert "No installed packages." in installed.text
+
+
+def test_agent_reliability_dashboard_shows_v24_repair_eval(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/agent/reliability")
+
+    assert response.status_code == 200, response.text
+    assert "Agent reliability dashboard" in response.text
+    assert "Repair eval metrics" in response.text
+    assert "Agents may not repair scientific truth" in response.text
 
 
 def test_tool_dashboard_shows_security_findings_and_redacts_secrets(tmp_path: Path) -> None:

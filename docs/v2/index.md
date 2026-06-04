@@ -1,13 +1,14 @@
-# V2.3 Enterprise Documentation
+# V2.4 Enterprise Documentation
 
-molecule-ranker V2.3 keeps the V2.0 validated enterprise discovery operating
-system intact, preserves the V2.1/V2.2 controlled Codex runtime and governed
-tool ecosystem, and adds specialist multi-agent scientific operations over
-approved, audited, deterministic molecule-ranker tool execution. V2.0
-stabilized the V1.9 platform for production enterprise use with release
-contracts, deployment controls, identity and access management, tenant
-isolation, validation evidence packages, disaster recovery, audit readiness,
-observability, and stable `/api/v2` and SDK surfaces.
+molecule-ranker V2.4 keeps the V2.0 validated enterprise discovery operating
+system intact, preserves the controlled Codex runtime and governed tool
+ecosystem, and extends specialist multi-agent scientific operations with
+self-evaluation, failure diagnosis, safe repair planning, bounded retry,
+repair memory, regression checks, and auditable repair reports. V2.0 stabilized
+the V1.9 platform for production enterprise use with release contracts,
+deployment controls, identity and access management, tenant isolation,
+validation evidence packages, disaster recovery, audit readiness, observability,
+and stable `/api/v2` and SDK surfaces.
 
 ## Required Boundaries
 
@@ -19,6 +20,8 @@ observability, and stable `/api/v2` and SDK surfaces.
   binding, or synthesizable.
 - Codex is an orchestration and summarization layer, not a source of scientific
   truth.
+- Agents may repair workflows. Agents may not repair scientific truth by
+  inventing missing data.
 - Model predictions, docking outputs, benchmark reports, and prospective
   validation demos are software/research artifacts, not clinical validation or
   biomedical proof.

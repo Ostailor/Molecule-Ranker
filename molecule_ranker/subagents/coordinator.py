@@ -155,6 +155,15 @@ class MultiAgentCoordinator:
                 user_goal=user_goal,
             )
         ]
+        repair_escalations = _repair_escalations(user_goal)
+        for escalation in repair_escalations:
+            self._audit(
+                audit_events,
+                "subagent_repair_escalated",
+                escalation["diagnostic_subagent_id"],
+                escalation["summary"],
+                escalation,
+            )
         if consensus[0].human_review_required:
             self._audit(
                 audit_events,
@@ -195,6 +204,7 @@ class MultiAgentCoordinator:
                 "audit_events": audit_events,
                 "visible_artifact_ids": visible_artifacts,
                 "human_review_triggers": _human_review_triggers(user_goal),
+                "repair_escalations": repair_escalations,
                 "supervisor_policy": {
                     "cannot": supervisor.metadata.get("cannot", []),
                     "high_risk_tool_categories": HIGH_RISK_TOOL_CATEGORIES,
@@ -314,9 +324,14 @@ class MultiAgentCoordinator:
     ) -> SubagentConsensus:
         failed_critiques = [critique for critique in critiques if not critique.passed]
         human_review_triggers = _human_review_triggers(user_goal)
+        repair_escalations = _repair_escalations(user_goal)
         human_review_required = bool(
             failed_critiques
             or human_review_triggers
+            or any(
+                item.get("required_for_unsafe_scientific_output")
+                for item in repair_escalations
+            )
             or mode in {"human_review_required", "consensus_required"}
             and failed_critiques
         )
@@ -359,6 +374,7 @@ class MultiAgentCoordinator:
             metadata={
                 "coordination_mode": mode,
                 "human_review_triggers": human_review_triggers,
+                "repair_escalations": repair_escalations,
             },
         )
 
@@ -565,8 +581,39 @@ def _human_review_triggers(user_goal: str) -> list[str]:
     ]
 
 
+def _repair_escalations(user_goal: str) -> list[dict[str, Any]]:
+    goal = user_goal.lower()
+    if not any(term in goal for term in ("repair", "failure", "failed", "diagnose")):
+        return []
+    escalations: list[dict[str, Any]] = [
+        {
+            "diagnostic_subagent_id": "platform-operator",
+            "summary": "PlatformOperator requested to diagnose operational repair failure.",
+            "repair_role": "FailureDiagnosisAgent",
+        }
+    ]
+    if any(term in goal for term in ("unsafe", "guardrail", "scientific output")):
+        escalations.append(
+            {
+                "diagnostic_subagent_id": "guardrail-sentinel",
+                "summary": (
+                    "GuardrailSentinel review required for unsafe scientific repair output."
+                ),
+                "repair_role": "GuardrailSentinel",
+                "required_for_unsafe_scientific_output": True,
+            }
+        )
+    return escalations
+
+
 def _requires_human_review(user_goal: str) -> bool:
-    return bool(_human_review_triggers(user_goal))
+    return bool(
+        _human_review_triggers(user_goal)
+        or any(
+            item.get("required_for_unsafe_scientific_output")
+            for item in _repair_escalations(user_goal)
+        )
+    )
 
 
 def _risk_level(user_goal: str) -> Literal["low", "medium", "high", "critical"]:

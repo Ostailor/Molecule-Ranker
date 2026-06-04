@@ -32,6 +32,7 @@ from molecule_ranker.server.routes import (
     integrations,
     platform,
     projects,
+    repair,
     review,
     subagents,
     webhooks,
@@ -67,7 +68,8 @@ OPENAPI_TAGS = [
     {"name": "v1-active-learning", "description": "V1 active-learning workflow endpoints."},
     {"name": "integrations", "description": "Versioned external research-system integrations."},
     {"name": "webhooks", "description": "Signed external integration webhook ingestion."},
-    {"name": "subagents", "description": "V2.3 hosted multi-agent scientific operations."},
+    {"name": "subagents", "description": "V2.4 hosted multi-agent scientific operations."},
+    {"name": "repair", "description": "V2.4 hosted repair diagnosis, approvals, and memory."},
     {"name": "platform", "description": "Hosted platform administration and audit."},
     {"name": "admin", "description": "Hosted operator health and audit endpoints."},
     {"name": "web", "description": "Server-rendered hosted dashboard."},
@@ -365,6 +367,7 @@ def create_app(
     app.include_router(experiments.router, prefix="/api/v2", dependencies=v2_dependencies)
     app.include_router(integrations.router, prefix="/api/v2", dependencies=v2_dependencies)
     app.include_router(agent.router, prefix="/api/v2")
+    app.include_router(repair.router, prefix="/api/v2", dependencies=v2_dependencies)
     app.include_router(subagents.router, prefix="/api/v2", dependencies=v2_dependencies)
     app.include_router(webhooks.router, prefix="/api/v2")
     return app

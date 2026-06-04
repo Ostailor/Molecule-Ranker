@@ -24,8 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_v14_version_and_contracts_are_declared() -> None:
     manifest = release_manifest()
 
-    assert __version__ == "2.3.0"
-    assert manifest["version"] == "2.3.0"
+    assert __version__ == "2.4.0"
+    assert manifest["version"] == "2.4.0"
     assert manifest["contracts"] == {
         "api": "api.v1",
         "artifacts": "artifacts.v1",
@@ -69,7 +69,7 @@ def test_version_endpoint_reports_v1_contracts(tmp_path: Path) -> None:
 
     payload = client.get("/version").json()
 
-    assert payload["version"] == "2.3.0"
+    assert payload["version"] == "2.4.0"
     assert payload["api_contract_version"] == API_CONTRACT_VERSION
     assert payload["artifact_contract_version"] == ARTIFACT_CONTRACT_VERSION
     assert payload["data_contract_version"] == DATA_CONTRACT_VERSION

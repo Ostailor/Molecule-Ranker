@@ -13,7 +13,7 @@ resource "kubernetes_namespace_v1" "molecule_ranker" {
     name = var.namespace
     labels = {
       "app.kubernetes.io/name"    = "molecule-ranker"
-      "app.kubernetes.io/version" = "2.3.0"
+      "app.kubernetes.io/version" = "2.4.0"
     }
   }
 }

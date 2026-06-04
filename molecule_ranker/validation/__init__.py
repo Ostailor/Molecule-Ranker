@@ -51,6 +51,11 @@ from molecule_ranker.validation.portfolio import (
     run_portfolio_guardrail_audit,
     run_portfolio_validation,
 )
+from molecule_ranker.validation.repair_guardrails import (
+    RepairGuardrailCaseResult,
+    RepairGuardrailValidationReport,
+    run_repair_guardrail_validation,
+)
 from molecule_ranker.validation.runner import check_forbidden_outputs, run_golden_workflows
 from molecule_ranker.validation.schemas import (
     ForbiddenOutputFinding,
@@ -96,6 +101,8 @@ __all__ = [
     "PortfolioGuardrailAuditReport",
     "PortfolioGuardrailFinding",
     "PortfolioValidationReport",
+    "RepairGuardrailCaseResult",
+    "RepairGuardrailValidationReport",
     "StructureGuardrailAuditReport",
     "StructureGuardrailFinding",
     "StructureValidationReport",
@@ -113,6 +120,7 @@ __all__ = [
     "run_model_validation",
     "run_portfolio_guardrail_audit",
     "run_portfolio_validation",
+    "run_repair_guardrail_validation",
     "run_structure_guardrail_audit",
     "run_structure_validation",
     "run_tool_ecosystem_validation",

@@ -790,13 +790,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "2.3.0":
-        return ReleaseCheck("version", "Version is 2.3.0", "pass", "Package version is 2.3.0.")
+    if __version__ == "2.4.0":
+        return ReleaseCheck("version", "Version is 2.4.0", "pass", "Package version is 2.4.0.")
     return ReleaseCheck(
         "version",
-        "Version is 2.3.0",
+        "Version is 2.4.0",
         "fail",
-        f"Package version is {__version__}, expected 2.3.0.",
+        f"Package version is {__version__}, expected 2.4.0.",
     )
 
 
@@ -1058,7 +1058,7 @@ def _check_readme(root: Path) -> ReleaseCheck:
     if not readme.exists():
         return ReleaseCheck("readme", "README updated", "fail", "README.md is missing.")
     text = readme.read_text(errors="ignore").lower()
-    required = ("v2.0", "enterprise discovery operating system", "no major new science")
+    required = ("2.4.0", "enterprise discovery operating system", "no major new science")
     missing = [phrase for phrase in required if phrase not in text]
     if "no medical advice" not in text and "does not provide medical advice" not in text:
         missing.append("no medical advice")
@@ -1067,10 +1067,10 @@ def _check_readme(root: Path) -> ReleaseCheck:
             "readme",
             "README updated",
             "fail",
-            "README.md is missing required V2.0 release language.",
+            "README.md is missing required current release language.",
             {"missing_phrases": missing},
         )
-    return ReleaseCheck("readme", "README updated", "pass", "README.md documents V2.0 scope.")
+    return ReleaseCheck("readme", "README updated", "pass", "README.md documents current scope.")
 
 
 def _check_docker_build_available(root: Path, *, run_commands: bool) -> ReleaseCheck:

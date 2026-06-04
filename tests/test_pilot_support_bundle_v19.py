@@ -23,7 +23,7 @@ def test_support_bundle_created_with_manifest(tmp_path: Path) -> None:
         assert "manifest.json" in names
         assert "readiness_report.json" in names
         manifest = json.loads(archive.read("manifest.json"))
-    assert manifest["version"] == "2.3.0"
+    assert manifest["version"] == "2.4.0"
     assert manifest["excluded"]["cache_payloads"] is True
     assert manifest["artifact_manifest_hashes"]
 

@@ -78,7 +78,7 @@ def seeded_tool_marketplace() -> ToolMarketplace:
 
     Real deployments can attach ``app.state.tool_marketplace``. The seeded
     marketplace keeps hosted pages useful in tests and local demos while
-    preserving the V2.2 default of no external marketplace network access.
+    preserving the V2.4 default of no external marketplace network access.
     """
 
     registry = ToolRegistryV2.default()

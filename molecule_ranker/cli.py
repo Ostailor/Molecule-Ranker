@@ -61,6 +61,14 @@ from molecule_ranker.developability.benchmark import (
     DevelopabilityBenchmarkError,
     benchmark_developability_file,
 )
+from molecule_ranker.engineering_repair import (
+    EngineeringFailureReport,
+    EngineeringRepairExecutor,
+    EngineeringRepairPlan,
+    diagnose_engineering_failures,
+    generate_regression_check_plan,
+    plan_engineering_repair,
+)
 from molecule_ranker.experimental import (
     ActiveLearningAgent,
     ExperimentalEvidenceAgent,
@@ -267,6 +275,10 @@ codex_engineering_app = typer.Typer(
     help="Codex-backed engineering automation and local check loops.",
     no_args_is_help=True,
 )
+engineering_app = typer.Typer(
+    help="Engineering repair mode for tests, lint, types, schema contracts, and docs checks.",
+    no_args_is_help=True,
+)
 db_app = typer.Typer(
     help="Initialize, migrate, and check the hosted platform metadata database.",
     no_args_is_help=True,
@@ -448,11 +460,19 @@ feedback_app = typer.Typer(
     no_args_is_help=True,
 )
 agent_app = typer.Typer(
-    help="V2.3 Codex runtime-agent and specialist multi-agent operations commands.",
+    help="V2.4 Codex runtime-agent and specialist multi-agent operations commands.",
+    no_args_is_help=True,
+)
+repair_app = typer.Typer(
+    help="V2.4 repair diagnosis, planning, execution, and eval commands.",
+    no_args_is_help=True,
+)
+repair_memory_app = typer.Typer(
+    help="Inspect and exchange V2.4 operational repair memory.",
     no_args_is_help=True,
 )
 subagents_app = typer.Typer(
-    help="V2.3 specialized Codex subagent operations commands.",
+    help="V2.4 specialized Codex subagent operations commands.",
     no_args_is_help=True,
 )
 subagents_session_app = typer.Typer(
@@ -460,11 +480,11 @@ subagents_session_app = typer.Typer(
     no_args_is_help=True,
 )
 marketplace_app = typer.Typer(
-    help="V2.2 local/internal governed tool marketplace commands.",
+    help="V2.4 local/internal governed tool marketplace commands.",
     no_args_is_help=True,
 )
 tool_app = typer.Typer(
-    help="V2.2 governed tool ecosystem commands.",
+    help="V2.4 governed tool ecosystem commands.",
     no_args_is_help=True,
 )
 tool_package_app = typer.Typer(
@@ -489,6 +509,7 @@ app.add_typer(experiment_app, name="experiment")
 app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(project_app, name="project")
 app.add_typer(codex_app, name="codex")
+app.add_typer(engineering_app, name="engineering")
 app.add_typer(db_app, name="db")
 app.add_typer(user_app, name="user")
 app.add_typer(auth_cli_app, name="auth")
@@ -518,6 +539,7 @@ app.add_typer(support_app, name="support")
 app.add_typer(ops_app, name="ops")
 app.add_typer(feedback_app, name="feedback")
 app.add_typer(agent_app, name="agent")
+app.add_typer(repair_app, name="repair")
 app.add_typer(subagents_app, name="subagents")
 app.add_typer(marketplace_app, name="marketplace")
 app.add_typer(tool_app, name="tool")
@@ -545,6 +567,7 @@ tool_app.add_typer(tool_package_app, name="package")
 tool_app.add_typer(tool_mcp_app, name="mcp")
 tool_app.add_typer(tool_skills_app, name="skills")
 tool_app.add_typer(tool_workflows_app, name="workflows")
+repair_app.add_typer(repair_memory_app, name="memory")
 subagents_app.add_typer(subagents_session_app, name="session")
 
 
@@ -602,13 +625,7 @@ def subagents_run(
         typer.Option("--skill", help="Built-in multi-agent skill to expand."),
     ] = None,
     autonomy: Annotated[
-        Literal[
-            "observe_only",
-            "suggest_only",
-            "execute_safe_tools",
-            "execute_with_approval",
-            "full_auto_restricted",
-        ],
+        str,
         typer.Option("--autonomy", help="Requested autonomy level."),
     ] = "suggest_only",
     dry_run: Annotated[
@@ -856,13 +873,7 @@ def agent_start(
     goal: Annotated[str, typer.Option("--goal", help="Research objective for the runtime agent.")],
     project_id: Annotated[str | None, typer.Option("--project-id")] = None,
     autonomy: Annotated[
-        Literal[
-            "observe_only",
-            "suggest_only",
-            "execute_safe_tools",
-            "execute_with_approval",
-            "full_auto_restricted",
-        ],
+        str,
         typer.Option("--autonomy", help="Runtime autonomy level."),
     ] = "suggest_only",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Plan only; do not execute.")] = False,
@@ -899,13 +910,7 @@ def agent_plan(
     goal: Annotated[str, typer.Option("--goal", help="Research objective for the runtime agent.")],
     project_id: Annotated[str | None, typer.Option("--project-id")] = None,
     autonomy: Annotated[
-        Literal[
-            "observe_only",
-            "suggest_only",
-            "execute_safe_tools",
-            "execute_with_approval",
-            "full_auto_restricted",
-        ],
+        str,
         typer.Option("--autonomy", help="Runtime autonomy level."),
     ] = "suggest_only",
     output_dir: Annotated[
@@ -934,11 +939,7 @@ def agent_plan(
 def agent_execute(
     plan: Annotated[Path, typer.Option("--plan", exists=True, dir_okay=False)],
     autonomy: Annotated[
-        Literal[
-            "execute_safe_tools",
-            "execute_with_approval",
-            "full_auto_restricted",
-        ],
+        str,
         typer.Option("--autonomy", help="Runtime execution mode."),
     ] = "execute_safe_tools",
     output_dir: Annotated[
@@ -1106,16 +1107,409 @@ def agent_audit(
 @agent_app.command("eval")
 def agent_eval(
     suite: Annotated[
-        Literal["runtime"],
+        str,
         typer.Option("--suite", help="Runtime-agent eval suite to run."),
     ] = "runtime",
 ) -> None:
     """Run runtime-agent evals with mocked Codex plans."""
 
+    if suite == "repair":
+        from molecule_ranker.runtime_agents.repair import run_repair_eval_suite
+
+        result = run_repair_eval_suite()
+        _echo_json(result.model_dump(mode="json"))
+        return
+
     from molecule_ranker.runtime_agents.evals import run_runtime_agent_eval_suite
 
-    result = run_runtime_agent_eval_suite(suite=suite)
+    result = run_runtime_agent_eval_suite(suite="runtime")
     _echo_json(result.model_dump(mode="json"))
+
+
+@repair_app.command("evaluate")
+def repair_evaluate_command(
+    session_id: Annotated[str | None, typer.Option("--session-id")] = None,
+    artifact: Annotated[
+        Path | None,
+        typer.Option("--artifact", exists=True, dir_okay=False, readable=True),
+    ] = None,
+    job_id: Annotated[str | None, typer.Option("--job-id")] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional self_evaluation.json path."),
+    ] = None,
+) -> None:
+    """Evaluate a repair-relevant session, artifact, or job."""
+
+    from molecule_ranker.agent_repair.evaluators import ArtifactEvaluator, WorkflowEvaluator
+
+    if artifact is None and session_id is None and job_id is None:
+        raise typer.BadParameter("Provide --artifact, --session-id, or --job-id.")
+    if artifact is not None:
+        payload = _read_cli_json(artifact)
+        evaluation = ArtifactEvaluator().evaluate(payload)
+    else:
+        workflow = {
+            "session_id": session_id,
+            "workflow_id": job_id or session_id or "workflow",
+            "job_id": job_id,
+            "artifacts_created": [],
+            "required_artifacts": [],
+            "audit_entries": [{"event_type": "repair_evaluate_cli"}],
+            "expected_next_step": "diagnose_or_continue",
+            "guardrails_passed": True,
+        }
+        evaluation = WorkflowEvaluator().evaluate(workflow)
+
+    payload = evaluation.model_dump(mode="json")
+    if output is not None:
+        _write_cli_json(output, payload)
+    _echo_json(payload)
+
+
+@repair_app.command("diagnose")
+def repair_diagnose_command(
+    failure_artifact: Annotated[
+        Path | None,
+        typer.Option("--failure-artifact", dir_okay=False, readable=True),
+    ] = None,
+    job_id: Annotated[str | None, typer.Option("--job-id")] = None,
+    tool_result: Annotated[
+        Path | None,
+        typer.Option("--tool-result", exists=True, dir_okay=False, readable=True),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional failure_diagnosis.json path."),
+    ] = None,
+) -> None:
+    """Diagnose a failed tool result, job, or missing/failed artifact."""
+
+    from molecule_ranker.agent_repair.diagnosis import FailureDiagnosisAgent
+
+    if failure_artifact is None and job_id is None and tool_result is None:
+        raise typer.BadParameter("Provide --failure-artifact, --job-id, or --tool-result.")
+    kwargs: dict[str, Any] = {}
+    if tool_result is not None:
+        kwargs["failed_tool_result"] = _read_cli_json(tool_result)
+    if job_id is not None:
+        kwargs["failed_job"] = {
+            "job_id": job_id,
+            "status": "failed",
+            "error": "synthetic job failure provided through repair CLI",
+        }
+    if failure_artifact is not None:
+        if failure_artifact.exists():
+            artifact_payload = _read_cli_json(failure_artifact)
+            if isinstance(artifact_payload, dict) and artifact_payload.get("exists") is False:
+                kwargs["missing_artifact"] = artifact_payload
+            elif isinstance(artifact_payload, dict) and (
+                artifact_payload.get("schema_valid") is False
+                or artifact_payload.get("contract_valid") is False
+                or artifact_payload.get("validation_errors")
+            ):
+                kwargs["failed_validation_report"] = artifact_payload
+            else:
+                kwargs["missing_artifact"] = {
+                    "artifact_id": str(
+                        artifact_payload.get("artifact_id", failure_artifact.stem)
+                    )
+                    if isinstance(artifact_payload, dict)
+                    else failure_artifact.stem,
+                    "path": str(failure_artifact),
+                }
+        else:
+            kwargs["missing_artifact"] = {
+                "artifact_id": failure_artifact.stem,
+                "path": str(failure_artifact),
+            }
+
+    diagnosis = FailureDiagnosisAgent().diagnose(**kwargs)
+    payload = diagnosis.model_dump(mode="json")
+    if output is not None:
+        _write_cli_json(output, payload)
+    _echo_json(payload)
+
+
+@repair_app.command("plan")
+def repair_plan_command(
+    diagnosis_path: Annotated[
+        Path,
+        typer.Option(
+            "--diagnosis",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to failure_diagnosis.json.",
+        ),
+    ],
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="suggest_only, safe_only, or with_approval."),
+    ] = "suggest_only",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional repair_plan.json path."),
+    ] = None,
+) -> None:
+    """Create a repair plan from a failure diagnosis."""
+
+    from molecule_ranker.agent_repair.repair_planner import RepairPlannerAgent
+    from molecule_ranker.agent_repair.schemas import FailureDiagnosis
+
+    mode_map = {
+        "suggest_only": "suggest_only",
+        "safe_only": "execute_safe_repairs",
+        "with_approval": "execute_with_approval",
+    }
+    if mode not in mode_map:
+        raise typer.BadParameter("--mode must be suggest_only, safe_only, or with_approval.")
+    diagnosis = FailureDiagnosis.model_validate(_read_cli_json(diagnosis_path))
+    plan = RepairPlannerAgent().plan_repair(
+        diagnosis,
+        user_autonomy_level=mode_map[mode],
+    )
+    payload = plan.model_dump(mode="json")
+    if output is not None:
+        _write_cli_json(output, payload)
+    _echo_json(payload)
+
+
+@repair_app.command("execute")
+def repair_execute_command(
+    repair_plan_path: Annotated[
+        Path,
+        typer.Option(
+            "--repair-plan",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to repair_plan.json.",
+        ),
+    ],
+    dry_run: Annotated[bool, typer.Option("--dry-run/--no-dry-run")] = True,
+    approve_safe: Annotated[
+        bool,
+        typer.Option("--approve-safe", help="Execute allowed safe repair actions."),
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional repair_execution.json path."),
+    ] = None,
+) -> None:
+    """Execute or dry-run a repair plan."""
+
+    from molecule_ranker.agent_repair.executor import RepairExecutor
+    from molecule_ranker.agent_repair.schemas import RepairPlan
+
+    plan = RepairPlan.model_validate(_read_cli_json(repair_plan_path))
+    mode = "dry_run" if dry_run else "execute_safe_repairs" if approve_safe else "suggest_only"
+    execution = RepairExecutor().execute(plan, mode=mode)
+    payload = execution.model_dump(mode="json")
+    if output is not None:
+        _write_cli_json(output, payload)
+    _echo_json(payload)
+
+
+@repair_app.command("regression")
+def repair_regression_command(
+    repair_execution_path: Annotated[
+        Path,
+        typer.Option(
+            "--repair-execution",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to repair_execution.json.",
+        ),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional regression_checks.json path."),
+    ] = None,
+) -> None:
+    """Run deterministic regression checks for a repair execution."""
+
+    from molecule_ranker.agent_repair.regression import RegressionCheckAgent
+    from molecule_ranker.agent_repair.schemas import RepairExecution
+
+    execution = RepairExecution.model_validate(_read_cli_json(repair_execution_path))
+    checks = RegressionCheckAgent().run_checks(
+        repair_execution=execution,
+        changed_artifacts=[
+            {"artifact_id": artifact_id, "exists": True, "schema_valid": True}
+            for artifact_id in [*execution.artifacts_created, *execution.artifacts_modified]
+        ],
+        affected_workflow={
+            "workflow_smoke_passed": execution.status
+            not in {"failed", "cancelled", "guardrail_blocked"},
+            "guardrail_passed": execution.status != "guardrail_blocked",
+            "expected_next_step_available": True,
+        },
+        check_types=[
+            "schema_contract",
+            "artifact_completeness",
+            "scientific_integrity",
+            "guardrail",
+            "permissions",
+            "workflow_smoke",
+        ],
+    )
+    payload = [check.model_dump(mode="json") for check in checks]
+    if output is not None:
+        _write_cli_json(output, payload)
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+@repair_app.command("eval")
+def repair_eval_command(
+    suite: Annotated[
+        str,
+        typer.Option("--suite", help="Repair eval suite to run."),
+    ] = "default",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Optional JSON output path."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Run V2.4 repair-loop evals."""
+
+    from molecule_ranker.agent_repair.evals import (
+        run_repair_eval_suite,
+        summarize_eval_metrics,
+    )
+
+    try:
+        result = run_repair_eval_suite(suite=suite)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    payload = result.model_dump(mode="json")
+    if output is not None:
+        _write_cli_json(output, payload)
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(summarize_eval_metrics(result))
+
+
+@repair_memory_app.command("list")
+def repair_memory_list_command(
+    memory_path: Annotated[
+        Path,
+        typer.Option("--memory", dir_okay=False, help="Repair memory JSON file."),
+    ] = Path(".molecule-ranker/repair/repair_memory.json"),
+) -> None:
+    """List repair memory records."""
+
+    memory = _load_repair_memory(memory_path)
+    _echo_json(memory.export_repair_memory())
+
+
+@repair_memory_app.command("get")
+def repair_memory_get_command(
+    signature: Annotated[str, typer.Option("--signature", help="Failure signature.")],
+    memory_path: Annotated[
+        Path,
+        typer.Option("--memory", dir_okay=False, help="Repair memory JSON file."),
+    ] = Path(".molecule-ranker/repair/repair_memory.json"),
+) -> None:
+    """Get repair memory recommendations for a failure signature."""
+
+    memory = _load_repair_memory(memory_path)
+    records = memory.get_repair_recommendations(signature)
+    _echo_json({"records": [record.model_dump(mode="json") for record in records]})
+
+
+@repair_memory_app.command("export")
+def repair_memory_export_command(
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Repair memory export path."),
+    ],
+    memory_path: Annotated[
+        Path,
+        typer.Option("--memory", dir_okay=False, help="Repair memory JSON file."),
+    ] = Path(".molecule-ranker/repair/repair_memory.json"),
+) -> None:
+    """Export repair memory."""
+
+    memory = _load_repair_memory(memory_path)
+    payload = memory.export_repair_memory()
+    _write_cli_json(output, payload)
+    _echo_json(payload)
+
+
+@repair_memory_app.command("import")
+def repair_memory_import_command(
+    input_path: Annotated[
+        Path,
+        typer.Option("--input", exists=True, dir_okay=False, readable=True),
+    ],
+    memory_path: Annotated[
+        Path,
+        typer.Option("--memory", dir_okay=False, help="Repair memory JSON file."),
+    ] = Path(".molecule-ranker/repair/repair_memory.json"),
+) -> None:
+    """Import repair memory records."""
+
+    memory = _load_repair_memory(memory_path)
+    imported = memory.import_repair_memory(_read_cli_json(input_path))
+    _write_cli_json(memory_path, memory.export_repair_memory())
+    _echo_json({"imported_count": len(imported), "memory": memory.export_repair_memory()})
+
+
+@repair_app.command("report")
+def repair_report_command(
+    repair_execution_path: Annotated[
+        Path,
+        typer.Option(
+            "--repair-execution",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Path to repair_execution.json.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", dir_okay=False, help="Output repair_report.md path."),
+    ],
+) -> None:
+    """Generate a markdown repair report from repair artifacts."""
+
+    from molecule_ranker.agent_repair.reports import render_repair_report_markdown
+    from molecule_ranker.agent_repair.schemas import (
+        FailureDiagnosis,
+        RegressionCheck,
+        RepairExecution,
+        RepairPlan,
+    )
+
+    base_dir = repair_execution_path.parent
+    execution = RepairExecution.model_validate(_read_cli_json(repair_execution_path))
+    diagnosis = _load_optional_model(base_dir / "failure_diagnosis.json", FailureDiagnosis)
+    plan = _load_optional_model(base_dir / "repair_plan.json", RepairPlan)
+    regression_payload = (
+        _read_cli_json(base_dir / "regression_checks.json")
+        if (base_dir / "regression_checks.json").exists()
+        else []
+    )
+    regression_checks = [
+        RegressionCheck.model_validate(item)
+        for item in regression_payload
+        if isinstance(item, dict)
+    ]
+    markdown = render_repair_report_markdown(
+        failure_diagnosis=diagnosis,
+        repair_plan=plan,
+        repair_execution=execution,
+        regression_checks=regression_checks,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(markdown, encoding="utf-8")
+    _echo_json({"status": "succeeded", "output": str(output)})
 
 
 @agent_app.command("explain")
@@ -1153,7 +1547,7 @@ def agent_explain(
 def agent_specialists(
     json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
 ) -> None:
-    """List V2.3 specialist Codex subagent roles."""
+    """List V2.4 specialist Codex subagent roles."""
 
     from molecule_ranker.runtime_agents.multi_agent import specialist_roster_summary
 
@@ -1172,7 +1566,7 @@ def agent_specialists(
 def agent_delegate(
     specialist_id: Annotated[
         str,
-        typer.Option("--specialist-id", help="V2.3 specialist agent ID."),
+        typer.Option("--specialist-id", help="V2.4 specialist agent ID."),
     ],
     goal: Annotated[str, typer.Option("--goal", help="Delegated specialist objective.")],
     project_id: Annotated[str | None, typer.Option("--project-id")] = None,
@@ -1185,13 +1579,7 @@ def agent_delegate(
         typer.Option("--tool-name", help="Approved runtime tool to allow for this task."),
     ] = None,
     autonomy: Annotated[
-        Literal[
-            "dry_run",
-            "suggest_only",
-            "execute_safe_tools",
-            "execute_with_approval",
-            "full_auto_restricted",
-        ],
+        str,
         typer.Option("--autonomy", help="Runtime execution mode."),
     ] = "dry_run",
     output_dir: Annotated[
@@ -1199,7 +1587,7 @@ def agent_delegate(
         typer.Option("--output-dir", file_okay=False, help="Directory for runtime artifacts."),
     ] = Path(".molecule-ranker/runtime-agent"),
 ) -> None:
-    """Delegate a task to a V2.3 specialist and optionally execute approved tools."""
+    """Delegate a task to a V2.4 specialist and optionally execute approved tools."""
 
     from molecule_ranker.runtime_agents.multi_agent import MultiAgentScientificOrchestrator
     from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
@@ -2028,7 +2416,7 @@ def tool_package_validate_command(
 @tool_package_app.command("install")
 def tool_package_install_command(
     path: Annotated[Path, typer.Option("--path", exists=True, help="Local package path.")],
-    source: Annotated[Literal["local"], typer.Option("--source")] = "local",
+    source: Annotated[str, typer.Option("--source")] = "local",
     json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
 ) -> None:
     """Install a local tool package into quarantine."""
@@ -3387,6 +3775,34 @@ def validate_guardrails_command(
         raise typer.Exit(code=1)
 
 
+@validate_app.command("repair-guardrails")
+def validate_repair_guardrails_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run V2.4 repair-specific red-team guardrail validation."""
+    from molecule_ranker.validation import run_repair_guardrail_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "repair_guardrails"
+    report = run_repair_guardrail_validation(output_dir)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Repair guardrail validation: {report.status}")
+        typer.echo(
+            f"Red-team cases blocked: {report.blocked_count}/{len(report.red_team_results)}"
+        )
+        typer.echo(f"Safe repair cases allowed: {report.allowed_count}/{len(report.safe_results)}")
+        typer.echo(f"JSON: {output_dir / 'repair_guardrail_validation.json'}")
+        typer.echo(f"Markdown: {output_dir / 'repair_guardrail_validation.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
 @validate_app.command("tools")
 def validate_tools_command(
     root_dir: Annotated[
@@ -3395,7 +3811,7 @@ def validate_tools_command(
     ] = Path("."),
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run the V2.2 governed tool ecosystem validation workflow."""
+    """Run the V2.4 governed tool ecosystem validation workflow."""
     from molecule_ranker.validation.tools import run_tool_ecosystem_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "tools"
@@ -3459,7 +3875,7 @@ def validate_models_command(
         typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
     ] = Path("."),
     fixture: Annotated[
-        Literal["golden", "leakage", "uncalibrated_overclaim", "fake_prediction_evidence"],
+        str,
         typer.Option("--fixture", help="Synthetic model-validation fixture to run."),
     ] = "golden",
     json_output: Annotated[bool, typer.Option("--json")] = False,
@@ -3468,7 +3884,7 @@ def validate_models_command(
     from molecule_ranker.validation import run_model_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "models"
-    report = run_model_validation(output_dir=output_dir, fixture=fixture)
+    report = run_model_validation(output_dir=output_dir, fixture=cast(Any, fixture))
     payload = report.as_dict()
     if json_output:
         _echo_json(payload)
@@ -3490,7 +3906,7 @@ def validate_structure_command(
         typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
     ] = Path("."),
     fixture: Annotated[
-        Literal["golden", "overclaim", "fake_docking_score", "fake_binding_site_source"],
+        str,
         typer.Option("--fixture", help="Synthetic structure-validation fixture to run."),
     ] = "golden",
     json_output: Annotated[bool, typer.Option("--json")] = False,
@@ -3499,7 +3915,7 @@ def validate_structure_command(
     from molecule_ranker.validation import run_structure_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "structure"
-    report = run_structure_validation(output_dir=output_dir, fixture=fixture)
+    report = run_structure_validation(output_dir=output_dir, fixture=cast(Any, fixture))
     payload = report.as_dict()
     if json_output:
         _echo_json(payload)
@@ -3521,12 +3937,7 @@ def validate_portfolio_command(
         typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
     ] = Path("."),
     fixture: Annotated[
-        Literal[
-            "golden",
-            "fake_evidence",
-            "generated_without_approval",
-            "protocol_text",
-        ],
+        str,
         typer.Option("--fixture", help="Synthetic portfolio-validation fixture to run."),
     ] = "golden",
     json_output: Annotated[bool, typer.Option("--json")] = False,
@@ -3535,7 +3946,7 @@ def validate_portfolio_command(
     from molecule_ranker.validation import run_portfolio_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "portfolio"
-    report = run_portfolio_validation(output_dir=output_dir, fixture=fixture)
+    report = run_portfolio_validation(output_dir=output_dir, fixture=cast(Any, fixture))
     payload = report.as_dict()
     if json_output:
         _echo_json(payload)
@@ -3557,7 +3968,7 @@ def validate_graph_command(
         typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
     ] = Path("."),
     fixture: Annotated[
-        Literal["golden", "fake_relation", "overclaim", "causality_claim"],
+        str,
         typer.Option("--fixture", help="Synthetic graph-validation fixture to run."),
     ] = "golden",
     json_output: Annotated[bool, typer.Option("--json")] = False,
@@ -3566,7 +3977,7 @@ def validate_graph_command(
     from molecule_ranker.validation import run_graph_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "graph"
-    report = run_graph_validation(output_dir=output_dir, fixture=fixture)
+    report = run_graph_validation(output_dir=output_dir, fixture=cast(Any, fixture))
     payload = report.as_dict()
     if json_output:
         _echo_json(payload)
@@ -3588,7 +3999,7 @@ def validate_hypotheses_command(
         typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
     ] = Path("."),
     fixture: Annotated[
-        Literal["golden", "invented_relation", "protocol_text", "generated_activity_claim"],
+        str,
         typer.Option("--fixture", help="Synthetic hypothesis-validation fixture to run."),
     ] = "golden",
     json_output: Annotated[bool, typer.Option("--json")] = False,
@@ -3597,7 +4008,7 @@ def validate_hypotheses_command(
     from molecule_ranker.validation import run_hypothesis_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "hypotheses"
-    report = run_hypothesis_validation(output_dir=output_dir, fixture=fixture)
+    report = run_hypothesis_validation(output_dir=output_dir, fixture=cast(Any, fixture))
     payload = report.as_dict()
     if json_output:
         _echo_json(payload)
@@ -3620,7 +4031,7 @@ def validate_campaign_command(
         typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
     ] = Path("."),
     fixture: Annotated[
-        Literal["golden", "protocol_text", "generated_no_review_gate", "codex_invented_cost"],
+        str,
         typer.Option("--fixture", help="Synthetic campaign-validation fixture to run."),
     ] = "golden",
     json_output: Annotated[bool, typer.Option("--json")] = False,
@@ -3629,7 +4040,7 @@ def validate_campaign_command(
     from molecule_ranker.validation import run_campaign_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "campaign"
-    report = run_campaign_validation(output_dir=output_dir, fixture=fixture)
+    report = run_campaign_validation(output_dir=output_dir, fixture=cast(Any, fixture))
     payload = report.as_dict()
     if json_output:
         _echo_json(payload)
@@ -4687,7 +5098,7 @@ def graph_export_command(
         typer.Option("--output", "-o", help="Output file, or output directory for CSV export."),
     ] = Path("graph_export.json"),
     export_format: Annotated[
-        Literal["json", "csv", "ttl"],
+        str,
         typer.Option("--format", help="Export format."),
     ] = "json",
 ) -> None:
@@ -4697,7 +5108,7 @@ def graph_export_command(
     if graph_path is None:
         raise typer.BadParameter("--graph is required.")
     graph = _load_knowledge_graph_cli(graph_path)
-    target = export_graph(graph, output, export_format)
+    target = export_graph(graph, output, cast(Any, export_format))
     typer.echo(str(target))
 
 
@@ -5222,7 +5633,7 @@ def hypothesis_rank_command(
 def hypothesis_review_command(
     hypothesis_id: Annotated[str, typer.Option("--hypothesis-id", help="Hypothesis ID.")],
     decision: Annotated[
-        Literal["accept_for_planning", "reject", "needs_more_evidence", "hold"],
+        str,
         typer.Option("--decision", help="Review decision."),
     ],
     reviewer_id: Annotated[str, typer.Option("--reviewer-id", help="Reviewer ID.")],
@@ -5461,7 +5872,7 @@ def campaign_plan_command(
         float | None, typer.Option("--budget-compute-units", min=0.0)
     ] = None,
     strategy: Annotated[
-        Literal["balanced", "safety_first", "learning_value", "budget_limited"],
+        str,
         typer.Option("--strategy"),
     ] = "balanced",
     hypotheses: Annotated[
@@ -5673,16 +6084,7 @@ def campaign_status_command(
 def campaign_update_work_package_command(
     work_package_id: Annotated[str, typer.Option("--work-package-id")],
     status: Annotated[
-        Literal[
-            "proposed",
-            "approved",
-            "blocked",
-            "ready",
-            "in_progress",
-            "completed",
-            "cancelled",
-            "failed",
-        ],
+        str,
         typer.Option("--status"),
     ],
     actor: Annotated[str, typer.Option("--actor")],
@@ -9139,7 +9541,7 @@ def model_dataset_build(
     target_symbol: Annotated[str | None, typer.Option("--target-symbol")] = None,
     disease_name: Annotated[str | None, typer.Option("--disease-name")] = None,
     label_type: Annotated[
-        Literal["binary", "regression"],
+        str,
         typer.Option("--label-type", help="Endpoint label type."),
     ] = "binary",
     output_dir: Annotated[
@@ -9197,11 +9599,11 @@ def model_train(
         typer.Option("--dataset", exists=True, file_okay=True, dir_okay=False, readable=True),
     ],
     model_type: Annotated[
-        Literal["random_forest", "logistic_regression", "dummy"],
+        str,
         typer.Option("--model-type"),
     ] = "random_forest",
     split_strategy: Annotated[
-        Literal["scaffold", "time_based", "random"],
+        str,
         typer.Option("--split-strategy"),
     ] = "scaffold",
     output_dir: Annotated[
@@ -10016,12 +10418,7 @@ def project_serve(
 @codex_permissions_app.command("generate")
 def codex_permissions_generate(
     profile: Annotated[
-        Literal[
-            "read_only_runtime",
-            "workspace_write_runtime",
-            "integration_readonly_runtime",
-            "engineering_runtime",
-        ],
+        str,
         typer.Option("--profile", help="Managed Codex permission profile name."),
     ],
     runtime_work_dir: Annotated[
@@ -10060,7 +10457,7 @@ def codex_permissions_generate(
     )
 
     generated = generate_codex_permission_profile(
-        profile,
+        cast(Any, profile),
         runtime_work_dir=runtime_work_dir,
         allowed_artifact_dir=allowed_artifact_dir,
         approved_domains=approved_domain,
@@ -10757,6 +11154,187 @@ def codex_engineering_plan(
         audit_log=audit_log,
     )
     _print_codex_response(response, json_output=json_output)
+
+
+@engineering_app.command("diagnose")
+def engineering_diagnose(
+    test_output: Annotated[
+        Path,
+        typer.Option(
+            "--test-output",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Captured test, lint, typecheck, schema, or docs-check output.",
+        ),
+    ],
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Diagnose engineering check failures with Codex engineering guardrails."""
+    try:
+        report = diagnose_engineering_failures(test_output)
+        destination = output_path or Path("engineering_failure_report.json")
+        _write_json_model(destination, report)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "status": "succeeded",
+        "failure_report_id": report.failure_report_id,
+        "failure_count": len(report.failures),
+        "output_path": str(destination),
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Engineering diagnosis failures: {len(report.failures)}")
+    typer.echo(f"Failure report written: {destination}")
+
+
+@engineering_app.command("repair-plan")
+def engineering_repair_plan(
+    failure_report: Annotated[
+        Path,
+        typer.Option(
+            "--failure-report",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create a dry-run-first engineering repair plan from a failure report."""
+    try:
+        report = EngineeringFailureReport.model_validate(json.loads(failure_report.read_text()))
+        plan = plan_engineering_repair(report)
+        destination = output_path or Path("engineering_repair_plan.json")
+        _write_json_model(destination, plan)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "status": "succeeded",
+        "repair_plan_id": plan.repair_plan_id,
+        "action_count": len(plan.actions),
+        "regression_commands": plan.regression_commands,
+        "output_path": str(destination),
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Engineering repair actions: {len(plan.actions)}")
+    typer.echo(f"Repair plan written: {destination}")
+
+
+@engineering_app.command("run-repair")
+def engineering_run_repair(
+    plan_path: Annotated[
+        Path,
+        typer.Option(
+            "--plan",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    cwd: Annotated[Path, typer.Option("--cwd", file_okay=False, dir_okay=True)] = Path("."),
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run/--no-dry-run")] = True,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Allow code-writing repair actions."),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run or preview an engineering repair plan. Dry-run is the default."""
+    try:
+        plan = EngineeringRepairPlan.model_validate(json.loads(plan_path.read_text()))
+        report = EngineeringRepairExecutor(cwd=cwd).run_repair(
+            plan,
+            dry_run=dry_run,
+            apply=apply,
+        )
+        destination = output_path or Path("engineering_repair_execution.json")
+        _write_json_model(destination, report)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = {
+        "status": report.status,
+        "execution_id": report.execution_id,
+        "dry_run": report.dry_run,
+        "applied": report.applied,
+        "output_path": str(destination),
+    }
+    if json_output:
+        _echo_json(payload)
+        if report.status == "rejected":
+            raise typer.Exit(code=1)
+        return
+    typer.echo(f"Engineering repair status: {report.status}")
+    typer.echo(f"Execution report written: {destination}")
+    if report.status == "rejected":
+        raise typer.Exit(code=1)
+
+
+@engineering_app.command("regression-check")
+def engineering_regression_check(
+    failure_report: Annotated[
+        Path | None,
+        typer.Option(
+            "--failure-report",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", file_okay=True, dir_okay=False, writable=True),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Generate safe engineering regression commands without executing them."""
+    try:
+        report = (
+            EngineeringFailureReport.model_validate(json.loads(failure_report.read_text()))
+            if failure_report is not None
+            else None
+        )
+        payload = generate_regression_check_plan(report)
+        if output_path is not None:
+            _write_cli_json(output_path, payload)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(payload)
+        if payload["status"] == "rejected":
+            raise typer.Exit(code=1)
+        return
+    typer.echo("Engineering regression commands:")
+    for command in payload["commands"]:
+        typer.echo(f"- {' '.join(command)}")
+    if output_path is not None:
+        typer.echo(f"Regression check plan written: {output_path}")
+    if payload["status"] == "rejected":
+        raise typer.Exit(code=1)
 
 
 @review_app.command("create")
@@ -15653,6 +16231,21 @@ def _write_cli_json(path: Path, payload: Any) -> None:
         json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
+
+
+def _load_optional_model(path: Path, model_type: type[BaseModel]) -> Any | None:
+    if not path.exists():
+        return None
+    return model_type.model_validate(_read_cli_json(path))
+
+
+def _load_repair_memory(path: Path) -> Any:
+    from molecule_ranker.agent_repair.memory import RepairMemory
+
+    memory = RepairMemory()
+    if path.exists():
+        memory.import_repair_memory(_read_cli_json(path))
+    return memory
 
 
 def _evaluation_sources_from_run(run_dir: Path) -> dict[str, Path]:
