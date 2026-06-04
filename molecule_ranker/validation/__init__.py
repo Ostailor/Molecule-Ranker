@@ -65,6 +65,11 @@ from molecule_ranker.validation.structure import (
     run_structure_guardrail_audit,
     run_structure_validation,
 )
+from molecule_ranker.validation.tools import (
+    ToolValidationCheck,
+    ToolValidationReport,
+    run_tool_ecosystem_validation,
+)
 
 __all__ = [
     "ForbiddenOutputFinding",
@@ -94,6 +99,8 @@ __all__ = [
     "StructureGuardrailAuditReport",
     "StructureGuardrailFinding",
     "StructureValidationReport",
+    "ToolValidationCheck",
+    "ToolValidationReport",
     "check_forbidden_outputs",
     "get_golden_workflow",
     "list_golden_workflows",
@@ -108,6 +115,7 @@ __all__ = [
     "run_portfolio_validation",
     "run_structure_guardrail_audit",
     "run_structure_validation",
+    "run_tool_ecosystem_validation",
     "run_golden_workflows",
     "run_graph_guardrail_audit",
     "run_graph_validation",

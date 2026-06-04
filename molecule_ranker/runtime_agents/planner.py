@@ -10,6 +10,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from molecule_ranker.runtime_agents.schemas import RiskLevel, RuntimeActionPlan, RuntimeActionStep
+from molecule_ranker.runtime_agents.tool_discovery import DynamicToolDiscovery
 from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
 
 DEFAULT_FORBIDDEN_ACTIONS = [
@@ -148,7 +149,20 @@ class CodexRuntimePlanner:
         user_permissions: set[str] | list[str] | None = None,
         autonomy_level: str = "suggest_only",
     ) -> RuntimeActionPlan:
-        allowed_tool_names = allowed_tools or self.registry.tool_names()
+        permission_set = set(user_permissions or [])
+        if allowed_tools is None:
+            discovery = DynamicToolDiscovery(registry=self.registry).discover(
+                user_goal=user_goal,
+                project_context=project_context,
+                user_permissions=permission_set,
+                policy_constraints=policy_constraints,
+                project_id=project_id,
+                org_id=org_id,
+                user_id=user_id,
+            )
+            allowed_tool_names = discovery.selected_tool_names
+        else:
+            allowed_tool_names = allowed_tools
         context = _PlannerContext(
             user_goal=user_goal,
             session_id=session_id,
@@ -159,7 +173,7 @@ class CodexRuntimePlanner:
             allowed_tools=allowed_tool_names,
             current_artifacts=current_artifacts or [],
             policy_constraints=policy_constraints or [],
-            user_permissions=set(user_permissions or []),
+            user_permissions=permission_set,
             autonomy_level=autonomy_level,
         )
         prompt = self._build_prompt(context)
@@ -205,8 +219,17 @@ class CodexRuntimePlanner:
                     "policy_tags": spec.policy_tags,
                     "side_effect_level": spec.side_effect_level,
                     "requires_approval_by_default": spec.requires_approval_by_default,
+                    "tool_package": spec.metadata.get("tool_package"),
+                    "tool_policy": spec.metadata.get("tool_policy"),
                 }
                 for spec in allowed_specs
+            ],
+            "approved_catalog_rules": [
+                "Codex may select approved catalog tools only.",
+                "Codex cannot invent tools.",
+                "Codex cannot install unapproved tools.",
+                "Codex cannot bypass tool policies, RBAC, approvals, sandbox profiles, "
+                "or artifact validation.",
             ],
             "forbidden_actions": DEFAULT_FORBIDDEN_ACTIONS,
             "required_scientific_guardrails": [
@@ -289,6 +312,17 @@ class CodexRuntimePlanner:
             if spec is None:
                 validation_errors.append(f"Tool does not exist in registry: {step.tool_name}")
                 continue
+            if not self.registry.tool_allowed_in_context(
+                spec,
+                org_id=context.org_id,
+                project_id=context.project_id,
+                user_id=context.user_id,
+                user_permissions=context.user_permissions,
+            ):
+                validation_errors.append(
+                    f"Tool is not approved for this project/org context: {step.tool_name}"
+                )
+                continue
             missing_permissions = [
                 permission
                 for permission in spec.required_permissions
@@ -323,6 +357,8 @@ class CodexRuntimePlanner:
                 "required_permissions": spec.required_permissions,
                 "side_effect_level": spec.side_effect_level,
                 "policy_tags": spec.policy_tags,
+                "tool_package": spec.metadata.get("tool_package"),
+                "tool_policy": spec.metadata.get("tool_policy"),
             }
 
         unsafe_warnings = _unsafe_output_warnings(plan)
@@ -343,6 +379,12 @@ class CodexRuntimePlanner:
         plan.metadata = {
             **plan.metadata,
             "tool_specs": tool_specs,
+            "runtime_context": {
+                "project_id": context.project_id,
+                "org_id": context.org_id,
+                "user_id": context.user_id,
+                "user_permissions": sorted(context.user_permissions),
+            },
             "planner": "codex_runtime_planner",
             "sandbox_mode": "workspace-write" if self.controlled_worker_mode else "read-only",
         }

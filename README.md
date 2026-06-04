@@ -2,8 +2,11 @@
 
 `molecule-ranker` is a validated enterprise discovery operating system for
 internal research teams running source-backed molecule ranking and research
-operations. V2.1 is the controlled Codex runtime-agent release. It keeps the
-V2.0 enterprise-stable platform intact and upgrades Codex CLI from guarded
+operations. V2.2 adds a governed Codex tool ecosystem on top of the controlled
+V2.1 runtime-agent release. It keeps the V2.0 enterprise-stable platform intact
+and lets Codex dynamically discover and select approved internal tool packs
+through policy, RBAC, approvals, sandbox profiles, artifact validation, and
+audit controls. V2.1 already upgraded Codex CLI from guarded
 summarization/orchestration into a runtime agent backbone that can perform
 molecule-ranker tasks only through approved, audited, deterministic tools. V2.0
 stabilized the V1.9 pilot-hardened platform for enterprise release with stable release
@@ -12,7 +15,7 @@ and access controls, tenant/project isolation, validation evidence packages,
 operational runbooks, disaster recovery, governance and audit readiness,
 performance and reliability targets, release certification workflows, stable
 APIs and SDK, enterprise admin controls, full end-to-end synthetic demo
-workflows, and V2.0 documentation and training. V2.1 does not add major new
+workflows, and V2.0 documentation and training. V2.2 does not add major new
 science capabilities, and it keeps all scientific guardrails intact. V1.9
 already added enterprise/internal pilot hardening. V1.8 already added scientific evaluation benchmark suites and
 prospective validation analytics. V1.7 already added closed-loop campaign
@@ -26,18 +29,19 @@ reproducibility metadata, pose QC, consensus rescoring, interaction profiles,
 structure-aware generated molecule filtering, report cards, and hosted
 structure job guardrails. V1.2 already provides a formal predictive model
 plugin interface, calibrated assay-specific surrogate model artifacts, and
-hosted model training and validation job surfaces. The V2.1 capability set
+hosted model training and validation job surfaces. The V2.2 capability set
 therefore includes source-backed ranking, generated hypotheses,
 developability, experiments, review, Codex backbone, integrations, models,
 structure workflows, portfolios, graphs, hypotheses, campaigns, evaluations,
-enterprise operations, and controlled Codex runtime tool execution. V1.1 already supports AgentGraph scientific design
+enterprise operations, controlled Codex runtime tool execution, and governed
+Codex tool packaging/discovery. V1.1 already supports AgentGraph scientific design
 workflows, generated-molecule report cards, uncertainty/diversity/readiness
 triage, generator benchmarking, source-backed ranking, generated molecule
 hypotheses, developability triage, literature evidence, experimental feedback,
 review workflows, Codex-backed orchestration, hosted platform mode, and guarded
 external integrations.
 
-V2.1 is for internal research use only. It is not a regulated clinical product.
+V2.2 is for internal research use only. It is not a regulated clinical product.
 It does not provide medical advice, synthesis instructions, lab protocols,
 dosing, or patient treatment guidance. It does not claim that molecules cure,
 treat, are safe, bind, inhibit, activate, or are active. Docking scores are not
@@ -68,7 +72,7 @@ validation artifacts are software/process validation artifacts, not clinical
 validation, benchmark proof, prospective validation proof, assay results, or
 molecule activity/safety/efficacy evidence.
 
-Given a disease name, V2.1 resolves the disease through public biomedical data
+Given a disease name, V2.2 resolves the disease through public biomedical data
 sources, discovers evidence-backed targets, retrieves existing molecules linked
 to those targets, retrieves real literature evidence, ranks molecules as
 transparent research hypotheses, and can optionally generate
@@ -78,23 +82,29 @@ actives, gain direct experimental evidence only from exact linked imported
 results for the tested structure, and are ranked separately from existing
 evidence-backed molecules unless explicitly requested otherwise.
 
-## Current Scope Through V2.1
+## Current Scope Through V2.2
 
-V2.1 implements existing-molecule ranking, opt-in generated hypotheses,
+V2.2 implements existing-molecule ranking, opt-in generated hypotheses,
 developability-aware computational triage, expert review workflows, and an
 experimental feedback loop from user-imported assay result files, with Codex CLI
 available as a guarded orchestration layer, hosted-mode platform services, and
-external integration primitives. V2.1 adds `CodexRuntimeAgent`, `ActionPlanner`,
+external integration primitives. V2.1 added `CodexRuntimeAgent`, `ActionPlanner`,
 `ToolRegistry`, `PolicyEngine`, `ApprovalGate`, `ActionExecutor`,
 `ArtifactValidator`, `GuardrailChecker`, and `AuditLogger` so Codex can execute
 multi-step molecule-ranker workflows only through approved deterministic tools.
+V2.2 adds governed installable `ToolPackage`/`ToolManifest`/`ToolVersion`
+records, signed manifest hash validation, security scans, approval records,
+internal MCP-compatible gateway discovery, workflow skill packs, local/internal
+marketplace listing, per-tool policy/sandbox profiles, org/project allowlists,
+tool-use quality evaluations, a `PluginSDK`, and Codex dynamic tool-discovery
+support over the approved catalog.
 V2.0 added enterprise release stabilization:
 stable release contracts, production deployment, security hardening, identity
 and access controls, tenant/project isolation, validation evidence packages,
 operational runbooks, disaster recovery verification, governance and audit
 readiness, performance and reliability targets, release certification
 workflows, stable APIs and SDK, enterprise admin controls, end-to-end synthetic
-demo workflows, and documentation/training material. V2.1 does not add major
+demo workflows, and documentation/training material. V2.2 does not add major
 new science capabilities, does not expand molecule generation, docking, ADMET,
 graph reasoning, model training, integrations, or campaign planning except for
 controlled runtime orchestration, stability, validation, security, and enterprise readiness, and preserves all
@@ -349,7 +359,7 @@ uv sync --all-groups
 uv run molecule-ranker version
 ```
 
-Current release: `2.1.0`.
+Current release: `2.2.0`.
 
 Confirm the frozen V2.0 contracts and API surface:
 
@@ -400,9 +410,9 @@ Run the mocked enterprise golden workflow:
 uv run molecule-ranker validate enterprise-golden
 ```
 
-## V2.1 Codex Runtime Agent OS
+## V2.2 Codex Runtime Agent OS
 
-V2.1 makes Codex CLI the runtime LLM agent backbone for molecule-ranker.
+V2.2 makes Codex CLI the runtime LLM agent backbone for molecule-ranker.
 Codex can understand a research objective, build a safe action plan, and
 execute approved molecule-ranker tools, but only through the controlled runtime
 stack:
@@ -415,6 +425,42 @@ scores, mechanisms, or claims. Codex cannot bypass deterministic validators,
 RBAC, policy, artifact contracts, or guardrails. Codex cannot approve stage
 gates, campaign advancement, external writes, generated-molecule export, or
 other human-only approvals. Runtime actions are audited end to end.
+
+## V2.2 Governed Tool Ecosystem
+
+V2.2 introduces an internal tool ecosystem for runtime-agent tooling:
+
+- `ToolPackage`, `ToolManifest`, and `ToolVersion` package molecule-ranker tools
+  as installable signed tool packs.
+- `PluginSDK` builds manifests and binds signatures to deterministic SHA-256
+  manifest hashes.
+- `ToolSecurityScan` and `ToolApproval` are required before package tools can be
+  installed in `RuntimeToolRegistry`.
+- `ToolPolicy` enforces per-tool permissions, org/project/user allowlists,
+  approval expectations, and sandbox profiles.
+- `MCPGateway` exposes only approved, policy-allowed tools as MCP-compatible
+  descriptors.
+- `SkillPack` and `WorkflowTemplate` define reusable workflow packs over
+  approved tools.
+- `ToolMarketplace` provides a local/internal catalog for submitted, approved,
+  and installable tool packs.
+- `ToolUsageEval` records tool-selection quality, execution success, policy
+  violations, and failure-recovery performance.
+
+Codex can dynamically discover and use approved catalog tools, but it cannot
+invent a tool, install an unapproved tool, bypass RBAC/policy/approval/sandbox
+profiles/artifact validation, or convert tool output into biomedical evidence.
+Tools must be registered, scanned, approved, versioned, and policy-gated before
+Codex can see them. MCP servers are disabled by default and approved
+tool-by-tool. The local/internal marketplace is the default; external registry
+support is disabled unless explicitly configured. External writes always require
+explicit approval. Tool outputs must pass artifact validation and scientific
+guardrails before they can become runtime artifacts. Tool packages cannot access
+secrets, credentials, cache files, `.env` files, or unapproved network domains.
+External tools remain subject to molecule-ranker scientific guardrails and
+cannot create assay results, citations, molecules, scores, stage-gate approvals,
+campaign approvals, or biomedical truth. Codex still cannot invent evidence,
+assay results, citations, molecules, scores, or scientific/program decisions.
 
 Autonomy levels control what Codex can do:
 
@@ -490,6 +536,70 @@ Generate a managed Codex permission profile:
 ```bash
 uv run molecule-ranker codex permissions generate \
   --profile read_only_runtime
+```
+
+Install, scan, approve, and enable a local tool package:
+
+```bash
+uv run molecule-ranker tool package validate \
+  --path ./tool-packs/safe-summary
+
+uv run molecule-ranker tool package install \
+  --path ./tool-packs/safe-summary \
+  --source local
+
+uv run molecule-ranker tool package scan \
+  --package-id safe-summary-tools
+
+uv run molecule-ranker tool package approve \
+  --package-id safe-summary-tools \
+  --approved-by tool-admin-1 \
+  --rationale "Passed security scan and scoped to read-only summaries."
+
+uv run molecule-ranker tool package enable \
+  --package-id safe-summary-tools \
+  --project-id project-123
+```
+
+Register a fake/internal MCP server and approve one safe MCP tool:
+
+```bash
+uv run molecule-ranker tool mcp register \
+  --name "Fake Benchling MCP" \
+  --config ./examples/mcp/fake_benchling.json
+
+uv run molecule-ranker tool mcp inspect \
+  --server-id fake-benchling-mcp
+
+uv run molecule-ranker tool mcp approve-tool \
+  --server-id fake-benchling-mcp \
+  --tool-name search_entities
+```
+
+Run the runtime agent with the approved tool ecosystem. Codex receives only
+task-relevant approved tools from the governed catalog:
+
+```bash
+uv run molecule-ranker agent start \
+  --goal "Use the approved summary tool to create a project artifact report" \
+  --project-id project-123 \
+  --autonomy execute_safe_tools \
+  --output-dir .molecule-ranker/runtime-agent/tool-ecosystem-demo
+```
+
+Run tool-use evaluation and generate the V2.2 tool security validation report:
+
+```bash
+uv run molecule-ranker tool eval --suite default
+uv run molecule-ranker validate tools
+```
+
+Generate a Codex permission profile aligned to a sandbox profile:
+
+```bash
+uv run molecule-ranker codex permissions generate \
+  --profile read_only_runtime \
+  --output .molecule-ranker/codex/read-only-runtime.json
 ```
 
 ## V2.0 Enterprise Release
@@ -3288,8 +3398,8 @@ does not write a normal `report.md` that looks successful.
 - Source records may use inconsistent identifiers and terminology.
 - Scores are heuristic and not experimentally validated.
 - No wet-lab validation is performed by this software.
-- V2.0 is for internal research use only.
-- V2.0 is not a regulated clinical product.
+- V2.2 is for internal research use only.
+- V2.2 is not a regulated clinical product.
 - Codex is an orchestration and summarization layer, not scientific truth.
 - No clinical recommendation, diagnosis, prescription, dosage, or treatment
   guidance is provided.
@@ -3358,9 +3468,9 @@ does not write a normal `report.md` that looks successful.
 - V1.9: usability, performance, reliability, and enterprise pilot hardening.
 - V2.0: validated enterprise discovery operating system.
 - V2.1: Codex Runtime Agent OS.
-- V2.2: Codex tool-use expansion with MCP/plugin ecosystem and workflow
-  marketplace.
-- V2.3: autonomous multi-agent research operations with supervised delegation.
+- V2.2: Codex tool ecosystem, MCP gateway, skill packs, workflow marketplace.
+- V2.3: multi-agent scientific operations with specialized Codex subagents.
+- V2.4: agent self-evaluation and autonomous repair loops.
 - V3.0: autonomous discovery operating system with validated human-governed
   agentic workflows.
 

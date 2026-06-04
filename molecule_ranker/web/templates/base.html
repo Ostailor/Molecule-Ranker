@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · molecule-ranker</title>
-  <link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.1.0-dashboard-1">
+  <link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.2.0-dashboard-1">
 </head>
 <body>
   <div class="shell">
     <header class="topbar">
       <div class="topbar-inner">
-        <div class="brand">molecule-ranker V2.1</div>
+        <div class="brand">molecule-ranker V2.2</div>
         <nav class="nav" aria-label="Dashboard">
           <a href="/dashboard">Projects</a>
           {% if project is defined %}
@@ -28,6 +28,7 @@
             <a href="/dashboard/projects/{{ project.workspace_id }}/evaluation">Evaluation</a>
             <a href="/dashboard/projects/{{ project.workspace_id }}/codex">Codex</a>
           {% endif %}
+          <a href="/dashboard/tools">Tools</a>
           <a href="/dashboard/integrations">Integrations</a>
           <a href="/dashboard/notifications">Notifications</a>
           <a href="/dashboard/feedback">Feedback</a>

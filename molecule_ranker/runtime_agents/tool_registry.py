@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from molecule_ranker import __version__
 from molecule_ranker.runtime_agents.schemas import RuntimeToolSpec
 
 JSON_OBJECT_SCHEMA: dict[str, Any] = {
@@ -22,12 +23,20 @@ class RuntimeToolRegistry:
 
     def __init__(self, specs: Iterable[RuntimeToolSpec] | None = None) -> None:
         self._specs: dict[str, RuntimeToolSpec] = {}
+        self._governed_registry: Any | None = None
+        self.usage_records: list[Any] = []
         for spec in specs or []:
             self.register(spec)
 
     @classmethod
     def default(cls) -> RuntimeToolRegistry:
         return cls(_default_tool_specs())
+
+    @classmethod
+    def from_tool_registry_v2(cls, governed_registry: Any) -> RuntimeToolRegistry:
+        runtime = governed_registry.to_runtime_tool_registry()
+        runtime._governed_registry = governed_registry
+        return runtime
 
     def register(self, spec: RuntimeToolSpec) -> None:
         if spec.tool_name in self._specs:
@@ -42,6 +51,7 @@ class RuntimeToolRegistry:
             raise ValueError(
                 f"Runtime tool {spec.tool_name} performs external writes and requires approval."
             )
+        _validate_tool_package_metadata(spec)
         if spec.category == "codex":
             _validate_codex_tool_boundaries(spec)
         self._specs[spec.tool_name] = spec
@@ -64,6 +74,131 @@ class RuntimeToolRegistry:
     def by_category(self, category: str) -> list[RuntimeToolSpec]:
         return [spec for spec in self._specs.values() if spec.category == category]
 
+    def discover_approved_tools(
+        self,
+        *,
+        org_id: str | None = None,
+        project_id: str | None = None,
+        user_id: str | None = None,
+        user_permissions: set[str] | list[str] | None = None,
+        categories: set[str] | list[str] | None = None,
+    ) -> list[RuntimeToolSpec]:
+        if self._governed_registry is not None:
+            tools = self._governed_registry.list_tools_visible_to_user(
+                user_permissions=user_permissions,
+                project_id=project_id,
+                org_id=org_id,
+            )
+            category_filter = set(categories or [])
+            if category_filter:
+                tools = [tool for tool in tools if tool.category in category_filter]
+            return tools
+        permissions = set(user_permissions or [])
+        category_filter = set(categories or [])
+        discovered: list[RuntimeToolSpec] = []
+        for spec in self._specs.values():
+            if category_filter and spec.category not in category_filter:
+                continue
+            if not _tool_package_approved(spec):
+                continue
+            if not self.tool_allowed_in_context(
+                spec,
+                org_id=org_id,
+                project_id=project_id,
+                user_id=user_id,
+                user_permissions=permissions,
+            ):
+                continue
+            discovered.append(spec)
+        return discovered
+
+    def tool_allowed_in_context(
+        self,
+        spec: RuntimeToolSpec,
+        *,
+        org_id: str | None = None,
+        project_id: str | None = None,
+        user_id: str | None = None,
+        user_permissions: set[str] | list[str] | None = None,
+    ) -> bool:
+        policy = spec.metadata.get("tool_policy")
+        if not isinstance(policy, dict):
+            return True
+        permissions = set(user_permissions or [])
+        allowed_orgs = _string_set(policy.get("allowed_org_ids"))
+        allowed_projects = _string_set(policy.get("allowed_project_ids"))
+        allowed_users = _string_set(policy.get("allowed_user_ids"))
+        denied_permissions = _string_set(policy.get("denied_permissions"))
+        required_permissions = _string_set(policy.get("required_permissions"))
+        if allowed_orgs and org_id not in allowed_orgs:
+            return False
+        if allowed_projects and project_id not in allowed_projects:
+            return False
+        if allowed_users and user_id not in allowed_users:
+            return False
+        if denied_permissions and permissions.intersection(denied_permissions):
+            return False
+        if required_permissions and not required_permissions.issubset(permissions):
+            return False
+        return True
+
+    def track_usage(
+        self,
+        *,
+        package_id: str,
+        tool_name: str,
+        tool_version: str,
+        invoked_by: str,
+        status: str,
+        session_id: str | None = None,
+        project_id: str | None = None,
+        artifact_ids: list[str] | None = None,
+        warnings: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        started_at: Any | None = None,
+        completed_at: Any | None = None,
+    ) -> Any:
+        if self._governed_registry is not None:
+            usage = self._governed_registry.track_usage(
+                package_id=package_id,
+                tool_name=tool_name,
+                tool_version=tool_version,
+                invoked_by=invoked_by,
+                status=status,
+                session_id=session_id,
+                project_id=project_id,
+                artifact_ids=artifact_ids,
+                warnings=warnings,
+                metadata=metadata,
+                started_at=started_at,
+                completed_at=completed_at,
+            )
+            self.usage_records.append(usage)
+            return usage
+        from datetime import UTC, datetime
+
+        from molecule_ranker.tool_ecosystem.schemas import ToolUsageRecord
+
+        started = started_at or datetime.now(UTC)
+
+        usage = ToolUsageRecord(
+            usage_id=f"runtime-tool-usage-{len(self.usage_records) + 1}",
+            session_id=session_id,
+            project_id=project_id,
+            package_id=package_id,
+            tool_name=tool_name,
+            tool_version=tool_version,
+            invoked_by=invoked_by,  # type: ignore[arg-type]
+            status=status,
+            started_at=started,
+            completed_at=completed_at,
+            artifact_ids=artifact_ids or [],
+            warnings=warnings or [],
+            metadata=metadata or {},
+        )
+        self.usage_records.append(usage)
+        return usage
+
 
 def _validate_codex_tool_boundaries(spec: RuntimeToolSpec) -> None:
     blocked_tags = {"stage_gate", "campaign_advance"}
@@ -73,6 +208,72 @@ def _validate_codex_tool_boundaries(spec: RuntimeToolSpec) -> None:
         raise ValueError("Codex tools cannot approve or advance campaigns.")
     if spec.side_effect_level != "codex_subprocess":
         raise ValueError("Codex tools must be declared as codex_subprocess side-effect tools.")
+
+
+def _validate_tool_package_metadata(spec: RuntimeToolSpec) -> None:
+    package = spec.metadata.get("tool_package")
+    if package is None:
+        return
+    if not isinstance(package, dict):
+        raise ValueError(f"Runtime tool {spec.tool_name} has invalid tool_package metadata.")
+    if not _tool_package_approved(spec):
+        raise ValueError(f"Runtime tool {spec.tool_name} is not from an approved tool package.")
+    required = {
+        "package_id",
+        "version",
+        "manifest_hash",
+        "signature",
+        "approval_status",
+        "security_scan_status",
+    }
+    missing = sorted(key for key in required if not package.get(key))
+    if missing:
+        raise ValueError(
+            f"Runtime tool {spec.tool_name} is missing tool package metadata: "
+            + ", ".join(missing)
+        )
+    manifest_hash = str(package["manifest_hash"])
+    signature = str(package["signature"])
+    if manifest_hash.startswith("builtin:"):
+        if signature != f"builtin-signature:{manifest_hash}":
+            raise ValueError(f"Runtime tool {spec.tool_name} has invalid built-in signature.")
+    elif signature != f"sha256:{manifest_hash}":
+        raise ValueError(f"Runtime tool {spec.tool_name} has invalid package signature.")
+
+
+def _tool_package_approved(spec: RuntimeToolSpec) -> bool:
+    package = spec.metadata.get("tool_package")
+    if package is None:
+        return True
+    if not isinstance(package, dict):
+        return False
+    return (
+        package.get("approval_status") == "approved"
+        and package.get("security_scan_status") == "passed"
+        and package.get("status", "approved") == "approved"
+    )
+
+
+def _string_set(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {item for item in value if isinstance(item, str)}
+
+
+def _builtin_package_metadata() -> dict[str, str]:
+    manifest_hash = f"builtin:molecule-ranker-runtime-tools:{__version__}"
+    return {
+        "package_id": "molecule-ranker-core-tools",
+        "version": __version__,
+        "manifest_hash": manifest_hash,
+        "signature": f"builtin-signature:{manifest_hash}",
+        "approval_id": "builtin-first-party-approval",
+        "approval_status": "approved",
+        "security_scan_id": "builtin-first-party-scan",
+        "security_scan_status": "passed",
+        "mcp_namespace": "molecule_ranker",
+        "status": "approved",
+    }
 
 
 def _default_tool_specs() -> list[RuntimeToolSpec]:
@@ -491,6 +692,7 @@ def _spec(
         metadata={
             "deterministic_entrypoint": deterministic_entrypoint,
             "runtime_execution": RUNTIME_EXECUTION_MODE,
+            "tool_package": _builtin_package_metadata(),
         },
     )
 

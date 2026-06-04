@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -49,6 +49,19 @@ from molecule_ranker.platform.schemas import UserAccount
 from molecule_ranker.runtime_agents.hosted import RuntimeAgentHostedStore
 from molecule_ranker.server.dependencies import platform_database, workspace_store
 from molecule_ranker.server.security import reject_suspicious_identifier, safe_artifact_path
+from molecule_ranker.tool_ecosystem.dashboard import (
+    ToolDashboardSnapshot,
+    approval_for_package,
+    codex_visible_tools,
+    dashboard_snapshot,
+    manifest_for_package,
+    package_by_id,
+    sanitize_for_dashboard,
+    scan_for_package,
+    state_for_package,
+    tool_package_for_tool,
+    usage_analytics_for_package,
+)
 from molecule_ranker.utils.json_io import JsonArtifactTooLargeError, load_json_file
 from molecule_ranker.utils.pagination import normalize_limit_offset
 from molecule_ranker.web.components import (
@@ -163,6 +176,456 @@ def project_list_alias(
     store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
 ) -> Response:
     return project_list_page(request, user, database, store)
+
+
+@router.get("/dashboard/tools", response_class=HTMLResponse)
+def tool_marketplace_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:read")
+    snapshot = _tool_dashboard_snapshot(request)
+    rows = []
+    for package in snapshot.packages:
+        scan = scan_for_package(snapshot, package)
+        state = state_for_package(snapshot, package)
+        rows.append(
+            [
+                _link(
+                    _tool_package_href(package.package_id, package.version),
+                    package.display_name,
+                ),
+                package.version,
+                _tool_status_badge(package.status),
+                _tool_status_badge(scan.risk_level if scan else "not scanned"),
+                state.lifecycle_state
+                if state
+                else package.metadata.get("marketplace_lifecycle", ""),
+                "QUARANTINED until scan and approval"
+                if package.status != "approved"
+                else "Approved for governed catalog",
+            ]
+        )
+    body = (
+        _tool_nav()
+        + "<h2>Tool marketplace</h2>"
+        + "<p>Local/internal registry only. External marketplace network access is disabled.</p>"
+        + _table(
+            ["Package", "Version", "Status", "Risk", "Lifecycle", "Governance"],
+            rows,
+            empty_message="No local/internal tool packages installed yet.",
+        )
+        + "<h2>Codex-visible tools</h2>"
+        + _codex_visible_tool_table(snapshot, user, database, request)
+    )
+    return _tool_dashboard_html("Tool marketplace", body)
+
+
+@router.get("/dashboard/tools/installed", response_class=HTMLResponse)
+def installed_tool_packages_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:read")
+    snapshot = _tool_dashboard_snapshot(request)
+    rows = [
+        [
+            _link(_tool_package_href(package.package_id, package.version), package.name),
+            package.version,
+            _tool_status_badge(package.status),
+            state.lifecycle_state if state else "",
+            ", ".join(state.enabled_project_ids) if state else "",
+            package.tool_count,
+            package.skill_count,
+            package.workflow_count,
+        ]
+        for package in snapshot.packages
+        if (state := state_for_package(snapshot, package)) is not None
+    ]
+    return _tool_dashboard_html(
+        "Installed packages",
+        _tool_nav()
+        + _table(
+            [
+                "Package",
+                "Version",
+                "Status",
+                "Lifecycle",
+                "Enabled projects",
+                "Tools",
+                "Skills",
+                "Workflows",
+            ],
+            rows,
+            empty_message="No installed packages.",
+        ),
+    )
+
+
+@router.get("/dashboard/tools/packages/{package_id}", response_class=HTMLResponse)
+def tool_package_detail_dashboard_page(
+    package_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:read")
+    snapshot = _tool_dashboard_snapshot(request)
+    package = _tool_package_or_404(snapshot, package_id, request)
+    manifest = manifest_for_package(snapshot, package)
+    scan = scan_for_package(snapshot, package)
+    approval = approval_for_package(snapshot, package)
+    state = state_for_package(snapshot, package)
+    tool_rows = []
+    if manifest:
+        for tool in manifest.tools:
+            tool_rows.append(
+                [
+                    _link(f"/dashboard/tools/tool/{quote(tool.tool_name)}", tool.tool_name),
+                    tool.category,
+                    _tool_side_effect_label(tool.side_effect_level),
+                    ", ".join(tool.required_permissions),
+                    _validator_label(tool.metadata),
+                    _codex_visible_label(tool),
+                ]
+            )
+    body = (
+        _tool_nav()
+        + f"<h2>{_h(package.display_name)}</h2>"
+        + _definition_list(
+            {
+                "Package ID": package.package_id,
+                "Version": package.version,
+                "Publisher": package.publisher,
+                "Status": package.status,
+                "Lifecycle": state.lifecycle_state if state else "",
+                "Manifest hash": package.manifest_hash,
+                "Package hash": package.package_hash or "",
+                "Quarantine": "Yes - unapproved packages are not Codex-visible"
+                if package.status != "approved"
+                else "No",
+            }
+        )
+        + "<h2>Security and approval</h2>"
+        + _definition_list(
+            {
+                "Scan status": scan.status if scan else "not scanned",
+                "Risk level": scan.risk_level if scan else "unknown",
+                "Approval status": approval.approval_status if approval else "none",
+                "Approved permissions": ", ".join(approval.approved_permissions)
+                if approval
+                else "",
+            }
+        )
+        + "<h2>Tool side effects</h2>"
+        + _table(
+            ["Tool", "Category", "Side effect", "Permissions", "Validators", "Codex visible"],
+            tool_rows,
+            empty_message="No tools declared in this manifest.",
+        )
+        + "<h2>Sanitized manifest</h2>"
+        + _safe_json(manifest.model_dump(mode="json") if manifest else {})
+    )
+    return _tool_dashboard_html("Package detail", body)
+
+
+@router.get("/dashboard/tools/tool/{tool_name:path}", response_class=HTMLResponse)
+def tool_detail_dashboard_page(
+    tool_name: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:read")
+    snapshot = _tool_dashboard_snapshot(request)
+    found = tool_package_for_tool(snapshot, unquote(tool_name))
+    if found is None:
+        raise HTTPException(status_code=404, detail="Tool not found.")
+    package, _manifest, tool = found
+    body = (
+        _tool_nav()
+        + f"<h2>{_h(tool.tool_name)}</h2>"
+        + _definition_list(
+            {
+                "Package": package.package_id,
+                "Version": package.version,
+                "Category": tool.category,
+                "Description": tool.description,
+                "Side effects": tool.side_effect_level,
+                "External write": "Requires approval"
+                if tool.side_effect_level == "external_write"
+                else "No",
+                "Approval by default": tool.requires_approval_by_default,
+                "Required permissions": ", ".join(tool.required_permissions),
+                "Policy tags": ", ".join(tool.policy_tags),
+                "Validators": ", ".join(_tool_validators(tool.metadata)),
+                "Creates": ", ".join(_tool_creates(tool.metadata)),
+            }
+        )
+        + "<h2>Input schema</h2>"
+        + _safe_json(tool.input_schema)
+        + "<h2>Output schema</h2>"
+        + _safe_json(tool.output_schema)
+        + "<h2>Sanitized metadata</h2>"
+        + _safe_json(tool.metadata)
+    )
+    return _tool_dashboard_html("Tool detail", body)
+
+
+@router.get("/dashboard/tools/packages/{package_id}/security", response_class=HTMLResponse)
+def tool_security_scan_dashboard_page(
+    package_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:read")
+    snapshot = _tool_dashboard_snapshot(request)
+    package = _tool_package_or_404(snapshot, package_id, request)
+    scan = scan_for_package(snapshot, package)
+    finding_rows = []
+    if scan:
+        finding_rows = [
+            [
+                _tool_status_badge(str(finding.get("severity", ""))),
+                finding.get("code", ""),
+                finding.get("message", ""),
+                json.dumps(sanitize_for_dashboard(finding.get("metadata", {})), sort_keys=True),
+            ]
+            for finding in scan.findings
+        ]
+    body = (
+        _tool_nav()
+        + f"<h2>Security scan result for {_h(package.display_name)}</h2>"
+        + _definition_list(
+            {
+                "Scan status": scan.status if scan else "not scanned",
+                "Risk level": scan.risk_level if scan else "unknown",
+                "Scanner version": scan.scanner_version if scan else "",
+                "Critical findings block approval": "Yes",
+            }
+        )
+        + _table(
+            ["Severity", "Finding", "Message", "Sanitized metadata"],
+            finding_rows,
+            empty_message="No scan findings recorded.",
+        )
+    )
+    return _tool_dashboard_html("Security scan result", body)
+
+
+@router.get("/dashboard/tools/approvals", response_class=HTMLResponse)
+def tool_approval_queue_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:approve")
+    snapshot = _tool_dashboard_snapshot(request)
+    rows = [
+        [
+            approval.approval_id,
+            _link(
+                _tool_package_href(approval.package_id, approval.package_version),
+                approval.package_id,
+            ),
+            approval.package_version,
+            _tool_status_badge(approval.approval_status),
+            approval.rationale,
+            ", ".join(approval.approved_permissions),
+        ]
+        for approval in snapshot.approvals
+    ]
+    return _tool_dashboard_html(
+        "Approval queue",
+        _tool_nav()
+        + "<p>Codex cannot approve tools, packages, campaigns, stage gates, "
+        + "evidence, or assays.</p>"
+        + _table(
+            ["Approval", "Package", "Version", "Status", "Rationale", "Permissions"],
+            rows,
+            empty_message="No packages pending approval.",
+        ),
+    )
+
+
+@router.get("/dashboard/tools/packages/{package_id}/usage", response_class=HTMLResponse)
+def tool_usage_analytics_dashboard_page(
+    package_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:read")
+    snapshot = _tool_dashboard_snapshot(request)
+    package = _tool_package_or_404(snapshot, package_id, request)
+    analytics = usage_analytics_for_package(snapshot, package)
+    body = (
+        _tool_nav()
+        + f"<h2>Usage analytics for {_h(package.display_name)}</h2>"
+        + _definition_list(
+            {
+                "Total invocations": analytics.total_invocations,
+                "Artifacts produced": analytics.artifact_count,
+                "Warnings": analytics.warning_count,
+            }
+        )
+        + "<h2>Status counts</h2>"
+        + _table(
+            ["Status", "Count"],
+            [[key, value] for key, value in analytics.status_counts.items()],
+            empty_message="No usage recorded.",
+        )
+        + "<h2>Tool counts</h2>"
+        + _table(
+            ["Tool", "Count"],
+            [[key, value] for key, value in analytics.tool_counts.items()],
+            empty_message="No tool invocations recorded.",
+        )
+    )
+    return _tool_dashboard_html("Usage analytics", body)
+
+
+@router.get("/dashboard/tools/project-allowlist", response_class=HTMLResponse)
+def project_tool_allowlist_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:enable")
+    snapshot = _tool_dashboard_snapshot(request)
+    project_id = str(request.query_params.get("project_id") or "workspace-a")
+    rows = [
+        [
+            _link(_tool_package_href(package.package_id, package.version), package.package_id),
+            package.version,
+            _tool_status_badge(package.status),
+            "enabled" if state and project_id in state.enabled_project_ids else "not enabled",
+            ", ".join(state.disabled_project_ids) if state else "",
+        ]
+        for package in snapshot.packages
+        for state in [state_for_package(snapshot, package)]
+    ]
+    return _tool_dashboard_html(
+        "Project tool allowlist",
+        _tool_nav()
+        + f"<h2>Project tool allowlist for {_h(project_id)}</h2>"
+        + _table(
+            ["Package", "Version", "Status", "Project allowlist", "Disabled projects"],
+            rows,
+            empty_message="No packages available for this project allowlist yet.",
+        ),
+    )
+
+
+@router.get("/dashboard/tools/skills", response_class=HTMLResponse)
+def skill_packs_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:read")
+    snapshot = _tool_dashboard_snapshot(request)
+    rows = [
+        [
+            pack.name,
+            pack.version,
+            len(pack.skills),
+            ", ".join(pack.required_tools),
+            ", ".join(pack.guardrails),
+        ]
+        for pack in snapshot.skill_packs
+    ]
+    return _tool_dashboard_html(
+        "Skill packs",
+        _tool_nav()
+        + "<p>Codex may select a skill; deterministic runtime code expands it to a plan.</p>"
+        + _table(["Skill pack", "Version", "Skills", "Required tools", "Guardrails"], rows),
+    )
+
+
+@router.get("/dashboard/tools/workflows", response_class=HTMLResponse)
+def workflow_templates_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:read")
+    snapshot = _tool_dashboard_snapshot(request)
+    rows = [
+        [
+            workflow.name,
+            workflow.version,
+            workflow.package_id,
+            ", ".join(workflow.required_tools),
+            ", ".join(workflow.required_permissions),
+            ", ".join(workflow.approval_requirements),
+            ", ".join(workflow.forbidden_outputs),
+        ]
+        for workflow in snapshot.workflow_templates
+    ]
+    return _tool_dashboard_html(
+        "Workflow templates",
+        _tool_nav()
+        + _table(
+            [
+                "Workflow",
+                "Version",
+                "Package",
+                "Tools",
+                "Permissions",
+                "Approvals",
+                "Forbidden outputs",
+            ],
+            rows,
+            empty_message="No workflow templates installed yet.",
+        ),
+    )
+
+
+@router.get("/dashboard/tools/mcp-gateway", response_class=HTMLResponse)
+def mcp_gateway_status_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_tool_dashboard_permission(database, user, "tool:read")
+    snapshot = _tool_dashboard_snapshot(request)
+    visible = codex_visible_tools(
+        snapshot,
+        user_permissions=_tool_runtime_permissions(snapshot, user),
+        project_id=str(request.query_params.get("project_id") or "workspace-a"),
+    )
+    rows = [
+        [
+            tool.tool_name,
+            tool.category,
+            _tool_side_effect_label(tool.side_effect_level),
+            ", ".join(tool.required_permissions),
+        ]
+        for tool in visible
+    ]
+    return _tool_dashboard_html(
+        "MCP gateway status",
+        _tool_nav()
+        + _definition_list(
+            {
+                "Gateway": "internal MCP-compatible",
+                "Approved tools exposed": len(visible),
+                "Secrets exposed": "No",
+                "Cache files exposed": "No",
+                "External writes": "Approval required",
+            }
+        )
+        + "<h2>Codex-visible tools</h2>"
+        + _table(
+            ["Tool", "Category", "Side effect", "Permissions"],
+            rows,
+            empty_message="No Codex-visible tools approved for this project.",
+        ),
+    )
 
 
 @router.get("/dashboard/agent/sessions", response_class=HTMLResponse)
@@ -3183,9 +3646,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.1</div>"
+        "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3328,9 +3791,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.1</div>"
+        "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3363,9 +3826,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.1</div>"
+        "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3415,9 +3878,9 @@ def _campaign_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.1</div>"
+        "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -3858,9 +4321,9 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.1</div>"
+        "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4436,9 +4899,9 @@ def _evaluation_dashboard_shell(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.1</div>"
+        "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4679,9 +5142,9 @@ def _hypothesis_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.1.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.2.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.1</div>"
+        "<div class=\"brand\">molecule-ranker V2.2</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4876,9 +5339,9 @@ def _agent_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.1.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.2.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.1</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.2</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/agent/sessions", "Agent sessions")
@@ -4905,6 +5368,211 @@ def _agent_nav() -> str:
         + _link("/dashboard/agent/audit", "Runtime audit log")
         + "</nav>"
     )
+
+
+TOOL_DASHBOARD_PERMISSIONS = {
+    "tool:read",
+    "tool:install",
+    "tool:approve",
+    "tool:enable",
+    "tool:disable",
+    "tool:admin",
+}
+
+
+def _tool_dashboard_snapshot(request: Request) -> ToolDashboardSnapshot:
+    marketplace = getattr(request.app.state, "tool_marketplace", None)
+    snapshot = dashboard_snapshot(marketplace)
+    if marketplace is None:
+        request.app.state.tool_marketplace = snapshot.marketplace
+    return snapshot
+
+
+def _require_tool_dashboard_permission(
+    database: PlatformDatabase,
+    user: UserAccount,
+    permission: str,
+) -> None:
+    permissions = _tool_dashboard_permissions(user)
+    if (
+        user.is_admin
+        or "tool:admin" in permissions
+        or "*" in permissions
+        or permission in permissions
+        or has_permission(user, permission, database=database)
+    ):
+        return
+    raise HTTPException(status_code=403, detail=f"Tool permission denied: {permission}")
+
+
+def _tool_dashboard_permissions(user: UserAccount) -> set[str]:
+    permissions = {str(item) for item in user.metadata.get("permissions", [])}
+    if user.is_admin or "*" in permissions:
+        return set(TOOL_DASHBOARD_PERMISSIONS)
+    if "tool:admin" in permissions:
+        return set(TOOL_DASHBOARD_PERMISSIONS)
+    return permissions & TOOL_DASHBOARD_PERMISSIONS
+
+
+def _tool_runtime_permissions(snapshot: ToolDashboardSnapshot, user: UserAccount) -> set[str]:
+    permissions = {str(item) for item in user.metadata.get("permissions", [])}
+    if user.is_admin or "*" in permissions or "tool:admin" in permissions:
+        runtime_permissions = set(TOOL_DASHBOARD_PERMISSIONS)
+        for tool in snapshot.marketplace.registry.runtime_specs.values():
+            runtime_permissions.update(tool.required_permissions)
+        return runtime_permissions
+    return permissions
+
+
+def _tool_package_or_404(
+    snapshot: ToolDashboardSnapshot,
+    package_id: str,
+    request: Request,
+) -> Any:
+    package = package_by_id(
+        snapshot,
+        unquote(package_id),
+        version=request.query_params.get("version"),
+    )
+    if package is None:
+        raise HTTPException(status_code=404, detail="Tool package not found.")
+    return package
+
+
+def _tool_dashboard_html(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>"
+        + escape(title)
+        + " · molecule-ranker</title>"
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.2.0-dashboard-1">'
+        + "</head><body><div class=\"shell\"><header class=\"topbar\">"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.2</div>"
+        + "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        + _link("/dashboard", "Projects")
+        + _link("/dashboard/tools", "Tools")
+        + _link("/dashboard/tools/approvals", "Approval queue")
+        + _link("/dashboard/tools/mcp-gateway", "MCP gateway")
+        + _link("/dashboard/admin", "Admin")
+        + "</nav></div></header><main class=\"content\">"
+        + "<aside class=\"research-disclaimer\">Governed Codex tool ecosystem. "
+        + "Unapproved packages remain quarantined. Codex can use approved tools only; "
+        + "it cannot approve tools, create biomedical evidence, create assay results, "
+        + "or bypass artifact validators.</aside>"
+        + "<header class=\"page-heading\"><h1>"
+        + escape(title)
+        + "</h1></header>"
+        + body
+        + "</main></div></body></html>"
+    )
+
+
+def _tool_nav() -> str:
+    links = {
+        "Marketplace": "/dashboard/tools",
+        "Installed packages": "/dashboard/tools/installed",
+        "Approval queue": "/dashboard/tools/approvals",
+        "Project allowlist": "/dashboard/tools/project-allowlist",
+        "Skill packs": "/dashboard/tools/skills",
+        "Workflow templates": "/dashboard/tools/workflows",
+        "MCP gateway": "/dashboard/tools/mcp-gateway",
+    }
+    return (
+        "<nav class=\"section\">"
+        + " ".join(_link(href, label) for label, href in links.items())
+        + "</nav>"
+    )
+
+
+def _tool_package_href(package_id: str, version: str) -> str:
+    return f"/dashboard/tools/packages/{quote(package_id)}?version={quote(version)}"
+
+
+def _tool_status_badge(status_value: str) -> str:
+    normalized = status_value.lower().replace("_", "-").replace(" ", "-")
+    return f"<span class=\"mode-badge {escape(normalized, quote=True)}\">{_h(status_value)}</span>"
+
+
+def _tool_side_effect_label(side_effect: str) -> str:
+    if side_effect == "external_write":
+        return _tool_status_badge("external write - approval required")
+    if side_effect in {"generated_molecule", "evidence_creating", "assay_result"}:
+        return _tool_status_badge(f"{side_effect} - validator required")
+    return _tool_status_badge(side_effect)
+
+
+def _tool_validators(metadata: dict[str, Any]) -> list[str]:
+    validators = metadata.get("validators")
+    if isinstance(validators, list):
+        return [str(item) for item in validators]
+    return []
+
+
+def _tool_creates(metadata: dict[str, Any]) -> list[str]:
+    creates = metadata.get("creates")
+    if isinstance(creates, list):
+        return [str(item) for item in creates]
+    return []
+
+
+def _validator_label(metadata: dict[str, Any]) -> str:
+    creates = _tool_creates(metadata)
+    validators = _tool_validators(metadata)
+    if creates and validators:
+        return _tool_status_badge("validator attached: " + ", ".join(validators))
+    if creates:
+        return _tool_status_badge("validator missing for " + ", ".join(creates))
+    if validators:
+        return ", ".join(validators)
+    return ""
+
+
+def _codex_visible_label(tool: Any) -> str:
+    if "codex_visible" in set(getattr(tool, "policy_tags", [])):
+        return _tool_status_badge("Codex visible")
+    return ""
+
+
+def _codex_visible_tool_table(
+    snapshot: ToolDashboardSnapshot,
+    user: UserAccount,
+    database: PlatformDatabase,
+    request: Request,
+) -> str:
+    visible = codex_visible_tools(
+        snapshot,
+        user_permissions=_tool_runtime_permissions(snapshot, user),
+        project_id=str(request.query_params.get("project_id") or "workspace-a"),
+    )
+    rows = [
+        [
+            _link(f"/dashboard/tools/tool/{quote(tool.tool_name)}", tool.tool_name),
+            tool.category,
+            _tool_side_effect_label(tool.side_effect_level),
+            ", ".join(tool.required_permissions),
+            _validator_label(tool.metadata),
+        ]
+        for tool in visible
+        if has_permission(user, "tool:read", database=database) or user.is_admin
+    ]
+    if not rows and (user.is_admin or "tool:read" in _tool_dashboard_permissions(user)):
+        rows = [
+            [
+                _link(f"/dashboard/tools/tool/{quote(tool.tool_name)}", tool.tool_name),
+                tool.category,
+                _tool_side_effect_label(tool.side_effect_level),
+                ", ".join(tool.required_permissions),
+                _validator_label(tool.metadata),
+            ]
+            for tool in visible
+        ]
+    return _table(["Tool", "Category", "Side effect", "Permissions", "Validators"], rows)
+
+
+def _safe_json(payload: Any) -> str:
+    sanitized = sanitize_for_dashboard(payload)
+    return f"<pre>{escape(json.dumps(sanitized, indent=2, sort_keys=True), quote=True)}</pre>"
 
 
 def _template(
@@ -4964,14 +5632,24 @@ def _nav() -> str:
     return "<nav>" + " ".join(_link(href, label) for label, href in links.items()) + "</nav>"
 
 
-def _table(headers: list[str], rows: list[list[Any]]) -> str:
+def _table(
+    headers: list[str],
+    rows: list[list[Any]],
+    *,
+    empty_message: str | None = None,
+) -> str:
     head = "".join(f"<th>{_h(header)}</th>" for header in headers)
-    body = "".join(
-        "<tr>"
-        + "".join(f"<td>{cell if _is_html(cell) else _h(cell)}</td>" for cell in row)
-        + "</tr>"
-        for row in rows
-    )
+    if rows:
+        body = "".join(
+            "<tr>"
+            + "".join(f"<td>{cell if _is_html(cell) else _h(cell)}</td>" for cell in row)
+            + "</tr>"
+            for row in rows
+        )
+    elif empty_message:
+        body = f'<tr><td colspan="{len(headers)}">{_h(empty_message)}</td></tr>'
+    else:
+        body = ""
     return (
         "<div class=\"table-scroll\">"
         f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"

@@ -21,7 +21,7 @@ Enable writes only after admin approval, policy review, and audit readiness.
 Build the V2.0 image from the repository root:
 
 ```bash
-docker build -f deployment/Dockerfile -t molecule-ranker:2.1.0 .
+docker build -f deployment/Dockerfile -t molecule-ranker:2.2.0 .
 ```
 
 The image:
@@ -99,7 +99,7 @@ the templates as a controlled starting point:
 helm template molecule-ranker deployment/helm \
   --set secretRefs.existingSecret=molecule-ranker-secrets \
   --set image.repository=registry.example.internal/molecule-ranker \
-  --set image.tag=2.1.0
+  --set image.tag=2.2.0
 ```
 
 Default values include resource limits and set
@@ -115,7 +115,7 @@ provider, managed Postgres, storage class, and secret manager.
 
 For offline/local deployment:
 
-1. Mirror `molecule-ranker:2.1.0` into the internal registry or load it with
+1. Mirror `molecule-ranker:2.2.0` into the internal registry or load it with
    `docker load`.
 2. Pre-create secret files or Kubernetes secret-manager entries from offline
    approved material.
@@ -133,7 +133,7 @@ For offline/local deployment:
 - Metrics: `GET /metrics`.
 - SLO report: `molecule-ranker ops slo-report`.
 
-V2.0 readiness should confirm version `2.1.0`, `/api/v2`, V2 artifact
+V2.0 readiness should confirm version `2.2.0`, `/api/v2`, V2 artifact
 contracts, policy enforcement, isolation audit, backup verification, and release
 gate status.
 

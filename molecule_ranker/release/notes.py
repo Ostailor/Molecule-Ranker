@@ -15,16 +15,18 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V2.1 keeps molecule-ranker as a validated enterprise discovery "
-            "operating system and adds controlled Codex runtime-agent execution "
-            "through approved, audited, deterministic tools. V2.0 stabilized "
+            "V2.2 keeps molecule-ranker as a validated enterprise discovery "
+            "operating system and adds a governed Codex tool ecosystem for "
+            "approved, signed, scanned, policy-scoped tool packs. V2.1 already "
+            "added controlled Codex runtime-agent execution through approved, "
+            "audited, deterministic tools. V2.0 stabilized "
             "enterprise contracts, production deployment, security controls, "
             "identity and access control, tenant/project isolation, validation "
             "evidence packages, operational runbooks, disaster recovery, "
             "governance and audit readiness, performance and reliability targets, "
             "release certification workflows, stable APIs and SDK behavior, "
             "enterprise admin controls, end-to-end synthetic demo workflows, and "
-            "V2.0 documentation and training. V2.1 does not add major new science "
+            "V2.0 documentation and training. V2.2 does not add major new science "
             "capabilities and does not expand "
             "molecule generation, docking, ADMET, graph reasoning, model training, "
             "external integrations, or campaign planning except for controlled "
@@ -82,6 +84,11 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- V2.1 CodexRuntimeAgent, ActionPlanner, ToolRegistry, PolicyEngine, "
             "ApprovalGate, ActionExecutor, ArtifactValidator, GuardrailChecker, "
             "and AuditLogger for controlled runtime tool execution.",
+            "- V2.2 ToolPackage, ToolManifest, ToolVersion, ToolSecurityScan, "
+            "ToolApproval, MCPGateway, SkillPack, WorkflowTemplate, "
+            "ToolMarketplace, ToolPolicy, ToolUsageEval, and PluginSDK for "
+            "governed tool-pack discovery, approval, policy enforcement, "
+            "MCP-compatible exposure, and dynamic Codex tool selection.",
             "- Inherited V1.9 pilot readiness reports covering usability, performance, "
             "reliability, operations, onboarding, admin/support, error messaging, "
             "job control, dashboard workflows, migration safety, deployment "
@@ -139,9 +146,9 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "scores, benchmark results, or decisions",
             "- Codex runtime actions must pass tool registry, RBAC, policy, approval, "
             "artifact validation, guardrail, and audit checks",
-            "- V2.1 validation evidence packages are software/process validation artifacts",
-            "- V2.1 enterprise validation is not clinical validation",
-            "- V2.1 support bundles are diagnostics manifests, not biomedical evidence",
+            "- V2.2 validation evidence packages are software/process validation artifacts",
+            "- V2.2 enterprise validation is not clinical validation",
+            "- V2.2 support bundles are diagnostics manifests, not biomedical evidence",
             "",
             "## Contracts",
             "",

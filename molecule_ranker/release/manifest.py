@@ -56,7 +56,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
                 "Codex-generated campaign priorities, budgets, costs, metrics, outcomes, "
                 "or advancement decisions",
                 "campaign plans promoted to lab protocols or synthesis routes",
-                "major new science modules in the V2.1 enterprise release",
+                "major new science modules in the V2.2 enterprise release",
                 "expanded generation, docking, ADMET, graph reasoning, model training, "
                 "integrations, or campaign planning except for controlled runtime "
                 "orchestration, stability, validation, security, and enterprise readiness",
@@ -167,9 +167,9 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V2.1 is for internal research use only and is not a clinical product.",
-        "V2.1 keeps V2.0 enterprise readiness intact and adds a controlled Codex "
-        "runtime agent for approved deterministic tool execution.",
+        "V2.2 is for internal research use only and is not a clinical product.",
+        "V2.2 keeps V2.1 runtime-agent controls intact and adds a governed Codex "
+        "tool ecosystem for approved, signed, scanned, policy-scoped tool packs.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
         "Generated molecules are computational hypotheses and require independent validation.",
         "Portfolio recommendations are research prioritization aids, not clinical or "

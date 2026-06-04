@@ -498,7 +498,7 @@ class GuardrailChecker:
 
 
 class CodexRuntimeAgent:
-    """V2.1 runtime backbone for controlled molecule-ranker tool execution."""
+    """V2.2 runtime backbone for controlled molecule-ranker tool execution."""
 
     def __init__(
         self,
@@ -533,7 +533,7 @@ class CodexRuntimeAgent:
         self.audit_logger.record(
             component="AuditLogger",
             status="started",
-            message="Started V2.1 Codex runtime audit trail.",
+            message="Started V2.2 Codex runtime audit trail.",
             context=context,
         )
         plan = self.planner.build_plan(
@@ -756,7 +756,7 @@ class CodexRuntimeAgent:
         self.audit_logger.record(
             component="AuditLogger",
             status=status,
-            message=f"Completed V2.1 Codex runtime run with status {status}.",
+            message=f"Completed V2.2 Codex runtime run with status {status}.",
             context=context,
             metadata={
                 "pending_approvals": pending_approvals or [],

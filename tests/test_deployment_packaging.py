@@ -109,7 +109,7 @@ def test_v2_kubernetes_and_helm_manifests_include_hardening_controls() -> None:
     helm_deployment = (ROOT / "deployment/helm/templates/deployment.yaml").read_text()
 
     combined = "\n".join([k8s, codex, helm_values, helm_deployment])
-    assert "molecule-ranker:2.1.0" in combined
+    assert "molecule-ranker:2.2.0" in combined
     assert "runAsNonRoot: true" in combined
     assert "allowPrivilegeEscalation: false" in combined
     assert "readinessProbe:" in combined

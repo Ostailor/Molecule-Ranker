@@ -5,7 +5,7 @@ metadata:
   labels:
     app: molecule-ranker
     component: server
-    app.kubernetes.io/version: "2.1.0"
+    app.kubernetes.io/version: "2.2.0"
 spec:
   replicas: 2
   selector:
@@ -37,7 +37,7 @@ spec:
             claimName: molecule-ranker-projects
       containers:
         - name: server
-          image: molecule-ranker:2.1.0
+          image: molecule-ranker:2.2.0
           imagePullPolicy: IfNotPresent
           args: ["web"]
           ports:
@@ -115,7 +115,7 @@ metadata:
   labels:
     app: molecule-ranker
     component: worker
-    app.kubernetes.io/version: "2.1.0"
+    app.kubernetes.io/version: "2.2.0"
 spec:
   replicas: 1
   selector:
@@ -147,7 +147,7 @@ spec:
             claimName: molecule-ranker-projects
       containers:
         - name: worker
-          image: molecule-ranker:2.1.0
+          image: molecule-ranker:2.2.0
           imagePullPolicy: IfNotPresent
           args: ["worker"]
           env:

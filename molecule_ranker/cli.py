@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import typer
 from pydantic import BaseModel
@@ -448,7 +448,31 @@ feedback_app = typer.Typer(
     no_args_is_help=True,
 )
 agent_app = typer.Typer(
-    help="V2.1 Codex runtime-agent planning, execution, approval, and audit commands.",
+    help="V2.2 Codex runtime-agent planning, execution, approval, and audit commands.",
+    no_args_is_help=True,
+)
+marketplace_app = typer.Typer(
+    help="V2.2 local/internal governed tool marketplace commands.",
+    no_args_is_help=True,
+)
+tool_app = typer.Typer(
+    help="V2.2 governed tool ecosystem commands.",
+    no_args_is_help=True,
+)
+tool_package_app = typer.Typer(
+    help="Validate, install, scan, approve, and enable governed tool packages.",
+    no_args_is_help=True,
+)
+tool_mcp_app = typer.Typer(
+    help="Register, inspect, and approve internal MCP server tools.",
+    no_args_is_help=True,
+)
+tool_skills_app = typer.Typer(
+    help="List governed workflow skill packs.",
+    no_args_is_help=True,
+)
+tool_workflows_app = typer.Typer(
+    help="List governed workflow templates.",
     no_args_is_help=True,
 )
 app.add_typer(review_app, name="review")
@@ -486,6 +510,8 @@ app.add_typer(support_app, name="support")
 app.add_typer(ops_app, name="ops")
 app.add_typer(feedback_app, name="feedback")
 app.add_typer(agent_app, name="agent")
+app.add_typer(marketplace_app, name="marketplace")
+app.add_typer(tool_app, name="tool")
 model_app.add_typer(model_dataset_app, name="dataset")
 model_app.add_typer(model_registry_app, name="registry")
 eval_app.add_typer(eval_suite_app, name="suite")
@@ -506,6 +532,10 @@ integration_app.add_typer(integration_sync_app, name="sync")
 integration_app.add_typer(integration_webhook_app, name="webhook")
 integration_app.add_typer(integration_warehouse_app, name="warehouse")
 integration_app.add_typer(integration_benchling_app, name="benchling")
+tool_app.add_typer(tool_package_app, name="package")
+tool_app.add_typer(tool_mcp_app, name="mcp")
+tool_app.add_typer(tool_skills_app, name="skills")
+tool_app.add_typer(tool_workflows_app, name="workflows")
 
 
 @app.callback()
@@ -1143,6 +1173,613 @@ def _agent_all_permissions(registry: Any | None = None) -> set[str]:
         for spec in active_registry.list_tools()
         for permission in spec.required_permissions
     }
+
+
+@marketplace_app.command("list")
+def marketplace_list_command(
+    installed: Annotated[
+        bool,
+        typer.Option("--installed", help="List installed packages instead of available packages."),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """List local/internal marketplace packages."""
+    marketplace = _marketplace_instance()
+    packages = (
+        marketplace.list_installed_packages()
+        if installed
+        else marketplace.list_available_packages()
+    )
+    payload = {
+        "packages": [
+            _marketplace_package_payload(marketplace, package) for package in packages
+        ],
+        "external_registry_enabled": marketplace.external_registry_enabled,
+    }
+    if json_output:
+        _echo_json(payload)
+        return
+    for package in payload["packages"]:
+        typer.echo(
+            f"{package['package_id']}@{package['version']} "
+            f"{package['status']} {package['marketplace_lifecycle']}"
+        )
+
+
+@marketplace_app.command("install")
+def marketplace_install_command(
+    package_path: Annotated[Path, typer.Argument(help="Local package directory or JSON file.")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Install a local package into quarantine."""
+    marketplace = _marketplace_instance()
+    package = marketplace.install_local_package(package_path)
+    payload = {"package": _marketplace_package_payload(marketplace, package)}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Installed {package.package_id}@{package.version} in quarantine.")
+
+
+@marketplace_app.command("scan")
+def marketplace_scan_command(
+    package_id: Annotated[str, typer.Argument(help="Package ID to scan.")],
+    version: Annotated[str | None, typer.Option("--version")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Run the local static security scan for a package."""
+    marketplace = _marketplace_instance()
+    scan = marketplace.scan_package(package_id, version=version)
+    payload = {"scan": scan.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Scan {scan.status}: {scan.package_id}@{scan.package_version}")
+    if scan.status == "failed":
+        raise typer.Exit(code=1)
+
+
+@marketplace_app.command("approve")
+def marketplace_approve_command(
+    package_id: Annotated[str, typer.Argument(help="Package ID to approve.")],
+    version: Annotated[str | None, typer.Option("--version")] = None,
+    approved_by: Annotated[str, typer.Option("--approved-by")] = "marketplace-admin",
+    rationale: Annotated[str, typer.Option("--rationale")] = (
+        "Approved through local/internal marketplace."
+    ),
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Approve a scanned package for governed use."""
+    marketplace = _marketplace_instance()
+    approval = marketplace.approve_package(
+        package_id,
+        version=version,
+        approved_by=approved_by,
+        rationale=rationale,
+    )
+    payload = {"approval": approval.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Approved {approval.package_id}@{approval.package_version}.")
+
+
+@marketplace_app.command("enable")
+def marketplace_enable_command(
+    package_id: Annotated[str, typer.Argument(help="Package ID to enable.")],
+    version: Annotated[str | None, typer.Option("--version")] = None,
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    org_id: Annotated[str | None, typer.Option("--org-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Enable an approved package for a project or org."""
+    marketplace = _marketplace_instance()
+    state = marketplace.enable_package(
+        package_id,
+        version=version,
+        project_id=project_id,
+        org_id=org_id,
+    )
+    payload = {"state": state.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Enabled {state.package_id}@{state.version}.")
+
+
+@marketplace_app.command("disable")
+def marketplace_disable_command(
+    package_id: Annotated[str, typer.Argument(help="Package ID to disable.")],
+    version: Annotated[str | None, typer.Option("--version")] = None,
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    org_id: Annotated[str | None, typer.Option("--org-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Disable a package globally or for a specific project/org."""
+    marketplace = _marketplace_instance()
+    state = marketplace.disable_package(
+        package_id,
+        version=version,
+        project_id=project_id,
+        org_id=org_id,
+    )
+    payload = {"state": state.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Disabled {state.package_id}@{state.version}.")
+
+
+@marketplace_app.command("usage")
+def marketplace_usage_command(
+    package_id: Annotated[str, typer.Argument(help="Package ID for usage analytics.")],
+    version: Annotated[str | None, typer.Option("--version")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """View local usage analytics for a package."""
+    marketplace = _marketplace_instance()
+    usage = marketplace.view_usage_analytics(package_id, version=version)
+    payload = {"usage": usage.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(
+            f"{usage.package_id}@{usage.package_version}: "
+            f"{usage.total_invocations} invocation(s)"
+        )
+
+
+def _marketplace_instance() -> Any:
+    from molecule_ranker.tool_ecosystem.marketplace import ToolMarketplace
+
+    return ToolMarketplace(store_path=_marketplace_store_path())
+
+
+def _marketplace_store_path() -> Path:
+    configured = os.environ.get("MOLECULE_RANKER_MARKETPLACE_STORE")
+    return Path(configured) if configured else Path(".molecule_ranker/tool_marketplace.json")
+
+
+def _marketplace_package_payload(marketplace: Any, package: Any) -> dict[str, Any]:
+    key = (package.package_id, package.version)
+    state = marketplace.states.get(key)
+    return {
+        **package.model_dump(mode="json"),
+        "marketplace_lifecycle": state.lifecycle_state if state is not None else "discovered",
+        "enabled_project_ids": state.enabled_project_ids if state is not None else [],
+        "enabled_org_ids": state.enabled_org_ids if state is not None else [],
+        "pinned_version": state.pinned_version if state is not None else None,
+    }
+
+
+@tool_package_app.command("validate")
+def tool_package_validate_command(
+    path: Annotated[Path, typer.Option("--path", exists=True, help="Local package path.")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Validate a local tool package manifest."""
+    from molecule_ranker.tool_ecosystem.marketplace import load_local_package
+    from molecule_ranker.tool_ecosystem.registry import ToolRegistryV2, hash_manifest
+
+    package, manifest = load_local_package(path)
+    observed_hash = hash_manifest(manifest)
+    registry = ToolRegistryV2(register_builtins=False)
+    registry.validate_manifest(package, manifest)
+    payload = {
+        "status": "valid",
+        "package_id": package.package_id,
+        "version": package.version,
+        "manifest_hash": observed_hash,
+        "tool_count": len(manifest.tools),
+        "skill_count": len(manifest.skills),
+        "workflow_count": len(manifest.workflows),
+    }
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Valid package {package.package_id}@{package.version}.")
+
+
+@tool_package_app.command("install")
+def tool_package_install_command(
+    path: Annotated[Path, typer.Option("--path", exists=True, help="Local package path.")],
+    source: Annotated[Literal["local"], typer.Option("--source")] = "local",
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Install a local tool package into quarantine."""
+    del source
+    marketplace = _marketplace_instance()
+    package = marketplace.install_local_package(path)
+    payload = {"package": _marketplace_package_payload(marketplace, package)}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Installed {package.package_id}@{package.version} in quarantine.")
+
+
+@tool_package_app.command("scan")
+def tool_package_scan_command(
+    package_id: Annotated[str, typer.Option("--package-id")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Run the governed package security scanner."""
+    marketplace = _marketplace_instance()
+    scan = marketplace.scan_package(package_id)
+    payload = {"scan": scan.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Scan {scan.status}: {scan.package_id}@{scan.package_version}.")
+    if scan.status == "failed":
+        raise typer.Exit(code=1)
+
+
+@tool_package_app.command("approve")
+def tool_package_approve_command(
+    package_id: Annotated[str, typer.Option("--package-id")],
+    approved_by: Annotated[str, typer.Option("--approved-by")],
+    rationale: Annotated[str, typer.Option("--rationale")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Approve a scanned package for governed runtime use."""
+    marketplace = _marketplace_instance()
+    approval = marketplace.approve_package(
+        package_id,
+        approved_by=approved_by,
+        rationale=rationale,
+    )
+    payload = {"approval": approval.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Approved {approval.package_id}@{approval.package_version}.")
+
+
+@tool_package_app.command("enable")
+def tool_package_enable_command(
+    package_id: Annotated[str, typer.Option("--package-id")],
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    org_id: Annotated[str | None, typer.Option("--org-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Enable an approved package globally or for a project/org."""
+    marketplace = _marketplace_instance()
+    state = marketplace.enable_package(package_id, project_id=project_id, org_id=org_id)
+    payload = {"state": state.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Enabled {state.package_id}@{state.version}.")
+
+
+@tool_package_app.command("disable")
+def tool_package_disable_command(
+    package_id: Annotated[str, typer.Option("--package-id")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Disable a package globally."""
+    marketplace = _marketplace_instance()
+    state = marketplace.disable_package(package_id)
+    payload = {"state": state.model_dump(mode="json")}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Disabled {state.package_id}@{state.version}.")
+
+
+@tool_app.command("list")
+def tool_list_command(
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """List Codex-visible approved tools from the local tool marketplace."""
+    marketplace = _marketplace_instance()
+    permissions = {
+        permission
+        for spec in marketplace.registry.runtime_specs.values()
+        for permission in spec.required_permissions
+    }
+    tools = marketplace.registry.list_tools_visible_to_user(
+        user_permissions=permissions,
+        project_id=project_id,
+    )
+    payload = {"tools": [_tool_cli_payload(tool) for tool in tools]}
+    if json_output:
+        _echo_json(payload)
+        return
+    for tool in payload["tools"]:
+        typer.echo(
+            f"{tool['tool_name']} {tool['package_id']}@{tool['tool_version']} "
+            f"{tool['side_effect_level']}"
+        )
+
+
+@tool_app.command("show")
+def tool_show_command(
+    tool_name: Annotated[str, typer.Option("--tool-name")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Show a governed tool definition."""
+    marketplace = _marketplace_instance()
+    spec = marketplace.registry.resolve_tool(tool_name)
+    payload = {"tool": _tool_cli_payload(spec, include_schema=True)}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"{spec.tool_name}: {spec.description}")
+
+
+@tool_mcp_app.command("register")
+def tool_mcp_register_command(
+    name: Annotated[str, typer.Option("--name")],
+    config: Annotated[Path, typer.Option("--config", exists=True, dir_okay=False)],
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Register an internal MCP server config."""
+    from molecule_ranker.tool_ecosystem.mcp_adapter import MCPServerConfig
+
+    raw = _read_cli_json(config)
+    if not isinstance(raw, dict):
+        raise typer.BadParameter("--config must contain a JSON object.")
+    config_payload = raw.get("server_config") or raw.get("config") or raw
+    if not isinstance(config_payload, dict):
+        raise typer.BadParameter("MCP config payload must be a JSON object.")
+    server_id = str(config_payload.get("server_id") or slugify(name))
+    server_config = MCPServerConfig.model_validate(
+        {
+            **config_payload,
+            "server_id": server_id,
+            "name": str(config_payload.get("name") or name),
+        }
+    )
+    fixtures = _mcp_fixture_payload(raw)
+    state = _load_tool_mcp_cli_state()
+    state["servers"][server_id] = {
+        "config": server_config.model_dump(mode="json"),
+        "fixtures": fixtures,
+        "registered_at": datetime.now(UTC).isoformat(),
+    }
+    _save_tool_mcp_cli_state(state)
+    payload = {"server": state["servers"][server_id]}
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Registered MCP server {server_id}.")
+
+
+@tool_mcp_app.command("inspect")
+def tool_mcp_inspect_command(
+    server_id: Annotated[str, typer.Option("--server-id")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Inspect an internal MCP server and quarantine discovered tools."""
+    adapter = _mcp_cli_adapter(server_id)
+    result = adapter.introspect_server(server_id)
+    payload = {
+        "server_id": server_id,
+        "package": result.package.model_dump(mode="json"),
+        "tools": [tool.model_dump(mode="json") for tool in result.manifest.tools],
+        "resources": [resource.model_dump(mode="json") for resource in result.resources],
+        "prompts": [prompt.model_dump(mode="json") for prompt in result.prompts],
+    }
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"{server_id}: {len(result.manifest.tools)} tool(s) discovered.")
+
+
+@tool_mcp_app.command("approve-tool")
+def tool_mcp_approve_tool_command(
+    server_id: Annotated[str, typer.Option("--server-id")],
+    tool_name: Annotated[str, typer.Option("--tool-name")],
+    approved_by: Annotated[str, typer.Option("--approved-by")] = "mcp-admin",
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Approve one tool from an approved MCP server."""
+    adapter = _mcp_cli_adapter(server_id)
+    adapter.introspect_server(server_id)
+    scan = adapter.scan_server_manifest(server_id)
+    approval = adapter.approve_selected_tools(
+        server_id,
+        [tool_name],
+        approved_by=approved_by,
+        approver_roles={"admin"},
+    )
+    payload = {
+        "scan": scan.model_dump(mode="json"),
+        "approval": approval.model_dump(mode="json"),
+    }
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Approved MCP tool {tool_name} on {server_id}.")
+
+
+@tool_skills_app.command("list")
+def tool_skills_list_command(
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """List built-in governed skill packs."""
+    from molecule_ranker.tool_ecosystem.skills import list_builtin_skill_packs
+
+    packs = list_builtin_skill_packs()
+    payload = {"skill_packs": [pack.model_dump(mode="json") for pack in packs]}
+    if json_output:
+        _echo_json(payload)
+        return
+    for pack in packs:
+        typer.echo(f"{pack.skill_pack_id}: {len(pack.skills)} skill(s)")
+
+
+@tool_workflows_app.command("list")
+def tool_workflows_list_command(
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """List installed governed workflow templates."""
+    marketplace = _marketplace_instance()
+    workflows = [
+        {
+            "package_id": package.package_id,
+            "package_version": package.version,
+            "workflow": workflow,
+        }
+        for key, package in marketplace.packages.items()
+        for workflow in marketplace.manifests[key].workflows
+    ]
+    payload = {"workflows": workflows}
+    if json_output:
+        _echo_json(payload)
+        return
+    for item in workflows:
+        workflow = item["workflow"]
+        name = workflow.get("name") if isinstance(workflow, dict) else str(workflow)
+        typer.echo(f"{item['package_id']}@{item['package_version']}: {name}")
+
+
+@tool_app.command("eval")
+def tool_eval_command(
+    suite: Annotated[str, typer.Option("--suite", help="Tool-use eval suite to run.")] = "default",
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Run governed tool-use evaluation suite."""
+    from molecule_ranker.tool_ecosystem.evals import run_tool_use_eval_suite
+
+    result = run_tool_use_eval_suite(suite=suite)
+    payload = result.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+        return
+    typer.echo(f"Tool-use eval suite: {result.suite}")
+    typer.echo(f"Tasks: {result.task_count}")
+    typer.echo(
+        "Metrics: "
+        f"tool_selection={result.metrics.tool_selection_accuracy:.2f}, "
+        f"skill_selection={result.metrics.skill_selection_accuracy:.2f}, "
+        f"approval_recall={result.metrics.approval_recall:.2f}, "
+        f"guardrails={result.metrics.guardrail_pass_rate:.2f}"
+    )
+    failed = [task for task in result.task_results if task.status == "failed"]
+    if failed:
+        for task in failed:
+            typer.echo(f"- failed: {task.task_id}")
+        raise typer.Exit(code=1)
+
+
+def _tool_cli_payload(tool: Any, *, include_schema: bool = False) -> dict[str, Any]:
+    package = tool.metadata.get("tool_package")
+    if not isinstance(package, dict):
+        package = {}
+    version = tool.metadata.get("tool_version")
+    if not isinstance(version, dict):
+        version = {}
+    payload = {
+        "tool_name": tool.tool_name,
+        "category": tool.category,
+        "description": tool.description,
+        "required_permissions": tool.required_permissions,
+        "policy_tags": tool.policy_tags,
+        "side_effect_level": tool.side_effect_level,
+        "requires_approval_by_default": tool.requires_approval_by_default,
+        "package_id": package.get("package_id"),
+        "package_status": package.get("status"),
+        "approval_status": package.get("approval_status"),
+        "security_scan_status": package.get("security_scan_status"),
+        "tool_version": version.get("version") or package.get("version"),
+        "codex_visible": "codex_visible" in set(tool.policy_tags),
+    }
+    if include_schema:
+        payload["input_schema"] = tool.input_schema
+        payload["output_schema"] = tool.output_schema
+        payload["metadata"] = tool.metadata
+    return payload
+
+
+def _tool_mcp_cli_store_path() -> Path:
+    configured = os.environ.get("MOLECULE_RANKER_MCP_STORE")
+    return Path(configured) if configured else Path(".molecule_ranker/tool_mcp.json")
+
+
+def _load_tool_mcp_cli_state() -> dict[str, Any]:
+    path = _tool_mcp_cli_store_path()
+    if not path.exists():
+        return {"servers": {}}
+    raw = _read_cli_json(path)
+    if not isinstance(raw, dict):
+        return {"servers": {}}
+    servers = raw.get("servers")
+    if not isinstance(servers, dict):
+        raw["servers"] = {}
+    return raw
+
+
+def _save_tool_mcp_cli_state(state: dict[str, Any]) -> None:
+    _write_cli_json(_tool_mcp_cli_store_path(), state)
+
+
+def _mcp_fixture_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    fixtures = raw.get("fixtures")
+    if isinstance(fixtures, dict):
+        return {
+            "tools": fixtures.get("tools") if isinstance(fixtures.get("tools"), list) else [],
+            "resources": fixtures.get("resources")
+            if isinstance(fixtures.get("resources"), list)
+            else [],
+            "prompts": fixtures.get("prompts") if isinstance(fixtures.get("prompts"), list) else [],
+            "tool_outputs": fixtures.get("tool_outputs")
+            if isinstance(fixtures.get("tool_outputs"), dict)
+            else {},
+        }
+    return {
+        "tools": raw.get("tools") if isinstance(raw.get("tools"), list) else [],
+        "resources": raw.get("resources") if isinstance(raw.get("resources"), list) else [],
+        "prompts": raw.get("prompts") if isinstance(raw.get("prompts"), list) else [],
+        "tool_outputs": raw.get("tool_outputs")
+        if isinstance(raw.get("tool_outputs"), dict)
+        else {},
+    }
+
+
+def _mcp_cli_adapter(server_id: str) -> Any:
+    from molecule_ranker.tool_ecosystem.mcp_adapter import MCPServerAdapter, MCPServerConfig
+
+    state = _load_tool_mcp_cli_state()
+    server = state.get("servers", {}).get(server_id)
+    if not isinstance(server, dict):
+        raise typer.BadParameter(f"Unknown MCP server: {server_id}")
+    config = MCPServerConfig.model_validate(server.get("config"))
+    raw_fixtures = server.get("fixtures")
+    fixtures = cast(dict[str, Any], raw_fixtures) if isinstance(raw_fixtures, dict) else {}
+    adapter = MCPServerAdapter()
+    adapter.register_server_config(config, client=_CliMCPFixtureClient(fixtures))
+    return adapter
+
+
+class _CliMCPFixtureClient:
+    def __init__(self, fixtures: dict[str, Any]) -> None:
+        self.fixtures = fixtures
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        tools = self.fixtures.get("tools")
+        return tools if isinstance(tools, list) else []
+
+    def list_resources(self) -> list[dict[str, Any]]:
+        resources = self.fixtures.get("resources")
+        return resources if isinstance(resources, list) else []
+
+    def list_prompts(self) -> list[dict[str, Any]]:
+        prompts = self.fixtures.get("prompts")
+        return prompts if isinstance(prompts, list) else []
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        outputs = self.fixtures.get("tool_outputs")
+        if isinstance(outputs, dict) and isinstance(outputs.get(name), dict):
+            return outputs[name]
+        return {
+            "status": "succeeded",
+            "output": {"tool_name": name, "arguments": arguments},
+            "artifact_ids": [],
+            "metadata": {},
+        }
 
 
 @app.command("doctor")
@@ -2101,6 +2738,32 @@ def validate_guardrails_command(
         typer.echo(f"Markdown: {artifact_dir / 'guardrail_audit.md'}")
         for finding in report.findings:
             typer.echo(f"- {finding.check_id}: {finding.artifact_path}: {finding.message}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("tools")
+def validate_tools_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the V2.2 governed tool ecosystem validation workflow."""
+    from molecule_ranker.validation.tools import run_tool_ecosystem_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "tools"
+    report = run_tool_ecosystem_validation(output_dir)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Tool ecosystem validation: {report.status}")
+        typer.echo(f"Checks: {len(report.checks)}")
+        typer.echo(f"Report: {output_dir / 'tool_security_report.md'}")
+        for check in report.checks:
+            typer.echo(f"- {check.status}: {check.check_id}")
     if report.status != "pass":
         raise typer.Exit(code=1)
 

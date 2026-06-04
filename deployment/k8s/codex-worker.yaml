@@ -13,7 +13,7 @@ metadata:
   labels:
     app: molecule-ranker
     component: codex-worker
-    app.kubernetes.io/version: "2.1.0"
+    app.kubernetes.io/version: "2.2.0"
   annotations:
     molecule-ranker.openai.com/optional: "true"
 spec:
@@ -57,7 +57,7 @@ spec:
             optional: true
       containers:
         - name: codex-worker
-          image: molecule-ranker:2.1.0
+          image: molecule-ranker:2.2.0
           imagePullPolicy: IfNotPresent
           args: ["worker", "--job-types", "codex_task"]
           env:

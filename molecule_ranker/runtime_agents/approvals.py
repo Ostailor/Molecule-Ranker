@@ -85,6 +85,7 @@ class RuntimeApprovalController:
             "tool_name": tool.tool_name,
             "side_effect_level": tool.side_effect_level,
             "policy_tags": tool.policy_tags,
+            **_tool_package_risk_metadata(tool),
         }
 
         if autonomy_level == "observe_only":
@@ -323,6 +324,24 @@ def approval_type_for_tool(tool: RuntimeToolSpec) -> ApprovalType | None:
     if tool.requires_approval_by_default:
         return "execute_plan"
     return None
+
+
+def _tool_package_risk_metadata(tool: RuntimeToolSpec) -> dict[str, Any]:
+    package = tool.metadata.get("tool_package")
+    tool_version = tool.metadata.get("tool_version")
+    metadata: dict[str, Any] = {}
+    if isinstance(package, dict):
+        metadata["package_id"] = package.get("package_id")
+        metadata["package_version"] = package.get("version")
+        metadata["package_status"] = package.get("status")
+        metadata["security_scan_status"] = package.get("security_scan_status")
+        metadata["approval_status"] = package.get("approval_status")
+        metadata["tool_package_risk"] = package.get("risk_level") or package.get(
+            "security_risk_level"
+        )
+    if isinstance(tool_version, dict):
+        metadata["tool_version"] = tool_version.get("version")
+    return metadata
 
 
 def _is_observe_only_tool(tool: RuntimeToolSpec) -> bool:

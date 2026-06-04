@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from molecule_ranker.runtime_agents.guardrails import RuntimeGuardrailChecker
 from molecule_ranker.runtime_agents.schemas import (
     RuntimeActionPlan,
     RuntimeActionStep,
@@ -86,6 +87,7 @@ class RuntimeActionExecutor:
     ) -> None:
         self.registry = registry or RuntimeToolRegistry.default()
         self.tool_handlers = tool_handlers or {}
+        self.guardrails = RuntimeGuardrailChecker(registry=self.registry)
 
     def execute(
         self,
@@ -180,6 +182,53 @@ class RuntimeActionExecutor:
                     started_at=started_at,
                 )
 
+            runtime_context = plan.metadata.get("runtime_context")
+            if not isinstance(runtime_context, dict):
+                runtime_context = {}
+            context_permissions = runtime_context.get("user_permissions")
+            user_permissions = (
+                {item for item in context_permissions if isinstance(item, str)}
+                if isinstance(context_permissions, list)
+                else set()
+            )
+            if not self.registry.tool_allowed_in_context(
+                spec,
+                org_id=runtime_context.get("org_id")
+                if isinstance(runtime_context.get("org_id"), str)
+                else None,
+                project_id=runtime_context.get("project_id")
+                if isinstance(runtime_context.get("project_id"), str)
+                else None,
+                user_id=runtime_context.get("user_id")
+                if isinstance(runtime_context.get("user_id"), str)
+                else actor,
+                user_permissions=user_permissions,
+            ):
+                result = _result_for_step(
+                    step,
+                    status="policy_blocked",
+                    error_summary=(
+                        "Tool is not approved for this project/org context: "
+                        f"{step.tool_name}"
+                    ),
+                )
+                results.append(result)
+                audit_events.append(
+                    _audit(plan, "runtime_step_policy_blocked", actor, result.error_summary or "")
+                )
+                self._record_tool_usage(spec, result, actor, plan)
+                return _execution_result(
+                    plan=plan,
+                    mode=mode,
+                    status="policy_blocked",
+                    results=results,
+                    artifact_ids=artifact_ids,
+                    job_ids=job_ids,
+                    warnings=warnings,
+                    audit_events=audit_events,
+                    started_at=started_at,
+                )
+
             policy_error = _policy_error(step, spec, mode, actor, approved)
             if policy_error:
                 result_status = (
@@ -201,6 +250,7 @@ class RuntimeActionExecutor:
                 audit_events.append(
                     _audit(plan, f"runtime_step_{result_status}", actor, policy_error)
                 )
+                self._record_tool_usage(spec, result, actor, plan)
                 return _execution_result(
                     plan=plan,
                     mode=mode,
@@ -222,6 +272,7 @@ class RuntimeActionExecutor:
                     f"Started {step.tool_name}.",
                     object_type="RuntimeActionStep",
                     object_id=step.step_id,
+                    metadata=_tool_audit_metadata(spec),
                 )
             )
             try:
@@ -239,6 +290,12 @@ class RuntimeActionExecutor:
                         tool_result.status = "validation_failed"
                         tool_result.warnings.extend(guardrail_warnings)
                         tool_result.error_summary = "; ".join(guardrail_warnings)
+                ecosystem_warnings = self._ecosystem_output_warnings(tool_result, spec)
+                if ecosystem_warnings:
+                    tool_result.status = "validation_failed"
+                    tool_result.warnings.extend(ecosystem_warnings)
+                    tool_result.error_summary = "; ".join(ecosystem_warnings)
+                self._record_tool_usage(spec, tool_result, actor, plan)
                 if tool_result.status == "succeeded":
                     step.status = "succeeded"
                     step.result_id = tool_result.result_id
@@ -252,6 +309,7 @@ class RuntimeActionExecutor:
                             f"{step.tool_name} succeeded.",
                             object_type="RuntimeToolResult",
                             object_id=tool_result.result_id,
+                            metadata=_tool_audit_metadata(spec),
                         )
                     )
                     results.append(tool_result)
@@ -267,6 +325,7 @@ class RuntimeActionExecutor:
                         tool_result.error_summary or f"{step.tool_name} failed.",
                         object_type="RuntimeToolResult",
                         object_id=tool_result.result_id,
+                        metadata=_tool_audit_metadata(spec),
                     )
                 )
                 if _step_optional(step):
@@ -289,6 +348,7 @@ class RuntimeActionExecutor:
                 step.status = "failed"
                 step.result_id = result.result_id
                 results.append(result)
+                self._record_tool_usage(spec, result, actor, plan)
                 audit_events.append(
                     _audit(
                         plan,
@@ -297,6 +357,7 @@ class RuntimeActionExecutor:
                         str(exc),
                         object_type="RuntimeToolResult",
                         object_id=result.result_id,
+                        metadata=_tool_audit_metadata(spec),
                     )
                 )
                 if _step_optional(step):
@@ -342,6 +403,51 @@ class RuntimeActionExecutor:
                 f"{step.tool_name}; use {spec.metadata.get('deterministic_entrypoint')}."
             )
         return handler(step, spec)
+
+    def _ecosystem_output_warnings(
+        self,
+        result: RuntimeToolResult,
+        spec: RuntimeToolSpec,
+    ) -> list[str]:
+        if not _is_plugin_or_mcp_tool(spec):
+            return []
+        warnings: list[str] = []
+        output = self.guardrails.check_output(result)
+        warnings.extend(violation.message for violation in output.violations)
+        state = self.guardrails.check_state(result, expected_output_schema=spec.output_schema)
+        warnings.extend(violation.message for violation in state.violations)
+        return list(dict.fromkeys(warnings))
+
+    def _record_tool_usage(
+        self,
+        spec: RuntimeToolSpec,
+        result: RuntimeToolResult,
+        actor: str,
+        plan: RuntimeActionPlan,
+    ) -> None:
+        package_id, tool_version = _tool_package_id_and_version(spec)
+        runtime_context = plan.metadata.get("runtime_context")
+        project_id = (
+            runtime_context.get("project_id")
+            if isinstance(runtime_context, dict)
+            and isinstance(runtime_context.get("project_id"), str)
+            else None
+        )
+        invoked_by = actor if actor in {"codex", "user", "workflow", "system"} else "system"
+        self.registry.track_usage(
+            package_id=package_id,
+            tool_name=spec.tool_name,
+            tool_version=tool_version,
+            invoked_by=invoked_by,
+            status=result.status,
+            session_id=plan.session_id,
+            project_id=project_id,
+            artifact_ids=result.artifact_ids,
+            warnings=result.warnings,
+            metadata={"result_id": result.result_id, **_tool_audit_metadata(spec)},
+            started_at=result.started_at,
+            completed_at=result.completed_at,
+        )
 
 
 def _policy_error(
@@ -513,6 +619,35 @@ def _string_list(raw: Any) -> list[str]:
     return [item for item in raw if isinstance(item, str)]
 
 
+def _is_plugin_or_mcp_tool(spec: RuntimeToolSpec) -> bool:
+    return spec.category in {"plugin", "mcp"} or spec.tool_name.startswith(("plugin.", "mcp."))
+
+
+def _tool_package_id_and_version(spec: RuntimeToolSpec) -> tuple[str, str]:
+    package = spec.metadata.get("tool_package")
+    if isinstance(package, dict):
+        package_id = str(package.get("package_id") or "runtime")
+        version = str(package.get("version") or "unknown")
+    else:
+        package_id = "runtime"
+        version = "unknown"
+    tool_version = spec.metadata.get("tool_version")
+    if isinstance(tool_version, dict) and isinstance(tool_version.get("version"), str):
+        version = tool_version["version"]
+    return package_id, version
+
+
+def _tool_audit_metadata(spec: RuntimeToolSpec) -> dict[str, Any]:
+    package_id, tool_version = _tool_package_id_and_version(spec)
+    return {
+        "package_id": package_id,
+        "tool_version": tool_version,
+        "tool_name": spec.tool_name,
+        "side_effect_level": spec.side_effect_level,
+        "policy_tags": list(spec.policy_tags),
+    }
+
+
 def _audit(
     plan: RuntimeActionPlan,
     event_type: str,
@@ -521,6 +656,7 @@ def _audit(
     *,
     object_type: str | None = None,
     object_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> RuntimeAgentAuditEvent:
     return RuntimeAgentAuditEvent(
         event_id=f"runtime-audit-{uuid4().hex[:12]}",
@@ -533,7 +669,7 @@ def _audit(
         object_id=object_id,
         before=None,
         after=None,
-        metadata={"plan_id": plan.plan_id},
+        metadata={"plan_id": plan.plan_id, **(metadata or {})},
     )
 
 

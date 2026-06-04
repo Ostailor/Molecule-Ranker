@@ -91,6 +91,9 @@ class RuntimeGuardrailChecker:
         permissions = user_permissions or set()
         approved = approvals or set()
         artifact_ids = known_artifacts or set()
+        runtime_context = plan.metadata.get("runtime_context")
+        if not isinstance(runtime_context, dict):
+            runtime_context = {}
 
         for step in plan.steps:
             spec = self.registry.get(step.tool_name)
@@ -114,6 +117,27 @@ class RuntimeGuardrailChecker:
                     )
                 )
             approval_type = approval_type_for_tool(spec)
+            if not self.registry.tool_allowed_in_context(
+                spec,
+                org_id=runtime_context.get("org_id")
+                if isinstance(runtime_context.get("org_id"), str)
+                else None,
+                project_id=runtime_context.get("project_id")
+                if isinstance(runtime_context.get("project_id"), str)
+                else None,
+                user_id=runtime_context.get("user_id")
+                if isinstance(runtime_context.get("user_id"), str)
+                else actor,
+                user_permissions=permissions,
+            ):
+                violations.append(
+                    _violation(
+                        "plan",
+                        "tool_not_approved_for_context",
+                        f"Tool is not approved for this project/org context: {step.tool_name}.",
+                        object_id=step.step_id,
+                    )
+                )
             if approval_type is not None and not _is_approved(step, approved, approval_type):
                 violations.append(
                     _violation(

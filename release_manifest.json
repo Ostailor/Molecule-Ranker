@@ -5,8 +5,8 @@
   "dependency_lock_hash": "0b1dd598445548ad512d594d81f8d244148a19d11b40d3a70d5c65204f3936dc",
   "git_commit": "7e5b2fdc882b2c31a6eb636c32116c8704d74ac7",
   "known_limitations": [
-    "V2.1 is for internal research use only and is not a clinical product.",
-    "V2.1 keeps V2.0 enterprise readiness intact and adds a controlled Codex runtime agent for approved deterministic tool execution.",
+    "V2.2 is for internal research use only and is not a clinical product.",
+    "V2.2 keeps V2.1 runtime-agent controls intact and adds a governed Codex tool ecosystem for approved, signed, scanned, policy-scoped tool packs.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules are computational hypotheses and require independent validation.",
     "Portfolio recommendations are research prioritization aids, not clinical or experimental instructions.",
@@ -41,5 +41,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "2.1.0"
+  "version": "2.2.0"
 }

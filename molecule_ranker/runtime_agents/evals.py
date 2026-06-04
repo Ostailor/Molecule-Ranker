@@ -82,7 +82,7 @@ class RuntimeAgentEvalSuiteResult(BaseModel):
 
 class RuntimeAgentEvalSuite:
     def __init__(self, *, registry: RuntimeToolRegistry | None = None) -> None:
-        self.registry = registry or RuntimeToolRegistry.default()
+        self.registry = registry or _runtime_eval_registry()
         self.guardrails = RuntimeGuardrailChecker(registry=self.registry)
         self.recovery = RuntimeFailureRecovery(registry=self.registry)
 
@@ -451,7 +451,55 @@ def _all_permissions(registry: RuntimeToolRegistry) -> set[str]:
     }
 
 
-_REGISTRY = RuntimeToolRegistry.default()
+def _runtime_eval_registry() -> RuntimeToolRegistry:
+    registry = RuntimeToolRegistry.default()
+    registry.register(
+        RuntimeToolSpec(
+            tool_name="plugin.eval.safe_summary",
+            category="plugin",
+            description="Approved tool-ecosystem eval plugin for safe artifact summaries.",
+            input_schema={
+                "type": "object",
+                "properties": {"goal": {"type": "string"}},
+                "required": ["goal"],
+                "additionalProperties": True,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "deterministic_entrypoint": {"type": "string"},
+                },
+                "required": ["summary"],
+                "additionalProperties": True,
+            },
+            required_permissions=["plugin:run"],
+            policy_tags=["codex_visible", "tool_ecosystem_eval"],
+            side_effect_level="artifact_write",
+            requires_approval_by_default=False,
+            idempotent=False,
+            metadata={
+                "deterministic_entrypoint": "runtime_eval_plugin.safe_summary",
+                "tool_package": {
+                    "package_id": "runtime-eval-plugin-pack",
+                    "version": "1.0.0",
+                    "manifest_hash": "runtime-eval-plugin-manifest",
+                    "signature": "sha256:runtime-eval-plugin-manifest",
+                    "approval_status": "approved",
+                    "security_scan_status": "passed",
+                    "status": "approved",
+                },
+                "tool_version": {
+                    "tool_name": "plugin.eval.safe_summary",
+                    "version": "1.0.0",
+                },
+            },
+        )
+    )
+    return registry
+
+
+_REGISTRY = _runtime_eval_registry()
 _ALL_PERMISSIONS = _all_permissions(_REGISTRY)
 
 RUNTIME_AGENT_EVAL_TASKS: tuple[RuntimeAgentEvalTask, ...] = (
@@ -558,6 +606,13 @@ RUNTIME_AGENT_EVAL_TASKS: tuple[RuntimeAgentEvalTask, ...] = (
                 },
             },
         },
+    ),
+    RuntimeAgentEvalTask(
+        task_id="approved_plugin_tool_ecosystem_summary",
+        description="Use an approved governed plugin tool from the runtime ecosystem.",
+        goal="Summarize artifact readiness with the approved eval plugin.",
+        tools=["plugin.eval.safe_summary"],
+        user_permissions=_ALL_PERMISSIONS,
     ),
 )
 
