@@ -11,6 +11,10 @@ from typing import Any
 from pydantic import BaseModel, Field
 from sqlalchemy import insert, update
 
+from molecule_ranker.agent_governance.run_control import (
+    AgentRunControlManager,
+    RunControlRequest,
+)
 from molecule_ranker.codex.provider import (
     CodexArtifact,
     CodexCLIProvider,
@@ -133,6 +137,7 @@ class CodexWorker:
         settings: PlatformSettings | None = None,
         provider: Any | None = None,
         codex_config: Any | None = None,
+        governance_run_control_manager: AgentRunControlManager | None = None,
     ) -> None:
         if config is None and codex_config is not None:
             config = CodexWorkerConfig(
@@ -153,6 +158,7 @@ class CodexWorker:
             or database.root_dir / ".molecule-ranker" / "codex-worker"
         ).resolve()
         self.provider = provider
+        self.governance_run_control_manager = governance_run_control_manager
 
     def run_next(self) -> PlatformJob | None:
         job = self.queue.claim_next(job_types={"codex_task"})
@@ -178,6 +184,7 @@ class CodexWorker:
 
         try:
             self._check_worker_enabled()
+            self._check_run_controls(job, task_type)
             self._check_job_authorization(job)
             self._check_task_type(task_type)
             work_dir = self._isolated_work_dir(job)
@@ -276,6 +283,22 @@ class CodexWorker:
     def _check_worker_enabled(self) -> None:
         if not self.config.enable_codex_worker:
             raise CodexGuardrailError(["Codex worker is disabled by platform configuration."])
+
+    def _check_run_controls(self, job: PlatformJob, task_type: str) -> None:
+        if self.governance_run_control_manager is None:
+            return
+        decision = self.governance_run_control_manager.evaluate(
+            RunControlRequest(
+                agent_id="codex_worker",
+                agent_type="codex_worker",
+                org_id=job.org_id,
+                project_id=job.project_id,
+                action=task_type,
+                autonomy_level="execute_with_approval",
+            )
+        )
+        if not decision.allowed:
+            raise CodexGuardrailError(decision.reasons)
 
     def _check_job_authorization(self, job: PlatformJob) -> None:
         user = self.database.get_user(job.requested_by_user_id)

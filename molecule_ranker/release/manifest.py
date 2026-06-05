@@ -56,7 +56,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
                 "Codex-generated campaign priorities, budgets, costs, metrics, outcomes, "
                 "or advancement decisions",
                 "campaign plans promoted to lab protocols or synthesis routes",
-                "major new science modules in the V2.5 enterprise release",
+                "major new science modules in the V2.6 enterprise release",
                 "expanded generation, docking, ADMET, graph reasoning, model training, "
                 "integrations, or campaign planning except for controlled runtime "
                 "orchestration, stability, validation, security, and enterprise readiness",
@@ -167,10 +167,10 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V2.5 is for internal research use only and is not a clinical product.",
-        "V2.5 adds agent self-evaluation, failure diagnosis, safe repair planning, "
-        "bounded autonomous retry, repair memory, regression checks, and auditable "
-        "repair reports over the existing governed Codex runtime and tool ecosystem.",
+        "V2.6 is for internal research use only and is not a clinical product.",
+        "V2.6 adds enterprise governance for Codex runtime agents, subagents, "
+        "tools, campaigns, and autonomous actions over the existing governed "
+        "Codex runtime and tool ecosystem.",
         "Agents may repair workflows but may not repair scientific truth by inventing "
         "missing data.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
@@ -200,4 +200,8 @@ def _known_limitations() -> list[str]:
         "Codex outputs are assistant artifacts and must not be promoted to biomedical evidence.",
         "Codex runtime actions must pass the tool registry, RBAC, policy, approval, "
         "artifact validation, guardrail, and audit trail checks.",
+        "Codex cannot approve its own autonomy increases, policy overrides, "
+        "governance policy changes, budgets, capability grants, or certifications.",
+        "Agent incidents, policy violations, guardrail failures, policy drift, "
+        "prompt drift, and tool drift must remain visible in governance reports.",
     ]

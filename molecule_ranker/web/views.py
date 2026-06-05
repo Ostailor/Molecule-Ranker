@@ -6,7 +6,7 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from urllib.parse import parse_qs, quote, unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,6 +15,29 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from starlette import status
 
+from molecule_ranker.agent_governance.capability_grants import (
+    CapabilityGrantManager,
+    CapabilityGrantStore,
+)
+from molecule_ranker.agent_governance.certification import (
+    AgentCertificationManager,
+    AgentCertificationStore,
+)
+from molecule_ranker.agent_governance.incidents import AgentIncidentManager, IncidentStore
+from molecule_ranker.agent_governance.run_control import (
+    AgentRunControlManager,
+    RunControlStore,
+)
+from molecule_ranker.agent_governance.schemas import (
+    AgentAutonomyBudget,
+    AgentGovernancePolicy,
+    AgentGovernanceReport,
+    AgentRiskProfile,
+)
+from molecule_ranker.agent_governance.simulator import (
+    AgentPolicySimulationRequest,
+    simulate_agent_action,
+)
 from molecule_ranker.agent_repair.hosted import RepairHostedStore
 from molecule_ranker.campaigns import CampaignPlan, CampaignStore
 from molecule_ranker.codex_backbone.guardrails import redact_secrets
@@ -828,7 +851,7 @@ def agent_reliability_dashboard_page(
     body = (
         _agent_nav()
         + "<h2>Agent reliability dashboard</h2>"
-        + "<p>V2.5 self-evaluation, failure diagnosis, autonomous repair, "
+        + "<p>V2.6 self-evaluation, failure diagnosis, autonomous repair, "
         + "regression checks, and auditable repair reports.</p>"
         + "<p>Agents may repair workflows. Agents may not repair scientific truth "
         + "by inventing missing data.</p>"
@@ -850,6 +873,422 @@ def agent_reliability_dashboard_page(
     return _agent_dashboard_html("Agent reliability", body)
 
 
+@router.get("/dashboard/governance", response_class=HTMLResponse)
+def governance_overview_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    policies = _governance_policies(request)
+    grants = _governance_grant_manager(request).list_grants()
+    budgets = _governance_budgets(request)
+    certifications = _governance_certification_manager(request).list_certifications()
+    risk_profiles = _governance_risk_profiles(request)
+    incidents = _governance_incident_manager(request).list_incidents()
+    controls = _governance_run_control_manager(request).list_controls(active_only=True)
+    reports = _governance_reports(request)
+    rows = [
+        ["Active policies", len([policy for policy in policies if policy.enabled])],
+        ["Capability grants", len(grants)],
+        ["Autonomy budgets", len(budgets)],
+        ["Certifications", len(certifications)],
+        ["Agent risk profiles", len(risk_profiles)],
+        [
+            "Open incidents",
+            len([item for item in incidents if item.status not in {"resolved", "false_positive"}]),
+        ],
+        ["Active run controls", len(controls)],
+        ["Governance reports", len(reports)],
+    ]
+    body = (
+        _governance_nav()
+        + "<h2>Governance overview</h2>"
+        + "<p>Enterprise controls for Codex runtime agents, subagents, tools, "
+        + "campaigns, and autonomous actions.</p>"
+        + _table(["Area", "Count"], rows)
+    )
+    return _governance_dashboard_html("Governance overview", body)
+
+
+@router.get("/dashboard/governance/policies", response_class=HTMLResponse)
+def governance_policies_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    rows = [
+        [
+            policy.policy_id,
+            policy.policy_name,
+            policy.policy_version,
+            policy.max_autonomy_level,
+            ", ".join(policy.allowed_tool_categories),
+            ", ".join(policy.denied_tool_categories),
+            "enabled" if policy.enabled else "disabled",
+        ]
+        for policy in _governance_policies(request)
+    ]
+    return _governance_dashboard_html(
+        "Active policies",
+        _governance_nav()
+        + _table(
+            [
+                "Policy",
+                "Name",
+                "Version",
+                "Autonomy cap",
+                "Allowed tools",
+                "Denied tools",
+                "Status",
+            ],
+            rows,
+            empty_message="No governance policies configured.",
+        ),
+    )
+
+
+@router.get("/dashboard/governance/grants", response_class=HTMLResponse)
+def governance_grants_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    rows = [
+        [
+            grant.grant_id,
+            grant.agent_id,
+            grant.agent_type,
+            grant.granted_capability,
+            f"{grant.scope_type}:{grant.scope_id or '*'}",
+            grant.status,
+            grant.granted_by,
+        ]
+        for grant in _governance_grant_manager(request).list_grants()
+    ]
+    return _governance_dashboard_html(
+        "Capability grants",
+        _governance_nav()
+        + _table(
+            ["Grant", "Agent", "Type", "Capability", "Scope", "Status", "Granted by"],
+            rows,
+            empty_message="No capability grants recorded.",
+        ),
+    )
+
+
+@router.get("/dashboard/governance/budgets", response_class=HTMLResponse)
+def governance_budgets_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    rows = [
+        [
+            budget.budget_id,
+            budget.agent_id or budget.campaign_id or budget.project_id or budget.org_id or "*",
+            budget.period,
+            budget.max_tool_calls if budget.max_tool_calls is not None else "",
+            budget.max_external_writes if budget.max_external_writes is not None else 0,
+            budget.max_cost_units if budget.max_cost_units is not None else "",
+            "enabled" if budget.enabled else "disabled",
+        ]
+        for budget in _governance_budgets(request)
+    ]
+    return _governance_dashboard_html(
+        "Autonomy budgets",
+        _governance_nav()
+        + _table(
+            [
+                "Budget",
+                "Scope",
+                "Period",
+                "Tool calls",
+                "External writes",
+                "Cost units",
+                "Status",
+            ],
+            rows,
+            empty_message="No autonomy budgets configured.",
+        ),
+    )
+
+
+@router.get("/dashboard/governance/certifications", response_class=HTMLResponse)
+def governance_certifications_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    rows = [
+        [
+            certification.certification_id,
+            certification.agent_id,
+            certification.certification_type,
+            certification.certified_autonomy_level,
+            f"{certification.score:.2f}",
+            "passed" if certification.passed else "failed",
+            certification.certified_by,
+        ]
+        for certification in _governance_certification_manager(request).list_certifications()
+    ]
+    return _governance_dashboard_html(
+        "Certifications",
+        _governance_nav()
+        + _table(
+            ["Certification", "Agent", "Type", "Autonomy", "Score", "Status", "Certified by"],
+            rows,
+            empty_message="No agent certifications recorded.",
+        ),
+    )
+
+
+@router.get("/dashboard/governance/risk", response_class=HTMLResponse)
+def governance_risk_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    rows = [
+        [
+            profile.agent_id,
+            profile.risk_level,
+            ", ".join(profile.risk_factors),
+            profile.recent_guardrail_failures,
+            profile.recent_policy_violations,
+            profile.recent_human_overrides,
+            f"{profile.confidence:.2f}",
+        ]
+        for profile in _governance_risk_profiles(request)
+    ]
+    return _governance_dashboard_html(
+        "Agent risk profiles",
+        _governance_nav()
+        + _table(
+            [
+                "Agent",
+                "Risk",
+                "Factors",
+                "Guardrails",
+                "Violations",
+                "Overrides",
+                "Confidence",
+            ],
+            rows,
+            empty_message="No agent risk profiles computed.",
+        ),
+    )
+
+
+@router.get("/dashboard/governance/incidents", response_class=HTMLResponse)
+def governance_incidents_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    rows = [
+        [
+            incident.incident_id,
+            incident.severity,
+            incident.incident_type,
+            incident.status,
+            _governance_text(incident.summary),
+            incident.assigned_to or "",
+        ]
+        for incident in _governance_incident_manager(request).list_incidents()
+    ]
+    return _governance_dashboard_html(
+        "Incidents",
+        _governance_nav()
+        + _table(
+            ["Incident", "Severity", "Type", "Status", "Summary", "Owner"],
+            rows,
+            empty_message="No governance incidents opened.",
+        ),
+    )
+
+
+@router.get("/dashboard/governance/run-controls", response_class=HTMLResponse)
+def governance_run_controls_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    rows = _governance_run_control_rows(
+        _governance_run_control_manager(request).list_controls()
+    )
+    return _governance_dashboard_html(
+        "Run controls",
+        _governance_nav()
+        + _table(
+            ["Control", "Type", "Scope", "Reason", "Applied by", "Active"],
+            rows,
+            empty_message="No run controls recorded.",
+        ),
+    )
+
+
+@router.get("/dashboard/governance/kill-switches", response_class=HTMLResponse)
+def governance_kill_switches_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    controls = [
+        control
+        for control in _governance_run_control_manager(request).list_controls(active_only=True)
+        if control.control_type == "kill_switch"
+    ]
+    return _governance_dashboard_html(
+        "Kill switches",
+        _governance_nav()
+        + _table(
+            ["Control", "Type", "Scope", "Reason", "Applied by", "Active"],
+            _governance_run_control_rows(controls),
+            empty_message="No active kill switches.",
+        ),
+    )
+
+
+@router.get("/dashboard/governance/reports", response_class=HTMLResponse)
+def governance_reports_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    rows = [
+        [
+            report.report_id,
+            report.project_id or report.org_id or "*",
+            report.agent_count,
+            report.guardrail_failures,
+            report.policy_violations,
+            report.incidents_opened,
+            report.budget_violations,
+        ]
+        for report in _governance_reports(request)
+    ]
+    return _governance_dashboard_html(
+        "Governance reports",
+        _governance_nav()
+        + _table(
+            [
+                "Report",
+                "Scope",
+                "Agents",
+                "Guardrails",
+                "Violations",
+                "Incidents",
+                "Budget violations",
+            ],
+            rows,
+            empty_message="No governance reports saved.",
+        ),
+    )
+
+
+@router.get("/dashboard/governance/policy-simulator", response_class=HTMLResponse)
+def governance_policy_simulator_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+    agent_id: str | None = None,
+    tool: str | None = None,
+    action: str | None = None,
+    agent_type: str = "runtime_agent",
+    role: str | None = None,
+    autonomy_level: str = "execute_safe_tools",
+    tool_category: str | None = None,
+    side_effect_level: str | None = None,
+    org_id: str | None = None,
+    project_id: str | None = None,
+    campaign_id: str | None = None,
+    budget_tool_calls: int = 0,
+    budget_external_writes: int = 0,
+    budget_cost_units: float = 0.0,
+    generated_molecule_advancement: bool = False,
+) -> Response:
+    _require_governance_dashboard_permission(database, user, "governance:read")
+    policies = _governance_policies(request)
+    controls = _governance_run_control_manager(request).list_controls(active_only=True)
+    simulation_body = ""
+    if agent_id and tool:
+        from molecule_ranker.agent_governance.budgets import BudgetImpact
+
+        simulation = simulate_agent_action(
+            AgentPolicySimulationRequest(
+                agent_id=agent_id,
+                agent_type=cast(Any, agent_type),
+                role=role,
+                autonomy_level=cast(Any, autonomy_level),
+                tool=tool,
+                action=action,
+                tool_category=tool_category,
+                side_effect_level=side_effect_level,
+                org_id=org_id,
+                project_id=project_id,
+                campaign_id=campaign_id,
+                budget_impact=BudgetImpact(
+                    tool_calls=budget_tool_calls,
+                    external_writes=budget_external_writes,
+                    cost_units=budget_cost_units,
+                ),
+                budgets=_governance_budgets(request),
+                active_policies=policies,
+                run_controls=controls,
+                metadata={
+                    "generated_molecule_advancement": generated_molecule_advancement,
+                },
+            )
+        )
+        simulation_body = (
+            "<h2>Simulation result</h2>"
+            + _table(
+                ["Field", "Value"],
+                [
+                    ["Status", simulation.status],
+                    ["Allowed", "yes" if simulation.allowed else "no"],
+                    [
+                        "Approval required",
+                        "yes" if simulation.approval_required else "no",
+                    ],
+                    ["Required approvals", ", ".join(simulation.required_approvals)],
+                    ["Required permissions", ", ".join(simulation.required_permissions)],
+                    ["Blocked reasons", "; ".join(simulation.blocked_reasons)],
+                ],
+            )
+            + "<h2>Trace</h2>"
+            + _safe_json(simulation.model_dump(mode="json"))
+        )
+    body = (
+        _governance_nav()
+        + "<h2>Policy simulator</h2>"
+        + _governance_simulator_form(request)
+        + _table(
+            ["Input", "Current value"],
+            [
+                ["Enabled policies", len([policy for policy in policies if policy.enabled])],
+                ["Active emergency controls", len(controls)],
+                [
+                    "Autonomy guard",
+                    "Codex cannot approve autonomy increases, policy overrides, or self-certify.",
+                ],
+            ],
+        )
+        + simulation_body
+    )
+    return _governance_dashboard_html("Policy simulator", body)
+
+
 @router.get("/dashboard/repair", response_class=HTMLResponse)
 def repair_overview_dashboard_page(
     request: Request,
@@ -866,7 +1305,7 @@ def repair_overview_dashboard_page(
     body = (
         _repair_nav()
         + "<h2>Repair overview</h2>"
-        + "<p>Hosted V2.5 workflow repair. Agents may repair workflows; agents may not "
+        + "<p>Hosted V2.6 workflow repair. Agents may repair workflows; agents may not "
         + "repair scientific truth by inventing missing data.</p>"
         + _table(
             ["Metric", "Count"],
@@ -4181,9 +4620,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.6.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.5</div>"
+        "<div class=\"brand\">molecule-ranker V2.6</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4326,9 +4765,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.6.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.5</div>"
+        "<div class=\"brand\">molecule-ranker V2.6</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4361,9 +4800,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.6.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.5</div>"
+        "<div class=\"brand\">molecule-ranker V2.6</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4413,9 +4852,9 @@ def _campaign_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.6.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.5</div>"
+        "<div class=\"brand\">molecule-ranker V2.6</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4856,9 +5295,9 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.6.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.5</div>"
+        "<div class=\"brand\">molecule-ranker V2.6</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -5434,9 +5873,9 @@ def _evaluation_dashboard_shell(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.6.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.5</div>"
+        "<div class=\"brand\">molecule-ranker V2.6</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -5677,9 +6116,9 @@ def _hypothesis_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.6.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.5</div>"
+        "<div class=\"brand\">molecule-ranker V2.6</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -5910,9 +6349,9 @@ def _subagent_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.5.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.6.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.5</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.6</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/subagents/sessions", "Subagent sessions")
@@ -5947,9 +6386,9 @@ def _agent_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.5.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.6.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.5</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.6</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/agent/sessions", "Agent sessions")
@@ -5978,6 +6417,240 @@ def _agent_nav() -> str:
         + _link("/dashboard/agent/reliability", "Reliability")
         + "</nav>"
     )
+
+
+GOVERNANCE_DASHBOARD_PERMISSIONS = {
+    "governance:read",
+    "governance:write",
+    "governance:approve",
+    "governance:admin",
+    "governance:incident_manage",
+}
+
+
+def _governance_state_dir(request: Request) -> Path:
+    path = Path(request.app.state.root_dir) / ".molecule-ranker" / "agent-governance"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _governance_grant_manager(request: Request) -> CapabilityGrantManager:
+    return CapabilityGrantManager(
+        store=CapabilityGrantStore(_governance_state_dir(request) / "grants.json")
+    )
+
+
+def _governance_certification_manager(request: Request) -> AgentCertificationManager:
+    return AgentCertificationManager(
+        store=AgentCertificationStore(
+            _governance_state_dir(request) / "certifications.json"
+        )
+    )
+
+
+def _governance_incident_manager(request: Request) -> AgentIncidentManager:
+    return AgentIncidentManager(
+        store=IncidentStore(_governance_state_dir(request) / "incidents.json")
+    )
+
+
+def _governance_run_control_manager(request: Request) -> AgentRunControlManager:
+    return AgentRunControlManager(
+        store=RunControlStore(_governance_state_dir(request) / "run-controls.json")
+    )
+
+
+def _governance_policies(request: Request) -> list[AgentGovernancePolicy]:
+    return _load_governance_state_models(
+        request,
+        "policies.json",
+        "policies",
+        AgentGovernancePolicy,
+    )
+
+
+def _governance_budgets(request: Request) -> list[AgentAutonomyBudget]:
+    return _load_governance_state_models(
+        request,
+        "budgets.json",
+        "budgets",
+        AgentAutonomyBudget,
+    )
+
+
+def _governance_risk_profiles(request: Request) -> list[AgentRiskProfile]:
+    return _load_governance_state_models(
+        request,
+        "risk-profiles.json",
+        "risk_profiles",
+        AgentRiskProfile,
+    )
+
+
+def _governance_reports(request: Request) -> list[AgentGovernanceReport]:
+    return _load_governance_state_models(
+        request,
+        "reports.json",
+        "reports",
+        AgentGovernanceReport,
+    )
+
+
+def _load_governance_state_models(
+    request: Request,
+    filename: str,
+    key: str,
+    model: type[Any],
+) -> list[Any]:
+    path = _governance_state_dir(request) / filename
+    if not path.exists():
+        return []
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return []
+    values = raw.get(key, [])
+    if not isinstance(values, list):
+        return []
+    return [model.model_validate(value) for value in values if isinstance(value, dict)]
+
+
+def _require_governance_dashboard_permission(
+    database: PlatformDatabase,
+    user: UserAccount,
+    permission: str,
+) -> None:
+    permissions = {str(item) for item in user.metadata.get("permissions", [])}
+    if (
+        user.is_admin
+        or "*" in permissions
+        or "governance:admin" in permissions
+        or permission in permissions
+        or has_permission(user, permission, database=database)
+    ):
+        return
+    raise HTTPException(status_code=403, detail=f"Governance permission denied: {permission}")
+
+
+def _governance_dashboard_html(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>"
+        + escape(title)
+        + " · molecule-ranker</title>"
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.6.0-dashboard-1">'
+        + "</head><body><div class=\"shell\"><header class=\"topbar\">"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.6</div>"
+        + "<nav class=\"nav\" aria-label=\"Dashboard\">"
+        + _link("/dashboard", "Projects")
+        + _link("/dashboard/governance", "Governance")
+        + _link("/dashboard/governance/incidents", "Incidents")
+        + _link("/dashboard/governance/kill-switches", "Kill switches")
+        + _link("/dashboard/admin", "Admin")
+        + "</nav></div></header><main class=\"content\">"
+        + "<aside class=\"research-disclaimer\">Governance controls are mandatory "
+        + "for Codex runtime agents, subagents, tools, campaigns, and autonomous "
+        + "actions. Codex cannot self-certify, approve autonomy increases, hide "
+        + "incidents, or override policy.</aside>"
+        + "<header class=\"page-heading\"><h1>"
+        + escape(title)
+        + "</h1></header>"
+        + body
+        + "</main></div></body></html>"
+    )
+
+
+def _governance_nav() -> str:
+    links = {
+        "Overview": "/dashboard/governance",
+        "Active policies": "/dashboard/governance/policies",
+        "Capability grants": "/dashboard/governance/grants",
+        "Autonomy budgets": "/dashboard/governance/budgets",
+        "Certifications": "/dashboard/governance/certifications",
+        "Risk profiles": "/dashboard/governance/risk",
+        "Incidents": "/dashboard/governance/incidents",
+        "Run controls": "/dashboard/governance/run-controls",
+        "Kill switches": "/dashboard/governance/kill-switches",
+        "Reports": "/dashboard/governance/reports",
+        "Policy simulator": "/dashboard/governance/policy-simulator",
+    }
+    return (
+        "<nav class=\"section\">"
+        + " ".join(_link(href, label) for label, href in links.items())
+        + "</nav>"
+    )
+
+
+def _governance_simulator_form(request: Request) -> str:
+    params = request.query_params
+    fields = [
+        ("agent_id", "Agent ID", "agent-1"),
+        ("tool", "Tool", "run_ranking"),
+        ("action", "Action", ""),
+        ("agent_type", "Agent type", "runtime_agent"),
+        ("role", "Role", ""),
+        ("autonomy_level", "Autonomy", "execute_safe_tools"),
+        ("tool_category", "Tool category", "ranking"),
+        ("side_effect_level", "Side effect", "artifact_write"),
+        ("org_id", "Org", ""),
+        ("project_id", "Project", ""),
+        ("campaign_id", "Campaign", ""),
+        ("budget_tool_calls", "Tool calls", "0"),
+        ("budget_external_writes", "External writes", "0"),
+        ("budget_cost_units", "Cost units", "0"),
+    ]
+    inputs = "".join(
+        "<label>"
+        + _h(label)
+        + f"<input name=\"{_h(name)}\" value=\"{_h(params.get(name, default))}\"></label>"
+        for name, label, default in fields
+    )
+    checked = " checked" if params.get("generated_molecule_advancement") == "true" else ""
+    return (
+        "<form class=\"section\" method=\"get\" action=\"/dashboard/governance/policy-simulator\">"
+        + inputs
+        + "<label><input type=\"checkbox\" name=\"generated_molecule_advancement\" "
+        + f"value=\"true\"{checked}>Generated molecule advancement</label>"
+        + "<button type=\"submit\">Simulate</button></form>"
+    )
+
+
+def _governance_run_control_rows(controls: list[Any]) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    for control in controls:
+        scope = control.agent_id or control.project_id or control.org_id or "*"
+        rows.append(
+            [
+                control.control_id,
+                control.control_type,
+                scope,
+                _governance_text(control.reason),
+                control.applied_by,
+                "yes" if control.active else "no",
+            ]
+        )
+    return rows
+
+
+def _governance_text(value: Any) -> str:
+    return str(_governance_sanitize(value))
+
+
+def _governance_sanitize(value: Any) -> Any:
+    sanitized = sanitize_for_dashboard(redact_for_log(value))
+    if isinstance(sanitized, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in sanitized.items():
+            if re.search(r"(password|secret|token|api[_-]?key|credential)", str(key), re.I):
+                redacted[str(key)] = "[REDACTED]"
+            else:
+                redacted[str(key)] = _governance_sanitize(item)
+        return redacted
+    if isinstance(sanitized, list):
+        return [_governance_sanitize(item) for item in sanitized]
+    if isinstance(sanitized, str):
+        return SUBAGENT_SECRET_TOKEN_RE.sub("[REDACTED]", redact_secrets(sanitized))
+    return sanitized
 
 
 TOOL_DASHBOARD_PERMISSIONS = {
@@ -6060,9 +6733,9 @@ def _repair_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.5.0-repair-1">'
+        '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.6.0-repair-1">'
         "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.5</div>"
+        "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.6</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/repair", "Repair")
@@ -6191,9 +6864,9 @@ def _tool_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.5.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.6.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.5</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.6</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/tools", "Tools")

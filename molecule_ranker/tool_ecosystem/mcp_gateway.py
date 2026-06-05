@@ -8,6 +8,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from molecule_ranker.agent_governance.capability_grants import CapabilityGrantManager
+from molecule_ranker.agent_governance.integration import (
+    record_governance_risk_event,
+)
+from molecule_ranker.agent_governance.policies import AgentGovernancePolicyEngine
+from molecule_ranker.agent_governance.risk import AgentRiskScorer
+from molecule_ranker.agent_governance.schemas import AgentRiskProfile
 from molecule_ranker.runtime_agents.executor import RuntimeActionExecutor, ToolHandler
 from molecule_ranker.runtime_agents.guardrails import RuntimeGuardrailChecker
 from molecule_ranker.runtime_agents.schemas import (
@@ -82,12 +89,23 @@ class InternalMCPGateway:
         approved_artifacts: list[dict[str, Any]] | None = None,
         approved_prompt_templates: list[dict[str, Any]] | None = None,
         artifact_validator: ArtifactValidator | None = None,
+        governance_policy_engine: AgentGovernancePolicyEngine | None = None,
+        capability_grant_manager: CapabilityGrantManager | None = None,
+        governance_risk_scorer: AgentRiskScorer | None = None,
+        governance_risk_profiles: dict[str, AgentRiskProfile] | None = None,
     ) -> None:
         self.registry = registry or ToolRegistryV2.default()
+        if governance_policy_engine is not None:
+            self.registry.governance_policy_engine = governance_policy_engine
+        if capability_grant_manager is not None:
+            self.registry.capability_grant_manager = capability_grant_manager
         self.tool_handlers = tool_handlers or {}
         self.approved_artifacts = approved_artifacts or []
         self.approved_prompt_templates = approved_prompt_templates or []
         self.artifact_validator = artifact_validator or _default_artifact_validator
+        self.governance_policy_engine = governance_policy_engine
+        self.governance_risk_scorer = governance_risk_scorer
+        self.governance_risk_profiles = governance_risk_profiles
         self.audit_events: list[RuntimeAgentAuditEvent] = []
 
     def tools_list(self, context: MCPGatewayContext) -> dict[str, Any]:
@@ -160,6 +178,9 @@ class InternalMCPGateway:
         executor = RuntimeActionExecutor(
             registry=self.registry.to_runtime_tool_registry(),
             tool_handlers=self.tool_handlers,
+            governance_policy_engine=self.governance_policy_engine,
+            governance_risk_scorer=self.governance_risk_scorer,
+            governance_risk_profiles=self.governance_risk_profiles,
         )
         execution = executor.execute(
             plan,
@@ -260,6 +281,26 @@ class InternalMCPGateway:
         spec: RuntimeToolSpec,
         context: MCPGatewayContext,
     ) -> str | None:
+        governance_error = self.registry.governance_error_for_tool(
+            spec,
+            agent_id=context.actor,
+            agent_type="codex_worker" if context.actor == "codex" else "tool_agent",
+            action=spec.tool_name,
+            org_id=context.org_id,
+            project_id=context.project_id,
+            approvals=context.approvals,
+        )
+        if governance_error is not None:
+            record_governance_risk_event(
+                risk_scorer=self.governance_risk_scorer,
+                risk_profiles=self.governance_risk_profiles,
+                agent_id=context.actor,
+                autonomy_level="execute_with_approval",
+                side_effect_level=spec.side_effect_level,
+                policy_violations=1,
+                metadata={"tool_name": spec.tool_name, "gateway": "mcp"},
+            )
+            return governance_error
         if spec.category == "codex":
             return "Codex tools cannot be executed through the MCP gateway."
         if spec.side_effect_level == "external_write" and not _approved(

@@ -246,6 +246,9 @@ def _write_design_workflow_artifacts(
 
 def _synthetic_candidates() -> dict[str, Any]:
     return {
+        "artifact_type": "candidates",
+        "schema_version": "1.0",
+        "artifact_contract_version": "1.0",
         "success": True,
         "disease": {"canonical_name": "Synthetic Neuro Example"},
         "targets": [

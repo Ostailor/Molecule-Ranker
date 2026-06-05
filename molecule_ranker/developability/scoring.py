@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from rdkit import Chem
-from rdkit.Chem import Descriptors, Lipinski
+from rdkit.Chem import Descriptors, rdMolDescriptors
 
 from molecule_ranker.developability.schemas import (
     ADMETPrediction as ScoredADMETPrediction,
@@ -793,10 +793,10 @@ class DevelopabilityAssessor:
         aromatic_rings = descriptors.get("aromatic_rings", 0.0)
         stereo_centers = len(Chem.FindMolChiralCenters(mol, includeUnassigned=True))
         descriptors_module = cast(Any, Descriptors)
-        lipinski_module = cast(Any, Lipinski)
+        mol_descriptors = cast(Any, rdMolDescriptors)
         ring_count = float(descriptors_module.RingCount(mol))
-        bridgeheads = float(lipinski_module.NumBridgeheadAtoms(mol))
-        spiro = float(lipinski_module.NumSpiroAtoms(mol))
+        bridgeheads = float(mol_descriptors.CalcNumBridgeheadAtoms(mol))
+        spiro = float(mol_descriptors.CalcNumSpiroAtoms(mol))
         penalty = (
             0.004 * max(heavy_atoms - 25, 0)
             + 0.018 * max(rotatable - 6, 0)

@@ -23,7 +23,7 @@ def test_pilot_readiness_passes_in_synthetic_dev_mode(tmp_path: Path) -> None:
     )
     isolation = run_isolation_audit(PlatformDatabase(tmp_path, db_path=db_path))
 
-    assert report.version == "2.5.0"
+    assert report.version == "2.6.0"
     assert report.environment == "development"
     assert len(report.checks) == 20
     assert report.failed_count == 0
@@ -121,7 +121,7 @@ def test_pilot_readiness_cli_outputs_json_and_markdown(tmp_path: Path) -> None:
 
     assert json_result.exit_code == 0, json_result.output
     payload = json.loads(json_result.output)
-    assert payload["version"] == "2.5.0"
+    assert payload["version"] == "2.6.0"
     assert payload["failed_count"] == 0
     assert markdown_result.exit_code == 0, markdown_result.output
     assert markdown_path.exists()

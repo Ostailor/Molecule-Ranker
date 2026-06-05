@@ -11,6 +11,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from molecule_ranker.agent_governance.run_control import (
+    AgentRunControlManager,
+    RunControlRequest,
+)
+
 RuntimeRunStatus = Literal[
     "succeeded",
     "failed",
@@ -498,7 +503,7 @@ class GuardrailChecker:
 
 
 class CodexRuntimeAgent:
-    """V2.5 runtime backbone for controlled molecule-ranker tool execution."""
+    """V2.6 runtime backbone for controlled molecule-ranker tool execution."""
 
     def __init__(
         self,
@@ -511,6 +516,7 @@ class CodexRuntimeAgent:
         artifact_validator: ArtifactValidator | None = None,
         guardrail_checker: GuardrailChecker | None = None,
         audit_log_path: Path | str | None = None,
+        governance_run_control_manager: AgentRunControlManager | None = None,
     ) -> None:
         self.planner = planner or ActionPlanner()
         self.registry = registry or ToolRegistry()
@@ -520,6 +526,7 @@ class CodexRuntimeAgent:
         self.artifact_validator = artifact_validator or ArtifactValidator()
         self.guardrail_checker = guardrail_checker or GuardrailChecker()
         self.audit_logger = AuditLogger(audit_log_path)
+        self.governance_run_control_manager = governance_run_control_manager
 
     def run(
         self,
@@ -533,9 +540,19 @@ class CodexRuntimeAgent:
         self.audit_logger.record(
             component="AuditLogger",
             status="started",
-            message="Started V2.5 Codex runtime audit trail.",
+            message="Started V2.6 Codex runtime audit trail.",
             context=context,
         )
+        run_control_warnings = self._run_control_warnings(context, action_type=None)
+        if run_control_warnings:
+            return self._result(
+                status="blocked",
+                objective=objective,
+                plan=RuntimePlan(objective=objective, actions=[]),
+                context=context,
+                start_index=start_index,
+                guardrail_warnings=run_control_warnings,
+            )
         plan = self.planner.build_plan(
             objective,
             requested_actions=requested_actions,
@@ -579,6 +596,20 @@ class CodexRuntimeAgent:
         blocked_warnings: list[str] = []
         resolved_specs: dict[str, ToolSpec] = {}
         for action in plan.actions:
+            run_control_warnings = self._run_control_warnings(
+                context,
+                action_type=action.action_type,
+            )
+            if run_control_warnings:
+                blocked_warnings.extend(run_control_warnings)
+                self.audit_logger.record(
+                    component="RunControl",
+                    status="blocked",
+                    message="; ".join(run_control_warnings),
+                    context=context,
+                    action_type=action.action_type,
+                )
+                continue
             spec = self.registry.get(action.action_type)
             self.audit_logger.record(
                 component="ToolRegistry",
@@ -740,6 +771,28 @@ class CodexRuntimeAgent:
             review_outputs=review_outputs,
         )
 
+    def _run_control_warnings(
+        self,
+        context: RuntimeContext,
+        *,
+        action_type: str | None,
+    ) -> list[str]:
+        if self.governance_run_control_manager is None:
+            return []
+        decision = self.governance_run_control_manager.evaluate(
+            RunControlRequest(
+                agent_id=context.actor_id,
+                agent_type="codex_worker",
+                org_id=context.org_id,
+                project_id=context.project_id,
+                action=action_type,
+                autonomy_level="execute_with_approval",
+            )
+        )
+        if decision.allowed:
+            return []
+        return decision.reasons
+
     def _result(
         self,
         *,
@@ -756,7 +809,7 @@ class CodexRuntimeAgent:
         self.audit_logger.record(
             component="AuditLogger",
             status=status,
-            message=f"Completed V2.5 Codex runtime run with status {status}.",
+            message=f"Completed V2.6 Codex runtime run with status {status}.",
             context=context,
             metadata={
                 "pending_approvals": pending_approvals or [],

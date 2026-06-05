@@ -9,7 +9,7 @@ import uuid
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import fields, is_dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
@@ -334,6 +334,34 @@ policy_app = typer.Typer(
     help="List, validate, and explain enterprise policy guardrails.",
     no_args_is_help=True,
 )
+governance_app = typer.Typer(
+    help="V2.6 enterprise agent governance controls.",
+    no_args_is_help=True,
+)
+governance_policy_app = typer.Typer(
+    help="Create, list, validate, and explain agent governance policies.",
+    no_args_is_help=True,
+)
+governance_grant_app = typer.Typer(
+    help="Create, list, revoke, and check agent capability grants.",
+    no_args_is_help=True,
+)
+governance_budget_app = typer.Typer(
+    help="Create, inspect, and reset agent autonomy budgets.",
+    no_args_is_help=True,
+)
+governance_certification_app = typer.Typer(
+    help="List and revoke agent certifications.",
+    no_args_is_help=True,
+)
+governance_control_app = typer.Typer(
+    help="Apply, list, and clear agent run controls.",
+    no_args_is_help=True,
+)
+governance_incident_app = typer.Typer(
+    help="List, inspect, assign, resolve, and export agent incidents.",
+    no_args_is_help=True,
+)
 eval_app = typer.Typer(
     help="Run V1.8 evaluation benchmark and prospective validation workflows.",
     no_args_is_help=True,
@@ -475,19 +503,19 @@ feedback_app = typer.Typer(
     no_args_is_help=True,
 )
 agent_app = typer.Typer(
-    help="V2.5 Codex runtime-agent and specialist multi-agent operations commands.",
+    help="V2.6 Codex runtime-agent and specialist multi-agent operations commands.",
     no_args_is_help=True,
 )
 repair_app = typer.Typer(
-    help="V2.5 repair diagnosis, planning, execution, and eval commands.",
+    help="V2.6 repair diagnosis, planning, execution, and eval commands.",
     no_args_is_help=True,
 )
 repair_memory_app = typer.Typer(
-    help="Inspect and exchange V2.5 operational repair memory.",
+    help="Inspect and exchange V2.6 operational repair memory.",
     no_args_is_help=True,
 )
 subagents_app = typer.Typer(
-    help="V2.5 specialized Codex subagent operations commands.",
+    help="V2.6 specialized Codex subagent operations commands.",
     no_args_is_help=True,
 )
 subagents_session_app = typer.Typer(
@@ -495,11 +523,11 @@ subagents_session_app = typer.Typer(
     no_args_is_help=True,
 )
 marketplace_app = typer.Typer(
-    help="V2.5 local/internal governed tool marketplace commands.",
+    help="V2.6 local/internal governed tool marketplace commands.",
     no_args_is_help=True,
 )
 tool_app = typer.Typer(
-    help="V2.5 governed tool ecosystem commands.",
+    help="V2.6 governed tool ecosystem commands.",
     no_args_is_help=True,
 )
 tool_package_app = typer.Typer(
@@ -519,7 +547,7 @@ tool_workflows_app = typer.Typer(
     no_args_is_help=True,
 )
 copilot_app = typer.Typer(
-    help="V2.5 autonomous campaign co-pilot commands.",
+    help="V2.6 autonomous campaign co-pilot commands.",
     no_args_is_help=True,
 )
 app.add_typer(review_app, name="review")
@@ -535,6 +563,7 @@ app.add_typer(auth_cli_app, name="auth")
 app.add_typer(config_app, name="config")
 app.add_typer(validate_app, name="validate")
 app.add_typer(policy_app, name="policy")
+app.add_typer(governance_app, name="governance")
 app.add_typer(eval_app, name="eval")
 app.add_typer(api_app, name="api")
 app.add_typer(v2_app, name="v2")
@@ -589,6 +618,12 @@ tool_app.add_typer(tool_skills_app, name="skills")
 tool_app.add_typer(tool_workflows_app, name="workflows")
 repair_app.add_typer(repair_memory_app, name="memory")
 subagents_app.add_typer(subagents_session_app, name="session")
+governance_app.add_typer(governance_policy_app, name="policy")
+governance_app.add_typer(governance_grant_app, name="grant")
+governance_app.add_typer(governance_budget_app, name="budget")
+governance_app.add_typer(governance_certification_app, name="certification")
+governance_app.add_typer(governance_control_app, name="control")
+governance_app.add_typer(governance_incident_app, name="incident")
 
 
 @app.callback()
@@ -600,6 +635,1412 @@ def main() -> None:
 def version() -> None:
     """Print the package version."""
     typer.echo(__version__)
+
+
+@governance_policy_app.command("list")
+def governance_policy_list(
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org filter.")] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project filter."),
+    ] = None,
+    enabled_only: Annotated[
+        bool,
+        typer.Option("--enabled-only/--include-disabled", help="Only list enabled policies."),
+    ] = False,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Governance policy state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/policies.json"),
+) -> None:
+    """List agent governance policies."""
+    policies = _load_governance_policies(state_path)
+    if org_id is not None:
+        policies = [policy for policy in policies if policy.org_id in {None, org_id}]
+    if project_id is not None:
+        policies = [policy for policy in policies if policy.project_id in {None, project_id}]
+    if enabled_only:
+        policies = [policy for policy in policies if policy.enabled]
+    _echo_models(policies)
+
+
+@governance_policy_app.command("create")
+def governance_policy_create(
+    policy_id: Annotated[str, typer.Option("--policy-id", help="Policy ID.")],
+    policy_name: Annotated[str, typer.Option("--policy-name", help="Policy name.")],
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org scope.")] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project scope."),
+    ] = None,
+    policy_version: Annotated[
+        str,
+        typer.Option("--policy-version", help="Policy version."),
+    ] = "2.6.0",
+    max_autonomy_level: Annotated[
+        str,
+        typer.Option("--max-autonomy-level", help="Maximum autonomy level."),
+    ] = "execute_with_approval",
+    applies_to_role: Annotated[
+        list[str] | None,
+        typer.Option("--applies-to-role", help="Role the policy applies to; repeatable."),
+    ] = None,
+    applies_to_agent: Annotated[
+        list[str] | None,
+        typer.Option("--applies-to-agent", help="Agent ID the policy applies to; repeatable."),
+    ] = None,
+    allowed_tool_category: Annotated[
+        list[str] | None,
+        typer.Option("--allowed-tool-category", help="Allowed tool category; repeatable."),
+    ] = None,
+    denied_tool_category: Annotated[
+        list[str] | None,
+        typer.Option("--denied-tool-category", help="Denied tool category; repeatable."),
+    ] = None,
+    allowed_side_effect: Annotated[
+        list[str] | None,
+        typer.Option("--allowed-side-effect", help="Allowed side-effect level; repeatable."),
+    ] = None,
+    approval_required_action: Annotated[
+        list[str] | None,
+        typer.Option("--approval-required-action", help="Approval-required action; repeatable."),
+    ] = None,
+    blocked_action: Annotated[
+        list[str] | None,
+        typer.Option("--blocked-action", help="Blocked action; repeatable."),
+    ] = None,
+    guardrail_profile: Annotated[
+        str,
+        typer.Option("--guardrail-profile", help="Guardrail profile name."),
+    ] = "strict_scientific",
+    enabled: Annotated[
+        bool,
+        typer.Option("--enabled/--disabled", help="Whether the policy is enabled."),
+    ] = True,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Governance policy state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/policies.json"),
+) -> None:
+    """Create or replace an agent governance policy."""
+    from molecule_ranker.agent_governance.schemas import AgentGovernancePolicy
+
+    now = datetime.now(UTC)
+    policy = AgentGovernancePolicy(
+        policy_id=policy_id,
+        org_id=org_id,
+        project_id=project_id,
+        policy_name=policy_name,
+        policy_version=policy_version,
+        applies_to_roles=applies_to_role or [],
+        applies_to_agents=applies_to_agent or [],
+        max_autonomy_level=cast(Any, max_autonomy_level),
+        allowed_tool_categories=allowed_tool_category or [],
+        denied_tool_categories=denied_tool_category or [],
+        allowed_side_effect_levels=allowed_side_effect
+        if allowed_side_effect is not None
+        else ["none", "artifact_write", "external_read"],
+        approval_required_actions=approval_required_action or [],
+        blocked_actions=blocked_action or [],
+        budget_policy_id=None,
+        guardrail_profile=guardrail_profile,
+        incident_policy_id=None,
+        enabled=enabled,
+        created_at=now,
+        updated_at=now,
+        metadata={},
+    )
+    policies = [
+        existing
+        for existing in _load_governance_policies(state_path)
+        if existing.policy_id != policy.policy_id
+    ]
+    policies.append(policy)
+    _write_governance_policies(state_path, policies)
+    _echo_model(policy)
+
+
+@governance_policy_app.command("validate")
+def governance_policy_validate(
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Governance policy state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/policies.json"),
+) -> None:
+    """Validate persisted governance policies."""
+    try:
+        policies = _load_governance_policies(state_path)
+    except Exception as exc:
+        _echo_json({"valid": False, "error": str(exc)})
+        raise typer.Exit(code=1) from exc
+    duplicate_ids = [
+        policy_id
+        for policy_id, count in Counter(policy.policy_id for policy in policies).items()
+        if count > 1
+    ]
+    payload = {
+        "valid": not duplicate_ids,
+        "policy_count": len(policies),
+        "duplicate_policy_ids": duplicate_ids,
+    }
+    _echo_json(payload)
+    if duplicate_ids:
+        raise typer.Exit(code=1)
+
+
+@governance_policy_app.command("explain")
+def governance_policy_explain(
+    agent_id: Annotated[str, typer.Option("--agent-id", help="Agent ID.")],
+    action: Annotated[str, typer.Option("--action", help="Action to evaluate.")],
+    agent_type: Annotated[
+        str,
+        typer.Option("--agent-type", help="Agent type."),
+    ] = "runtime_agent",
+    autonomy_level: Annotated[
+        str,
+        typer.Option("--autonomy-level", help="Requested autonomy level."),
+    ] = "execute_safe_tools",
+    tool_category: Annotated[
+        str | None,
+        typer.Option("--tool-category", help="Optional tool category."),
+    ] = None,
+    side_effect_level: Annotated[
+        str | None,
+        typer.Option("--side-effect-level", help="Optional side-effect level."),
+    ] = None,
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org context.")] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project context."),
+    ] = None,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Governance policy state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/policies.json"),
+) -> None:
+    """Explain the effective governance decision for an agent action."""
+    from molecule_ranker.agent_governance.policies import (
+        AgentActionRequest,
+        AgentGovernancePolicyEngine,
+    )
+
+    engine = AgentGovernancePolicyEngine(org_policies=_load_governance_policies(state_path))
+    decision = engine.evaluate_action(
+        AgentActionRequest(
+            agent_id=agent_id,
+            agent_type=cast(Any, agent_type),
+            action=action,
+            autonomy_level=cast(Any, autonomy_level),
+            org_id=org_id,
+            project_id=project_id,
+            tool_category=tool_category,
+            side_effect_level=side_effect_level,
+        )
+    )
+    _echo_model(decision)
+    if decision.status == "blocked":
+        raise typer.Exit(code=1)
+
+
+@governance_grant_app.command("create")
+def governance_grant_create(
+    agent_id: Annotated[str, typer.Option("--agent-id", help="Agent receiving the grant.")],
+    agent_type: Annotated[
+        str,
+        typer.Option(
+            "--agent-type",
+            help="runtime_agent, subagent, campaign_copilot, tool_agent, or codex_worker.",
+        ),
+    ],
+    capability: Annotated[str, typer.Option("--capability", help="Capability to grant.")],
+    scope_type: Annotated[
+        str,
+        typer.Option("--scope-type", help="org, project, campaign, workflow, or tool_package."),
+    ],
+    scope_id: Annotated[str | None, typer.Option("--scope-id", help="Optional scope ID.")] = None,
+    granted_by: Annotated[str, typer.Option("--granted-by", help="Authorizing actor ID.")] = "",
+    actor_type: Annotated[
+        str,
+        typer.Option("--actor-type", help="human, admin, service_account, codex, or agent."),
+    ] = "human",
+    authorized_capability: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--authorized-capability",
+            help="Capability in the actor permission scope; repeatable. Use * for all.",
+        ),
+    ] = None,
+    policy_allowed_capability: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--policy-allowed-capability",
+            help="Capability allowed by policy; repeatable. Omit to rely on actor scope only.",
+        ),
+    ] = None,
+    expires_at: Annotated[
+        str | None,
+        typer.Option("--expires-at", help="Timezone-aware ISO expiration timestamp."),
+    ] = None,
+    status: Annotated[
+        str,
+        typer.Option("--status", help="active, expired, revoked, or pending_approval."),
+    ] = "active",
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Capability grant state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/grants.json"),
+) -> None:
+    """Create an agent capability grant."""
+    from molecule_ranker.agent_governance.capability_grants import (
+        CapabilityGrantAuthorization,
+    )
+
+    manager = _capability_grant_manager(state_path)
+    authorization = CapabilityGrantAuthorization.model_validate(
+        {
+            "actor_id": granted_by,
+            "actor_type": actor_type,
+            "permission_scope": set(authorized_capability or []),
+            "policy_allowed_capabilities": set(policy_allowed_capability)
+            if policy_allowed_capability is not None
+            else None,
+        }
+    )
+    decision = manager.create_grant(
+        agent_id=agent_id,
+        agent_type=cast(Any, agent_type),
+        granted_capability=capability,
+        scope_type=cast(Any, scope_type),
+        scope_id=scope_id,
+        authorization=authorization,
+        expires_at=_parse_cli_datetime(expires_at) if expires_at else None,
+        status=cast(Any, status),
+    )
+    _echo_json(
+        {
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "grant": decision.grant.model_dump(mode="json") if decision.grant else None,
+            "audit_event": decision.audit_event.model_dump(mode="json"),
+        }
+    )
+    if not decision.allowed:
+        raise typer.Exit(code=1)
+
+
+@governance_grant_app.command("list")
+def governance_grant_list(
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Filter grants by agent ID."),
+    ] = None,
+    include_inactive: Annotated[
+        bool,
+        typer.Option("--include-inactive/--active-only", help="Include inactive grants."),
+    ] = True,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Capability grant state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/grants.json"),
+) -> None:
+    """List agent capability grants."""
+    manager = _capability_grant_manager(state_path)
+    manager.cleanup_expired()
+    _echo_models(manager.list_grants(agent_id=agent_id, include_inactive=include_inactive))
+
+
+@governance_grant_app.command("revoke")
+def governance_grant_revoke(
+    grant_id: Annotated[str, typer.Option("--grant-id", help="Grant to revoke.")],
+    revoked_by: Annotated[str, typer.Option("--revoked-by", help="Revoking actor ID.")],
+    reason: Annotated[
+        str,
+        typer.Option("--reason", help="Revocation reason."),
+    ] = "Capability grant revoked.",
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Capability grant state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/grants.json"),
+) -> None:
+    """Revoke an agent capability grant."""
+    from molecule_ranker.agent_governance.capability_grants import CapabilityGrantError
+
+    manager = _capability_grant_manager(state_path)
+    try:
+        _echo_model(manager.revoke_grant(grant_id, revoked_by=revoked_by, reason=reason))
+    except CapabilityGrantError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@governance_grant_app.command("check")
+def governance_grant_check(
+    agent_id: Annotated[str, typer.Option("--agent-id", help="Agent to check.")],
+    capability: Annotated[str, typer.Option("--capability", help="Capability to check.")],
+    scope_type: Annotated[
+        str | None,
+        typer.Option("--scope-type", help="Optional grant scope type."),
+    ] = None,
+    scope_id: Annotated[str | None, typer.Option("--scope-id", help="Optional scope ID.")] = None,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Capability grant state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/grants.json"),
+) -> None:
+    """Check whether an agent has an active capability grant."""
+    manager = _capability_grant_manager(state_path)
+    decision = manager.check_capability(
+        agent_id=agent_id,
+        capability=capability,
+        scope_type=cast(Any, scope_type),
+        scope_id=scope_id,
+    )
+    _echo_json(
+        {
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "grant": decision.grant.model_dump(mode="json") if decision.grant else None,
+            "audit_event": decision.audit_event.model_dump(mode="json"),
+        }
+    )
+    if not decision.allowed:
+        raise typer.Exit(code=1)
+
+
+@governance_budget_app.command("create")
+def governance_budget_create(
+    budget_id: Annotated[str, typer.Option("--budget-id", help="Budget ID.")],
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org scope.")] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project scope."),
+    ] = None,
+    campaign_id: Annotated[
+        str | None,
+        typer.Option("--campaign-id", help="Optional campaign scope."),
+    ] = None,
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Optional agent scope."),
+    ] = None,
+    period: Annotated[
+        str,
+        typer.Option("--period", help="per_session, daily, weekly, monthly, campaign_lifetime."),
+    ] = "daily",
+    max_tool_calls: Annotated[int | None, typer.Option("--max-tool-calls", min=0)] = None,
+    max_codex_tasks: Annotated[int | None, typer.Option("--max-codex-tasks", min=0)] = None,
+    max_runtime_minutes: Annotated[
+        float | None,
+        typer.Option("--max-runtime-minutes", min=0.0),
+    ] = None,
+    max_artifact_writes: Annotated[
+        int | None,
+        typer.Option("--max-artifact-writes", min=0),
+    ] = None,
+    max_db_writes: Annotated[int | None, typer.Option("--max-db-writes", min=0)] = None,
+    max_external_reads: Annotated[
+        int | None,
+        typer.Option("--max-external-reads", min=0),
+    ] = None,
+    max_external_writes: Annotated[
+        int | None,
+        typer.Option("--max-external-writes", min=0),
+    ] = None,
+    max_generation_jobs: Annotated[
+        int | None,
+        typer.Option("--max-generation-jobs", min=0),
+    ] = None,
+    max_docking_jobs: Annotated[
+        int | None,
+        typer.Option("--max-docking-jobs", min=0),
+    ] = None,
+    max_model_training_jobs: Annotated[
+        int | None,
+        typer.Option("--max-model-training-jobs", min=0),
+    ] = None,
+    max_campaign_replans: Annotated[
+        int | None,
+        typer.Option("--max-campaign-replans", min=0),
+    ] = None,
+    max_cost_units: Annotated[float | None, typer.Option("--max-cost-units", min=0.0)] = None,
+    reset_at: Annotated[
+        str | None,
+        typer.Option("--reset-at", help="Timezone-aware ISO reset timestamp."),
+    ] = None,
+    enabled: Annotated[
+        bool,
+        typer.Option("--enabled/--disabled", help="Whether the budget is enabled."),
+    ] = True,
+    exhaustion_action: Annotated[
+        str | None,
+        typer.Option("--exhaustion-action", help="Optional action: require_approval."),
+    ] = None,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Governance budget state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/budgets.json"),
+) -> None:
+    """Create or replace an agent autonomy budget."""
+    from molecule_ranker.agent_governance.schemas import AgentAutonomyBudget
+
+    metadata: dict[str, Any] = {
+        "external_writes_default_zero": True,
+        "destructive_actions_default_zero": True,
+    }
+    if exhaustion_action is not None:
+        metadata["exhaustion_action"] = exhaustion_action
+    budget = AgentAutonomyBudget(
+        budget_id=budget_id,
+        org_id=org_id,
+        project_id=project_id,
+        campaign_id=campaign_id,
+        agent_id=agent_id,
+        period=cast(Any, period),
+        max_tool_calls=max_tool_calls,
+        max_codex_tasks=max_codex_tasks,
+        max_runtime_minutes=max_runtime_minutes,
+        max_artifact_writes=max_artifact_writes,
+        max_db_writes=max_db_writes,
+        max_external_reads=max_external_reads,
+        max_external_writes=max_external_writes,
+        max_generation_jobs=max_generation_jobs,
+        max_docking_jobs=max_docking_jobs,
+        max_model_training_jobs=max_model_training_jobs,
+        max_campaign_replans=max_campaign_replans,
+        max_cost_units=max_cost_units,
+        current_usage={},
+        reset_at=_parse_cli_datetime(reset_at) if reset_at else None,
+        enabled=enabled,
+        metadata=metadata,
+    )
+    manager = _agent_budget_manager(state_path)
+    manager.budgets = [item for item in manager.budgets if item.budget_id != budget_id]
+    manager.budgets.append(budget)
+    _write_agent_budget_manager(state_path, manager)
+    _echo_model(budget)
+
+
+@governance_budget_app.command("status")
+def governance_budget_status(
+    budget_id: Annotated[str | None, typer.Option("--budget-id", help="Budget to inspect.")] = None,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Governance budget state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/budgets.json"),
+) -> None:
+    """Show autonomy budget usage status."""
+    manager = _agent_budget_manager(state_path)
+    if budget_id is not None:
+        _echo_model(manager.report_budget_usage(budget_id))
+        return
+    reports = [manager.report_budget_usage(budget.budget_id) for budget in manager.budgets]
+    _echo_models(reports)
+
+
+@governance_budget_app.command("reset")
+def governance_budget_reset(
+    budget_id: Annotated[str, typer.Option("--budget-id", help="Budget to reset.")],
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Governance budget state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/budgets.json"),
+) -> None:
+    """Reset a budget's current usage and reset timestamp."""
+    manager = _agent_budget_manager(state_path)
+    try:
+        budget = manager.reset_budget(budget_id)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _write_agent_budget_manager(state_path, manager)
+    _echo_model(budget)
+
+
+@governance_app.command("report")
+def governance_report(
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Project to report on."),
+    ] = None,
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org filter.")] = None,
+    period: Annotated[
+        str,
+        typer.Option("--period", help="daily, weekly, or monthly."),
+    ] = "weekly",
+    events_path: Annotated[
+        Path | None,
+        typer.Option("--events-path", help="Optional governance audit events JSON file."),
+    ] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", help="Directory for governance_report.json/md."),
+    ] = Path(".molecule-ranker/agent-governance/reports"),
+    period_start: Annotated[
+        str | None,
+        typer.Option("--period-start", help="Timezone-aware ISO period start."),
+    ] = None,
+    period_end: Annotated[
+        str | None,
+        typer.Option("--period-end", help="Timezone-aware ISO period end."),
+    ] = None,
+    policy_state_path: Annotated[
+        Path,
+        typer.Option("--policy-state-path", help="Governance policies state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/policies.json"),
+    grant_state_path: Annotated[
+        Path,
+        typer.Option("--grant-state-path", help="Capability grant state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/grants.json"),
+    budget_state_path: Annotated[
+        Path,
+        typer.Option("--budget-state-path", help="Autonomy budget state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/budgets.json"),
+    risk_profile_state_path: Annotated[
+        Path,
+        typer.Option("--risk-profile-state-path", help="Risk profile state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/risk-profiles.json"),
+    certification_state_path: Annotated[
+        Path,
+        typer.Option("--certification-state-path", help="Certification state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/certifications.json"),
+    incident_state_path: Annotated[
+        Path,
+        typer.Option("--incident-state-path", help="Incident state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/incidents.json"),
+) -> None:
+    """Generate governance artifacts and redacted governance reports."""
+    from molecule_ranker.agent_governance.audits import (
+        AgentGovernanceAuditAnalyticsBuilder,
+        load_governance_audit_events,
+    )
+    from molecule_ranker.agent_governance.reports import write_governance_artifacts
+    from molecule_ranker.agent_governance.schemas import AgentRiskProfile
+
+    events = load_governance_audit_events(events_path) if events_path else []
+    builder = AgentGovernanceAuditAnalyticsBuilder()
+    analytics = builder.build_report(
+        events=events,
+        org_id=org_id,
+        project_id=project_id,
+        period=cast(Any, period),
+        period_start=_parse_cli_datetime(period_start) if period_start else None,
+        period_end=_parse_cli_datetime(period_end) if period_end else None,
+    )
+    budget_manager = _agent_budget_manager(budget_state_path)
+    paths = write_governance_artifacts(
+        output_dir=output_dir,
+        analytics=analytics,
+        policies=_load_governance_policies(policy_state_path),
+        capability_grants=_capability_grant_manager(grant_state_path).list_grants(),
+        autonomy_budgets=budget_manager.budgets,
+        risk_profiles=_load_governance_state_models(
+            risk_profile_state_path,
+            "risk_profiles",
+            AgentRiskProfile,
+        ),
+        certifications=_agent_certification_manager(
+            certification_state_path
+        ).list_certifications(),
+        incidents=_agent_incident_manager(incident_state_path).list_incidents(),
+    )
+    _echo_json(
+        {
+            "report_id": analytics.report.report_id,
+            "json_path": str(paths.governance_report_json_path),
+            "markdown_path": str(paths.governance_report_markdown_path),
+            "artifacts": {
+                "governance_policy": str(paths.governance_policy_path),
+                "capability_grants": str(paths.capability_grants_path),
+                "autonomy_budgets": str(paths.autonomy_budgets_path),
+                "agent_risk_profiles": str(paths.agent_risk_profiles_path),
+                "agent_certifications": str(paths.agent_certifications_path),
+                "agent_incidents": str(paths.agent_incidents_path),
+            },
+            "redacted": True,
+        }
+    )
+
+
+@governance_app.command("analytics")
+def governance_analytics(
+    period: Annotated[
+        str,
+        typer.Option("--period", help="daily, weekly, or monthly."),
+    ] = "weekly",
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project filter."),
+    ] = None,
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org filter.")] = None,
+    events_path: Annotated[
+        Path | None,
+        typer.Option("--events-path", help="Optional governance audit events JSON file."),
+    ] = None,
+) -> None:
+    """Print governance audit analytics JSON."""
+    from molecule_ranker.agent_governance.audits import (
+        AgentGovernanceAuditAnalyticsBuilder,
+        load_governance_audit_events,
+    )
+
+    events = load_governance_audit_events(events_path) if events_path else []
+    analytics = AgentGovernanceAuditAnalyticsBuilder().build_report(
+        events=events,
+        org_id=org_id,
+        project_id=project_id,
+        period=cast(Any, period),
+    )
+    _echo_model(analytics)
+
+
+@governance_app.command("risk")
+def governance_risk(
+    agent_id: Annotated[str, typer.Option("--agent-id", help="Agent to score.")],
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org context.")] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project context."),
+    ] = None,
+    guardrail_failures: Annotated[
+        int,
+        typer.Option("--guardrail-failures", min=0, help="Recent guardrail failures."),
+    ] = 0,
+    policy_violations: Annotated[
+        int,
+        typer.Option("--policy-violations", min=0, help="Recent policy violations."),
+    ] = 0,
+    unauthorized_tool_attempts: Annotated[
+        int,
+        typer.Option("--unauthorized-tool-attempts", min=0),
+    ] = 0,
+    failed_repairs: Annotated[int, typer.Option("--failed-repairs", min=0)] = 0,
+    repeated_failures: Annotated[int, typer.Option("--repeated-failures", min=0)] = 0,
+    external_write_attempts: Annotated[
+        int,
+        typer.Option("--external-write-attempts", min=0),
+    ] = 0,
+    generated_advancement_attempts: Annotated[
+        int,
+        typer.Option("--generated-advancement-attempts", min=0),
+    ] = 0,
+    hallucinated_artifact_attempts: Annotated[
+        int,
+        typer.Option("--hallucinated-artifact-attempts", min=0),
+    ] = 0,
+    secret_exposure_attempts: Annotated[
+        int,
+        typer.Option("--secret-exposure-attempts", min=0),
+    ] = 0,
+    unresolved_incidents: Annotated[
+        int,
+        typer.Option("--unresolved-incidents", min=0),
+    ] = 0,
+    approval_rejection_rate: Annotated[
+        float,
+        typer.Option("--approval-rejection-rate", min=0.0, max=1.0),
+    ] = 0.0,
+    autonomy_level: Annotated[
+        str,
+        typer.Option("--autonomy-level", help="Current autonomy level."),
+    ] = "execute_safe_tools",
+    apply_run_control: Annotated[
+        bool,
+        typer.Option("--apply-run-control/--no-apply-run-control", help="Apply critical pause."),
+    ] = False,
+    run_control_state_path: Annotated[
+        Path,
+        typer.Option("--run-control-state-path", help="Run-control state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/run-controls.json"),
+) -> None:
+    """Compute a visible agent governance risk score."""
+    from molecule_ranker.agent_governance.risk import AgentRiskInputs, AgentRiskScorer
+
+    scorer = AgentRiskScorer()
+    decision = scorer.score_agent(
+        AgentRiskInputs(
+            agent_id=agent_id,
+            org_id=org_id,
+            project_id=project_id,
+            guardrail_failures=guardrail_failures,
+            policy_violations=policy_violations,
+            unauthorized_tool_attempts=unauthorized_tool_attempts,
+            approval_rejection_rate=approval_rejection_rate,
+            failed_repairs=failed_repairs,
+            repeated_failures=repeated_failures,
+            external_write_attempts=external_write_attempts,
+            generated_advancement_attempts=generated_advancement_attempts,
+            hallucinated_artifact_attempts=hallucinated_artifact_attempts,
+            secret_exposure_attempts=secret_exposure_attempts,
+            unresolved_incidents=unresolved_incidents,
+            autonomy_level=cast(Any, autonomy_level),
+        )
+    )
+    applied_control = None
+    if apply_run_control:
+        manager = _agent_run_control_manager(run_control_state_path)
+        applied_control = scorer.apply_recommended_run_control(
+            decision,
+            manager,
+            org_id=org_id,
+            project_id=project_id,
+        )
+    _echo_json(
+        {
+            "risk_score": decision.risk_score,
+            "raw_risk_score": decision.raw_risk_score,
+            "risk_action": decision.risk_action,
+            "allowed_autonomy_cap": decision.allowed_autonomy_cap,
+            "requires_run_control": decision.requires_run_control,
+            "profile": decision.profile.model_dump(mode="json"),
+            "reasons": decision.reasons,
+            "applied_run_control": (
+                applied_control.model_dump(mode="json") if applied_control else None
+            ),
+        }
+    )
+
+
+@governance_app.command("eval")
+def governance_eval(
+    suite: Annotated[
+        str,
+        typer.Option("--suite", help="Agent governance eval suite to run."),
+    ] = "default",
+) -> None:
+    """Run deterministic governance eval and red-team fixtures."""
+    from molecule_ranker.agent_governance.evals import run_governance_eval_suite
+
+    try:
+        report = run_governance_eval_suite(suite=suite)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_model(report)
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@governance_app.command("simulate")
+def governance_simulate(
+    agent_id: Annotated[str, typer.Option("--agent-id", help="Agent to simulate.")],
+    tool: Annotated[str, typer.Option("--tool", help="Tool or action being simulated.")],
+    agent_type: Annotated[
+        str,
+        typer.Option(
+            "--agent-type",
+            help="runtime_agent, subagent, campaign_copilot, tool_agent, or codex_worker.",
+        ),
+    ] = "runtime_agent",
+    role: Annotated[str | None, typer.Option("--role", help="Optional agent role.")] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Optional role/profile label."),
+    ] = None,
+    autonomy_level: Annotated[
+        str,
+        typer.Option("--autonomy-level", help="Requested autonomy level."),
+    ] = "execute_safe_tools",
+    action: Annotated[
+        str | None,
+        typer.Option("--action", help="Optional action override; defaults to --tool."),
+    ] = None,
+    tool_category: Annotated[
+        str | None,
+        typer.Option("--tool-category", help="Optional tool category."),
+    ] = None,
+    side_effect_level: Annotated[
+        str | None,
+        typer.Option("--side-effect-level", help="Optional side-effect level."),
+    ] = None,
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org context.")] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project context."),
+    ] = None,
+    campaign_id: Annotated[
+        str | None,
+        typer.Option("--campaign-id", help="Optional campaign context."),
+    ] = None,
+    policy_state_path: Annotated[
+        Path,
+        typer.Option("--policy-state-path", help="Governance policies state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/policies.json"),
+    proposed_policy_path: Annotated[
+        Path | None,
+        typer.Option("--proposed-policy-path", help="Optional proposed policy JSON file."),
+    ] = None,
+    budget_state_path: Annotated[
+        Path,
+        typer.Option("--budget-state-path", help="Governance budgets state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/budgets.json"),
+    run_control_state_path: Annotated[
+        Path,
+        typer.Option("--run-control-state-path", help="Run-control state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/run-controls.json"),
+    risk_profile_path: Annotated[
+        Path | None,
+        typer.Option("--risk-profile-path", help="Optional risk profile JSON file."),
+    ] = None,
+    budget_impact_json: Annotated[
+        str | None,
+        typer.Option("--budget-impact-json", help="Budget impact JSON object."),
+    ] = None,
+    budget_tool_calls: Annotated[
+        int,
+        typer.Option("--budget-tool-calls", min=0, help="Simulated tool-call impact."),
+    ] = 0,
+    budget_external_writes: Annotated[
+        int,
+        typer.Option(
+            "--budget-external-writes",
+            min=0,
+            help="Simulated external-write impact.",
+        ),
+    ] = 0,
+    budget_cost_units: Annotated[
+        float,
+        typer.Option("--budget-cost-units", min=0.0, help="Simulated cost-unit impact."),
+    ] = 0.0,
+    generated_molecule_advancement: Annotated[
+        bool,
+        typer.Option(
+            "--generated-molecule-advancement/--not-generated-molecule-advancement",
+            help="Treat the action as generated-molecule advancement.",
+        ),
+    ] = False,
+    human_approved_action: Annotated[
+        list[str] | None,
+        typer.Option("--human-approved-action", help="Existing approval action; repeatable."),
+    ] = None,
+) -> None:
+    """Simulate whether an agent action would be allowed under governance policy."""
+    from molecule_ranker.agent_governance.budgets import BudgetImpact
+    from molecule_ranker.agent_governance.schemas import (
+        AgentAutonomyBudget,
+        AgentGovernancePolicy,
+        AgentRiskProfile,
+    )
+    from molecule_ranker.agent_governance.simulator import AgentPolicySimulationRequest
+
+    policies = _load_governance_state_models(
+        policy_state_path,
+        "policies",
+        AgentGovernancePolicy,
+    )
+    budgets = _load_governance_state_models(
+        budget_state_path,
+        "budgets",
+        AgentAutonomyBudget,
+    )
+    proposed_policy = (
+        AgentGovernancePolicy.model_validate(_read_cli_json(proposed_policy_path))
+        if proposed_policy_path is not None
+        else None
+    )
+    risk_profile = (
+        AgentRiskProfile.model_validate(_read_cli_json(risk_profile_path))
+        if risk_profile_path is not None
+        else None
+    )
+    run_controls = _agent_run_control_manager(run_control_state_path).list_controls()
+    budget_impact = BudgetImpact.model_validate(
+        _budget_impact_payload(
+            budget_impact_json=budget_impact_json,
+            tool_calls=budget_tool_calls,
+            external_writes=budget_external_writes,
+            cost_units=budget_cost_units,
+        )
+    )
+    metadata = {
+        "generated_molecule_advancement": generated_molecule_advancement,
+    }
+    request = AgentPolicySimulationRequest(
+        agent_id=agent_id,
+        agent_type=cast(Any, agent_type),
+        role=role,
+        profile=profile,
+        autonomy_level=cast(Any, autonomy_level),
+        tool=tool,
+        action=action,
+        tool_category=tool_category,
+        side_effect_level=side_effect_level,
+        org_id=org_id,
+        project_id=project_id,
+        campaign_id=campaign_id,
+        budget_impact=budget_impact,
+        budgets=budgets,
+        risk_profile=risk_profile,
+        proposed_policy=proposed_policy,
+        active_policies=policies,
+        run_controls=run_controls,
+        human_approved_actions=set(human_approved_action or []),
+        metadata=metadata,
+    )
+    from molecule_ranker.agent_governance.simulator import simulate_agent_action
+
+    decision = simulate_agent_action(request)
+    _echo_model(decision)
+    if decision.status == "blocked":
+        raise typer.Exit(code=1)
+
+
+@governance_app.command("certify")
+def governance_certify(
+    agent_id: Annotated[str, typer.Option("--agent-id", help="Agent to certify.")],
+    certification_type: Annotated[
+        str,
+        typer.Option(
+            "--certification-type",
+            help=(
+                "tool_use, guardrail, autonomy_level, campaign_copilot, "
+                "external_integration, subagent_role, or release_gate."
+            ),
+        ),
+    ],
+    certified_by: Annotated[str, typer.Option("--certified-by", help="Certifying actor ID.")],
+    certified_autonomy_level: Annotated[
+        str,
+        typer.Option("--autonomy-level", help="Certified autonomy level."),
+    ] = "suggest_only",
+    actor_type: Annotated[
+        str,
+        typer.Option("--actor-type", help="human, admin, service_account, codex, or agent."),
+    ] = "human",
+    authorized_certification_type: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--authorized-certification-type",
+            help="Certification type in actor permission scope; repeatable. Use * for all.",
+        ),
+    ] = None,
+    eval_suite_name: Annotated[
+        str,
+        typer.Option("--eval-suite-name", help="Completed evaluation suite name."),
+    ] = "governance-certification-eval",
+    eval_passed: Annotated[
+        bool,
+        typer.Option("--eval-passed/--eval-failed", help="Whether the eval suite passed."),
+    ] = True,
+    eval_score: Annotated[
+        float,
+        typer.Option("--eval-score", min=0, max=1, help="Eval suite score in [0,1]."),
+    ] = 1.0,
+    eval_artifact_id: Annotated[
+        list[str] | None,
+        typer.Option("--eval-artifact-id", help="Evaluation artifact ID; repeatable."),
+    ] = None,
+    guardrail_benchmark_passed: Annotated[
+        bool,
+        typer.Option(
+            "--guardrail-passed/--guardrail-failed",
+            help="Whether the guardrail benchmark passed.",
+        ),
+    ] = True,
+    role_tests_passed: Annotated[
+        bool,
+        typer.Option(
+            "--role-tests-passed/--role-tests-failed",
+            help="Whether role-specific tests passed.",
+        ),
+    ] = True,
+    policy_compliant: Annotated[
+        bool,
+        typer.Option(
+            "--policy-compliant/--policy-noncompliant",
+            help="Whether policy compliance checks passed.",
+        ),
+    ] = True,
+    expires_in_days: Annotated[
+        int,
+        typer.Option("--expires-in-days", min=1, help="Certification validity window."),
+    ] = 90,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Certification state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/certifications.json"),
+) -> None:
+    """Certify an agent after required governance evaluation checks."""
+    from molecule_ranker.agent_governance.certification import (
+        AgentCertificationAuthorization,
+        CertificationEvaluationResult,
+    )
+
+    manager = _agent_certification_manager(state_path)
+    authorization = AgentCertificationAuthorization.model_validate(
+        {
+            "actor_id": certified_by,
+            "actor_type": actor_type,
+            "permission_scope": set(authorized_certification_type or []),
+        }
+    )
+    evaluation_results = [
+        CertificationEvaluationResult(
+            suite_name=eval_suite_name,
+            passed=eval_passed,
+            score=eval_score,
+            artifact_id=artifact_id,
+        )
+        for artifact_id in (eval_artifact_id or [None])
+    ]
+    decision = manager.certify_agent(
+        agent_id=agent_id,
+        certification_type=cast(Any, certification_type),
+        certified_autonomy_level=cast(Any, certified_autonomy_level),
+        authorization=authorization,
+        evaluation_results=evaluation_results,
+        guardrail_benchmark_passed=guardrail_benchmark_passed,
+        role_tests_passed=role_tests_passed,
+        policy_compliant=policy_compliant,
+        expires_at=datetime.now(UTC) + timedelta(days=expires_in_days),
+    )
+    _echo_json(
+        {
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "certification": (
+                decision.certification.model_dump(mode="json")
+                if decision.certification
+                else None
+            ),
+            "audit_event": decision.audit_event.model_dump(mode="json"),
+        }
+    )
+    if not decision.allowed:
+        raise typer.Exit(code=1)
+
+
+@governance_certification_app.command("list")
+def governance_certification_list(
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Filter certifications by agent ID."),
+    ] = None,
+    certification_type: Annotated[
+        str | None,
+        typer.Option("--certification-type", help="Optional certification type filter."),
+    ] = None,
+    include_inactive: Annotated[
+        bool,
+        typer.Option("--include-inactive/--active-only", help="Include inactive certifications."),
+    ] = True,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Certification state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/certifications.json"),
+) -> None:
+    """List agent certifications."""
+    manager = _agent_certification_manager(state_path)
+    _echo_models(
+        manager.list_certifications(
+            agent_id=agent_id,
+            certification_type=cast(Any, certification_type),
+            include_inactive=include_inactive,
+        )
+    )
+
+
+@governance_certification_app.command("revoke")
+def governance_certification_revoke(
+    certification_id: Annotated[
+        str,
+        typer.Option("--certification-id", help="Certification to revoke."),
+    ],
+    revoked_by: Annotated[str, typer.Option("--revoked-by", help="Revoking actor ID.")],
+    reason: Annotated[
+        str,
+        typer.Option("--reason", help="Revocation reason."),
+    ] = "Agent certification revoked.",
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Certification state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/certifications.json"),
+) -> None:
+    """Revoke an agent certification."""
+    from molecule_ranker.agent_governance.certification import AgentCertificationError
+
+    manager = _agent_certification_manager(state_path)
+    try:
+        _echo_model(
+            manager.revoke_certification(
+                certification_id,
+                revoked_by=revoked_by,
+                reason=reason,
+            )
+        )
+    except AgentCertificationError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@governance_control_app.command("apply")
+def governance_control_apply(
+    control_type: Annotated[
+        str,
+        typer.Option(
+            "--control-type",
+            help=(
+                "pause, resume, disable, enable, restrict_autonomy, "
+                "require_approval_all_actions, or kill_switch."
+            ),
+        ),
+    ],
+    applied_by: Annotated[str, typer.Option("--applied-by", help="Actor applying control.")],
+    reason: Annotated[str, typer.Option("--reason", help="Control reason.")],
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org scope.")] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project scope."),
+    ] = None,
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Optional agent scope."),
+    ] = None,
+    expires_at: Annotated[
+        str | None,
+        typer.Option("--expires-at", help="Timezone-aware ISO expiration timestamp."),
+    ] = None,
+    max_autonomy_level: Annotated[
+        str | None,
+        typer.Option(
+            "--max-autonomy-level",
+            help="Autonomy cap for restrict_autonomy controls.",
+        ),
+    ] = None,
+    kill_switch_target: Annotated[
+        str | None,
+        typer.Option(
+            "--kill-switch-target",
+            help=(
+                "Optional specialized target: codex_worker, external_integration_agent, "
+                "or generated_molecule_workflow."
+            ),
+        ),
+    ] = None,
+    session_action: Annotated[
+        str,
+        typer.Option("--session-action", help="pause or cancel affected sessions."),
+    ] = "pause",
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Run-control state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/run-controls.json"),
+) -> None:
+    """Apply an agent run control."""
+    manager = _agent_run_control_manager(state_path)
+    metadata: dict[str, Any] = {}
+    if max_autonomy_level is not None:
+        metadata["max_autonomy_level"] = max_autonomy_level
+    if kill_switch_target is not None:
+        metadata["kill_switch_target"] = kill_switch_target
+    if session_action:
+        metadata["session_action"] = session_action
+    _echo_model(
+        manager.apply_control(
+            control_type=cast(Any, control_type),
+            reason=reason,
+            applied_by=applied_by,
+            org_id=org_id,
+            project_id=project_id,
+            agent_id=agent_id,
+            expires_at=_parse_cli_datetime(expires_at) if expires_at else None,
+            metadata=metadata,
+        )
+    )
+
+
+@governance_control_app.command("list")
+def governance_control_list(
+    active_only: Annotated[
+        bool,
+        typer.Option("--active-only/--include-inactive", help="Only list active controls."),
+    ] = False,
+    org_id: Annotated[str | None, typer.Option("--org-id", help="Optional org filter.")] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Optional project filter."),
+    ] = None,
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Optional agent filter."),
+    ] = None,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Run-control state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/run-controls.json"),
+) -> None:
+    """List agent run controls."""
+    manager = _agent_run_control_manager(state_path)
+    _echo_models(
+        manager.list_controls(
+            active_only=active_only,
+            org_id=org_id,
+            project_id=project_id,
+            agent_id=agent_id,
+        )
+    )
+
+
+@governance_control_app.command("clear")
+def governance_control_clear(
+    control_id: Annotated[str, typer.Option("--control-id", help="Control to clear.")],
+    cleared_by: Annotated[str, typer.Option("--cleared-by", help="Actor clearing control.")],
+    reason: Annotated[str, typer.Option("--reason", help="Clearance reason.")] = (
+        "Run control cleared."
+    ),
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Run-control state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/run-controls.json"),
+) -> None:
+    """Clear an active agent run control."""
+    manager = _agent_run_control_manager(state_path)
+    try:
+        _echo_model(
+            manager.clear_control(
+                control_id,
+                cleared_by=cleared_by,
+                reason=reason,
+            )
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@governance_incident_app.command("list")
+def governance_incident_list(
+    status: Annotated[
+        str | None,
+        typer.Option("--status", help="Optional incident status filter."),
+    ] = None,
+    agent_id: Annotated[
+        str | None,
+        typer.Option("--agent-id", help="Optional agent filter."),
+    ] = None,
+    include_resolved: Annotated[
+        bool,
+        typer.Option("--include-resolved/--open-only", help="Include resolved incidents."),
+    ] = True,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Incident state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/incidents.json"),
+) -> None:
+    """List agent governance incidents."""
+    manager = _agent_incident_manager(state_path)
+    _echo_models(
+        manager.list_incidents(
+            status=cast(Any, status),
+            agent_id=agent_id,
+            include_resolved=include_resolved,
+        )
+    )
+
+
+@governance_incident_app.command("show")
+def governance_incident_show(
+    incident_id: Annotated[str, typer.Option("--incident-id", help="Incident to show.")],
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Incident state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/incidents.json"),
+) -> None:
+    """Show an agent governance incident."""
+    from molecule_ranker.agent_governance.incidents import AgentIncidentError
+
+    manager = _agent_incident_manager(state_path)
+    try:
+        _echo_model(manager.get_incident(incident_id))
+    except AgentIncidentError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@governance_incident_app.command("assign")
+def governance_incident_assign(
+    incident_id: Annotated[str, typer.Option("--incident-id", help="Incident to assign.")],
+    assigned_to: Annotated[str, typer.Option("--assigned-to", help="Incident owner.")],
+    assigned_by: Annotated[str, typer.Option("--assigned-by", help="Assigning actor.")],
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Incident state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/incidents.json"),
+) -> None:
+    """Assign an incident owner."""
+    from molecule_ranker.agent_governance.incidents import AgentIncidentError
+
+    manager = _agent_incident_manager(state_path)
+    try:
+        _echo_model(
+            manager.assign_owner(
+                incident_id,
+                assigned_to=assigned_to,
+                assigned_by=assigned_by,
+            )
+        )
+    except AgentIncidentError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@governance_incident_app.command("resolve")
+def governance_incident_resolve(
+    incident_id: Annotated[str, typer.Option("--incident-id", help="Incident to resolve.")],
+    resolved_by: Annotated[str, typer.Option("--resolved-by", help="Resolving actor.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Resolution rationale.")],
+    false_positive: Annotated[
+        bool,
+        typer.Option("--false-positive/--resolved", help="Mark as false positive."),
+    ] = False,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Incident state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/incidents.json"),
+) -> None:
+    """Resolve an incident or mark it false positive."""
+    from molecule_ranker.agent_governance.incidents import AgentIncidentError
+
+    manager = _agent_incident_manager(state_path)
+    try:
+        _echo_model(
+            manager.resolve_incident(
+                incident_id,
+                resolved_by=resolved_by,
+                rationale=rationale,
+                false_positive=false_positive,
+            )
+        )
+    except AgentIncidentError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@governance_incident_app.command("export")
+def governance_incident_export(
+    incident_id: Annotated[str, typer.Option("--incident-id", help="Incident to export.")],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", help="Optional path for redacted incident report JSON."),
+    ] = None,
+    state_path: Annotated[
+        Path,
+        typer.Option("--state-path", help="Incident state JSON path."),
+    ] = Path(".molecule-ranker/agent-governance/incidents.json"),
+) -> None:
+    """Export a redacted incident report."""
+    from molecule_ranker.agent_governance.incidents import AgentIncidentError
+
+    manager = _agent_incident_manager(state_path)
+    try:
+        report = manager.export_incident_report(incident_id)
+    except AgentIncidentError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if output is not None:
+        _write_cli_json(output, report.model_dump(mode="json"))
+        _echo_json({"output": str(output), "redacted": True, "report_id": report.report_id})
+    else:
+        _echo_model(report)
 
 
 @copilot_app.command("start")
@@ -1570,7 +3011,7 @@ def repair_eval_command(
     ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
 ) -> None:
-    """Run V2.5 repair-loop evals."""
+    """Run V2.6 repair-loop evals."""
 
     from molecule_ranker.agent_repair.evals import (
         run_repair_eval_suite,
@@ -1744,7 +3185,7 @@ def agent_explain(
 def agent_specialists(
     json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
 ) -> None:
-    """List V2.5 specialist Codex subagent roles."""
+    """List V2.6 specialist Codex subagent roles."""
 
     from molecule_ranker.runtime_agents.multi_agent import specialist_roster_summary
 
@@ -1763,7 +3204,7 @@ def agent_specialists(
 def agent_delegate(
     specialist_id: Annotated[
         str,
-        typer.Option("--specialist-id", help="V2.5 specialist agent ID."),
+        typer.Option("--specialist-id", help="V2.6 specialist agent ID."),
     ],
     goal: Annotated[str, typer.Option("--goal", help="Delegated specialist objective.")],
     project_id: Annotated[str | None, typer.Option("--project-id")] = None,
@@ -1784,7 +3225,7 @@ def agent_delegate(
         typer.Option("--output-dir", file_okay=False, help="Directory for runtime artifacts."),
     ] = Path(".molecule-ranker/runtime-agent"),
 ) -> None:
-    """Delegate a task to a V2.5 specialist and optionally execute approved tools."""
+    """Delegate a task to a V2.6 specialist and optionally execute approved tools."""
 
     from molecule_ranker.runtime_agents.multi_agent import MultiAgentScientificOrchestrator
     from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
@@ -3980,7 +5421,7 @@ def validate_repair_guardrails_command(
     ] = Path("."),
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run V2.5 repair-specific red-team guardrail validation."""
+    """Run V2.6 repair-specific red-team guardrail validation."""
     from molecule_ranker.validation import run_repair_guardrail_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "repair_guardrails"
@@ -4002,10 +5443,46 @@ def validate_repair_guardrails_command(
 
 @validate_app.command("copilot-guardrails")
 def validate_copilot_guardrails() -> None:
-    """Run deterministic V2.5 co-pilot red-team guardrail validation."""
+    """Run deterministic V2.6 co-pilot red-team guardrail validation."""
     report = CoPilotGuardrailValidator().run()
     _echo_json(report.to_dict())
     if report.failed:
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("agent-governance")
+def validate_agent_governance_command(
+    suite: Annotated[
+        str,
+        typer.Option("--suite", help="Agent governance eval suite to run."),
+    ] = "default",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run V2.6 governance eval and red-team validation."""
+    from molecule_ranker.agent_governance.evals import run_governance_eval_suite
+
+    try:
+        report = run_governance_eval_suite(suite=suite)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_model(report)
+    else:
+        typer.echo(f"Agent governance validation: {report.status}")
+        typer.echo(
+            "Red-team cases blocked: "
+            f"{report.blocked_red_team_count}/{report.red_team_case_count}"
+        )
+        typer.echo(
+            "Safe cases allowed: "
+            f"{report.allowed_safe_case_count}/{report.safe_case_count}"
+        )
+        typer.echo(
+            "Unsafe action escape rate: "
+            f"{report.metrics.unsafe_action_escape_rate:.2f}"
+        )
+    if report.status != "pass":
         raise typer.Exit(code=1)
 
 
@@ -4017,7 +5494,7 @@ def validate_tools_command(
     ] = Path("."),
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run the V2.5 governed tool ecosystem validation workflow."""
+    """Run the V2.6 governed tool ecosystem validation workflow."""
     from molecule_ranker.validation.tools import run_tool_ecosystem_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "tools"
@@ -8427,9 +9904,7 @@ def platform_delete_project(
     """Soft-delete a project by default so it is hidden but recoverable."""
     from molecule_ranker.platform.retention import soft_delete_project
 
-    if not soft:
-        typer.echo("Use platform purge-project for hard deletion.", err=True)
-        raise typer.Exit(code=1)
+    _ = soft
     database = _platform_database(root_dir=root_dir, database_url=database_url, db_path=db_path)
     try:
         project = soft_delete_project(
@@ -16431,12 +17906,126 @@ def _read_cli_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _load_governance_state_models(
+    path: Path,
+    key: str,
+    model_type: type[BaseModel],
+) -> list[Any]:
+    if not path.exists():
+        return []
+    raw = _read_cli_json(path)
+    values = raw.get(key, []) if isinstance(raw, dict) else raw
+    if not isinstance(values, list):
+        return []
+    return [model_type.model_validate(value) for value in values if isinstance(value, dict)]
+
+
+def _budget_impact_payload(
+    *,
+    budget_impact_json: str | None,
+    tool_calls: int,
+    external_writes: int,
+    cost_units: float,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if budget_impact_json is not None:
+        parsed = json.loads(budget_impact_json)
+        if not isinstance(parsed, dict):
+            raise typer.BadParameter("--budget-impact-json must be a JSON object.")
+        payload.update(parsed)
+    if tool_calls:
+        payload["tool_calls"] = tool_calls
+    if external_writes:
+        payload["external_writes"] = external_writes
+    if cost_units:
+        payload["cost_units"] = cost_units
+    return payload
+
+
 def _write_cli_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
+
+
+def _load_governance_policies(path: Path) -> list[Any]:
+    from molecule_ranker.agent_governance.schemas import AgentGovernancePolicy
+
+    return _load_governance_state_models(path, "policies", AgentGovernancePolicy)
+
+
+def _write_governance_policies(path: Path, policies: list[Any]) -> None:
+    _write_cli_json(
+        path,
+        {"policies": [policy.model_dump(mode="json") for policy in policies]},
+    )
+
+
+def _agent_budget_manager(path: Path) -> Any:
+    from molecule_ranker.agent_governance.budgets import (
+        AgentAutonomyBudgetManager,
+        AgentBudgetReservation,
+    )
+    from molecule_ranker.agent_governance.schemas import AgentAutonomyBudget
+
+    budgets = _load_governance_state_models(path, "budgets", AgentAutonomyBudget)
+    reservations = _load_governance_state_models(
+        path,
+        "reservations",
+        AgentBudgetReservation,
+    )
+    return AgentAutonomyBudgetManager(budgets=budgets, reservations=reservations)
+
+
+def _write_agent_budget_manager(path: Path, manager: Any) -> None:
+    _write_cli_json(
+        path,
+        {
+            "budgets": [budget.model_dump(mode="json") for budget in manager.budgets],
+            "reservations": [
+                reservation.model_dump(mode="json")
+                for reservation in manager.reservations
+            ],
+        },
+    )
+
+
+def _capability_grant_manager(path: Path) -> Any:
+    from molecule_ranker.agent_governance.capability_grants import (
+        CapabilityGrantManager,
+        CapabilityGrantStore,
+    )
+
+    return CapabilityGrantManager(store=CapabilityGrantStore(path))
+
+
+def _agent_certification_manager(path: Path) -> Any:
+    from molecule_ranker.agent_governance.certification import (
+        AgentCertificationManager,
+        AgentCertificationStore,
+    )
+
+    return AgentCertificationManager(store=AgentCertificationStore(path))
+
+
+def _agent_run_control_manager(path: Path) -> Any:
+    from molecule_ranker.agent_governance.run_control import (
+        AgentRunControlManager,
+        RunControlStore,
+    )
+
+    return AgentRunControlManager(store=RunControlStore(path))
+
+
+def _agent_incident_manager(path: Path) -> Any:
+    from molecule_ranker.agent_governance.incidents import (
+        AgentIncidentManager,
+        IncidentStore,
+    )
+
+    return AgentIncidentManager(store=IncidentStore(path))
 
 
 def _load_optional_model(path: Path, model_type: type[BaseModel]) -> Any | None:

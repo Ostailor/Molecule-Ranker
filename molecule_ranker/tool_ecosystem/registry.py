@@ -8,6 +8,13 @@ from typing import Any
 from uuid import uuid4
 
 from molecule_ranker import __version__
+from molecule_ranker.agent_governance.capability_grants import CapabilityGrantManager
+from molecule_ranker.agent_governance.integration import (
+    evaluate_runtime_governance,
+    governance_agent_type,
+    policy_decision_error,
+)
+from molecule_ranker.agent_governance.policies import AgentGovernancePolicyEngine
 from molecule_ranker.runtime_agents.schemas import RuntimeToolSpec
 from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
 from molecule_ranker.tool_ecosystem.schemas import (
@@ -35,7 +42,13 @@ class ToolRegistryV2:
     activation.
     """
 
-    def __init__(self, *, register_builtins: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        register_builtins: bool = True,
+        governance_policy_engine: AgentGovernancePolicyEngine | None = None,
+        capability_grant_manager: CapabilityGrantManager | None = None,
+    ) -> None:
         self.packages: dict[tuple[str, str], ToolPackage] = {}
         self.manifests: dict[tuple[str, str], ToolManifest] = {}
         self.tool_versions: dict[tuple[str, str], ToolVersion] = {}
@@ -45,6 +58,8 @@ class ToolRegistryV2:
         self.disabled_tools: set[tuple[str, str]] = set()
         self.usage_records: list[ToolUsageRecord] = []
         self._legacy_aliases: dict[str, str] = {}
+        self.governance_policy_engine = governance_policy_engine
+        self.capability_grant_manager = capability_grant_manager
         if register_builtins:
             self.register_builtin_tools()
 
@@ -256,6 +271,55 @@ class ToolRegistryV2:
             raise ToolRegistryV2Error(f"unknown tool usage target: {usage.tool_name}")
         self.usage_records.append(usage)
 
+    def governance_error_for_tool(
+        self,
+        spec: RuntimeToolSpec,
+        *,
+        agent_id: str,
+        agent_type: str = "tool_agent",
+        action: str | None = None,
+        autonomy_level: str = "execute_with_approval",
+        org_id: str | None = None,
+        project_id: str | None = None,
+        campaign_id: str | None = None,
+        approvals: set[str] | None = None,
+    ) -> str | None:
+        decision = evaluate_runtime_governance(
+            self.governance_policy_engine,
+            agent_id=agent_id,
+            agent_type=governance_agent_type(agent_type, default="tool_agent"),
+            action=action or _governance_action_for_tool(spec),
+            autonomy_level=autonomy_level,
+            org_id=org_id,
+            project_id=project_id,
+            campaign_id=campaign_id,
+            tool_category=spec.category,
+            side_effect_level=spec.side_effect_level,
+            approvals=approvals,
+            metadata={"tool_name": spec.tool_name, "tool_version": _tool_version_metadata(spec)},
+        )
+        if decision is not None and not decision.allowed:
+            return policy_decision_error(decision)
+        if self.capability_grant_manager is None:
+            return None
+        required = spec.metadata.get("requires_capability_grant")
+        package = spec.metadata.get("tool_package")
+        package_requires = (
+            isinstance(package, dict) and package.get("requires_capability_grant") is True
+        )
+        if required is not True and not package_requires:
+            return None
+        capability = str(spec.metadata.get("required_capability") or spec.tool_name)
+        grant = self.capability_grant_manager.check_capability(
+            agent_id=agent_id,
+            capability=capability,
+            scope_type="tool_package",
+            scope_id=_tool_package_scope_id(spec),
+        )
+        if not grant.allowed:
+            return grant.reason
+        return None
+
     def track_usage(
         self,
         *,
@@ -398,6 +462,32 @@ def _tool_version_for_spec(package: ToolPackage, spec: RuntimeToolSpec) -> ToolV
         created_at=datetime.now(UTC),
         metadata={},
     )
+
+
+def _governance_action_for_tool(spec: RuntimeToolSpec) -> str:
+    value = spec.metadata.get("governance_action")
+    if isinstance(value, str) and value:
+        return value
+    return spec.tool_name
+
+
+def _tool_version_metadata(spec: RuntimeToolSpec) -> str | None:
+    value = spec.metadata.get("tool_version")
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _tool_package_scope_id(spec: RuntimeToolSpec) -> str | None:
+    package = spec.metadata.get("tool_package")
+    if isinstance(package, dict):
+        package_id = package.get("package_id")
+        version = package.get("version")
+        if isinstance(package_id, str) and isinstance(version, str):
+            return f"{package_id}@{version}"
+        if isinstance(package_id, str):
+            return package_id
+    return None
 
 
 def _implementation_hash(spec: RuntimeToolSpec) -> str | None:

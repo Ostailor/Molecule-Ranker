@@ -23,7 +23,7 @@ def test_release_gate_passes_synthetic_setup(tmp_path: Path) -> None:
     )
 
     assert report["status"] == "pass"
-    assert _check(report, "package_version_is_2_5_0")["status"] == "pass"
+    assert _check(report, "package_version_is_2_6_0")["status"] == "pass"
     assert _check(report, "pilot_success_metrics_met")["status"] == "pass"
 
 

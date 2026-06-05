@@ -1,4 +1,4 @@
-"""V2.5 multi-agent subagent coordination schemas and helpers."""
+"""V2.6 multi-agent subagent coordination schemas and helpers."""
 
 from molecule_ranker.subagents.consensus import (
     consensus_metadata_summary,

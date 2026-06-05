@@ -15,17 +15,19 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V2.5 adds an autonomous campaign co-pilot for human-governed "
-            "campaign-management workflows. The co-pilot monitors active campaigns, "
-            "detects source-backed events, routes deterministic triggers, proposes "
-            "safe next actions, executes low-risk follow-ups when autonomy allows, "
-            "requests approvals for risky actions, generates grounded status updates, "
-            "and exposes hosted API/dashboard surfaces. It inherits the V2.4 "
-            "validated enterprise discovery operating system, Codex runtime-agent "
-            "backbone, governed tool ecosystem, MCP-compatible gateway, multi-agent "
-            "scientific operations, safe repair loops, repair memory, regression "
-            "checks, hosted repair reporting, stable APIs and SDK behavior. V2.5 "
-            "does not add major new "
+            "V2.6 adds enterprise-grade governance for Codex runtime agents, "
+            "specialist subagents, governed tools, autonomous campaigns, and "
+            "follow-up actions. Organizations can define autonomy policies, "
+            "capability grants, agent and campaign budgets, certification records, "
+            "run controls, kill switches, approval policies, incident records, "
+            "policy/prompt/tool drift checks, and governance reports for admins "
+            "and pilot sponsors. It inherits the V2.5 validated enterprise "
+            "discovery operating system, Codex runtime-agent backbone, governed "
+            "tool ecosystem, MCP-compatible gateway, multi-agent scientific "
+            "operations, agent self-evaluation and repair loops, autonomous "
+            "campaign co-pilot, monitoring, trigger routing, safe follow-ups, "
+            "approval queues, co-pilot evals and guardrails, and stable APIs and "
+            "SDK behavior. V2.6 does not add major new "
             "science capabilities and does not expand molecule generation, docking, "
             "ADMET, graph reasoning, model training, external integrations, or lab "
             "execution. The research boundary remains intact: campaign plans, "
@@ -107,10 +109,15 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "RepairExecutor, RegressionCheckAgent, RepairMemory, RepairPolicyEngine, "
             "AgentReliabilityDashboard, repair artifacts, repair eval suite, and safe "
             "autonomous recovery loops.",
-            "- V2.5 CampaignCoPilotAgent, CampaignMonitor, EventDetector, "
+            "- V2.6 CampaignCoPilotAgent, CampaignMonitor, EventDetector, "
             "TriggerRouter, CoPilotPolicyEngine, AutonomousActionQueue, "
             "CampaignReplanExecutor, EscalationManager, CoPilotStatusReporter, "
             "CoPilotMemory, CoPilotEvalSuite, and hosted co-pilot dashboard/API.",
+            "- V2.6 AgentGovernancePolicy, AgentCapabilityGrant, "
+            "AgentAutonomyBudget, AgentRiskProfile, AgentCertification, "
+            "AgentRunControl, AgentIncident, AgentPolicyViolation, "
+            "AgentGovernanceReport, AgentChangeRequest, AgentApprovalPolicy, "
+            "AgentKillSwitch, and AgentGovernanceBoard controls.",
             "- Operator, admin, and user documentation with backup/restore runbooks.",
             "- Synthetic demo project artifacts clearly labeled as non-evidence examples.",
             "",
@@ -160,9 +167,13 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "inventing missing data",
             "- Repair executors must not approve their own risky repairs or bypass "
             "validators, RBAC, policy, approvals, or guardrails",
-            "- V2.5 validation evidence packages are software/process validation artifacts",
-            "- V2.5 enterprise validation is not clinical validation",
-            "- V2.5 support bundles are diagnostics manifests, not biomedical evidence",
+            "- Codex cannot approve its own autonomy increases, policy overrides, "
+            "governance policy changes, budgets, capability grants, or certifications",
+            "- Agent incidents, policy violations, guardrail failures, policy drift, "
+            "prompt drift, and tool drift must remain visible in governance reports",
+            "- V2.6 validation evidence packages are software/process validation artifacts",
+            "- V2.6 enterprise validation is not clinical validation",
+            "- V2.6 support bundles are diagnostics manifests, not biomedical evidence",
             "",
             "## Contracts",
             "",

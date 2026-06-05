@@ -5,6 +5,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
+from molecule_ranker.agent_governance.integration import governance_autonomy_level
+from molecule_ranker.agent_governance.run_control import (
+    AgentRunControlManager,
+    RunControlRequest,
+)
+from molecule_ranker.agent_governance.schemas import AgentRiskProfile
 from molecule_ranker.agent_repair.schemas import (
     RegressionCheck,
     RepairAction,
@@ -72,6 +78,8 @@ class RepairExecutor:
         audit_writer: AuditWriter | None = None,
         regression_runner: RegressionRunner | None = None,
         repair_memory: Any | None = None,
+        governance_run_control_manager: AgentRunControlManager | None = None,
+        governance_risk_profiles: Mapping[str, AgentRiskProfile] | None = None,
     ) -> None:
         if tool_registry is None:
             from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
@@ -85,6 +93,8 @@ class RepairExecutor:
         self.audit_writer = audit_writer
         self.regression_runner = regression_runner
         self.repair_memory = repair_memory
+        self.governance_run_control_manager = governance_run_control_manager
+        self.governance_risk_profiles = governance_risk_profiles or {}
         self.audit_events: list[dict[str, Any]] = []
 
     def execute(
@@ -132,6 +142,32 @@ class RepairExecutor:
             )
             self._record_memory(plan, execution)
             self._audit("repair_execution_failed_validation", plan, execution_id=execution_id)
+            return execution
+
+        governance_warnings, governance_status = self._governance_block(
+            plan,
+            mode=str(mode),
+            approvals=approval_set,
+        )
+        if governance_warnings:
+            warnings.extend(governance_warnings)
+            execution = self._execution(
+                execution_id=execution_id,
+                plan=plan,
+                status=governance_status,
+                executed_actions=executed_actions,
+                artifacts_created=artifacts_created,
+                artifacts_modified=artifacts_modified,
+                jobs_created=jobs_created,
+                approvals_requested=approvals_requested,
+                regression_check_ids=[],
+                warnings=warnings,
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+                mode=str(mode),
+            )
+            self._record_memory(plan, execution)
+            self._audit("repair_execution_governance_blocked", plan, execution_id=execution_id)
             return execution
 
         if str(mode) in {"dry_run", "suggest_only"}:
@@ -287,6 +323,38 @@ class RepairExecutor:
         self._record_memory(plan, execution)
         self._audit("repair_execution_completed", plan, execution_id=execution_id)
         return execution
+
+    def _governance_block(
+        self,
+        plan: RepairPlan,
+        *,
+        mode: str,
+        approvals: set[str],
+    ) -> tuple[list[str], str]:
+        agent_id = _repair_agent_id(plan)
+        if self.governance_run_control_manager is not None:
+            decision = self.governance_run_control_manager.evaluate(
+                RunControlRequest(
+                    agent_id=agent_id,
+                    agent_type="runtime_agent",
+                    org_id=_metadata_str(plan.metadata, "org_id"),
+                    project_id=_metadata_str(plan.metadata, "project_id"),
+                    action="run_repair_workflow",
+                    autonomy_level=governance_autonomy_level(mode),
+                    workflow_type="repair",
+                )
+            )
+            if not decision.allowed:
+                status = "approval_required" if decision.requires_approval else "guardrail_blocked"
+                return decision.reasons, status
+        risk_profile = self.governance_risk_profiles.get(agent_id)
+        if risk_profile is None:
+            return [], "queued"
+        if risk_profile.risk_level == "critical":
+            return ["Critical agent risk blocks repair execution."], "guardrail_blocked"
+        if risk_profile.risk_level == "high" and "risk_review" not in approvals:
+            return ["High agent risk requires human approval before repair."], "approval_required"
+        return [], "queued"
 
     def _execute_action(self, action: RepairAction) -> dict[str, Any]:
         if action.action_type == "request_human_approval":
@@ -637,6 +705,18 @@ def _policy_requires_approval(policy_engine: Any | None, action: RepairAction) -
         if isinstance(policy, Mapping):
             return bool(policy.get("requires_approval"))
     return False
+
+
+def _repair_agent_id(plan: RepairPlan) -> str:
+    value = plan.metadata.get("agent_id")
+    if isinstance(value, str) and value:
+        return value
+    return "repair-executor"
+
+
+def _metadata_str(metadata: Mapping[str, Any], key: str) -> str | None:
+    value = metadata.get(key)
+    return value if isinstance(value, str) else None
 
 
 __all__ = [

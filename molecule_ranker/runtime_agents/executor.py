@@ -10,6 +10,16 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from molecule_ranker.agent_governance.integration import (
+    evaluate_runtime_governance,
+    governance_agent_type,
+    policy_decision_error,
+    policy_decision_status,
+    record_governance_risk_event,
+)
+from molecule_ranker.agent_governance.policies import AgentGovernancePolicyEngine
+from molecule_ranker.agent_governance.risk import AgentRiskScorer
+from molecule_ranker.agent_governance.schemas import AgentRiskProfile
 from molecule_ranker.agent_repair.diagnosis import FailureDiagnosisAgent
 from molecule_ranker.agent_repair.evaluators import OutputEvaluator, PlanEvaluator
 from molecule_ranker.agent_repair.executor import RepairExecutor
@@ -102,9 +112,15 @@ class RuntimeActionExecutor:
         registry: RuntimeToolRegistry | None = None,
         tool_handlers: dict[str, ToolHandler] | None = None,
         repair_config: RuntimeRepairConfig | dict[str, Any] | None = None,
+        governance_policy_engine: AgentGovernancePolicyEngine | None = None,
+        governance_risk_scorer: AgentRiskScorer | None = None,
+        governance_risk_profiles: dict[str, AgentRiskProfile] | None = None,
     ) -> None:
         self.registry = registry or RuntimeToolRegistry.default()
         self.tool_handlers = tool_handlers or {}
+        self.governance_policy_engine = governance_policy_engine
+        self.governance_risk_scorer = governance_risk_scorer
+        self.governance_risk_profiles = governance_risk_profiles
         self.guardrails = RuntimeGuardrailChecker(registry=self.registry)
         self.repair_config = _repair_config(repair_config)
         self.plan_evaluator = PlanEvaluator(registry=self.registry)
@@ -256,6 +272,80 @@ class RuntimeActionExecutor:
                     started_at=started_at,
                 )
 
+            governance_decision = evaluate_runtime_governance(
+                self.governance_policy_engine,
+                agent_id=_governance_agent_id(runtime_context, actor),
+                agent_type=governance_agent_type(
+                    runtime_context.get("agent_type"),
+                    default=(
+                        "codex_worker"
+                        if actor in {"codex", "codex_worker"}
+                        else "runtime_agent"
+                    ),
+                ),
+                action=_governance_step_action(step),
+                autonomy_level=runtime_context.get("autonomy_level") or mode,
+                org_id=runtime_context.get("org_id")
+                if isinstance(runtime_context.get("org_id"), str)
+                else None,
+                project_id=runtime_context.get("project_id")
+                if isinstance(runtime_context.get("project_id"), str)
+                else None,
+                campaign_id=runtime_context.get("campaign_id")
+                if isinstance(runtime_context.get("campaign_id"), str)
+                else None,
+                role=runtime_context.get("role")
+                if isinstance(runtime_context.get("role"), str)
+                else None,
+                tool_category=spec.category,
+                side_effect_level=spec.side_effect_level,
+                approvals=approved,
+                session_id=plan.session_id,
+                artifact_ids=list(plan.expected_artifacts),
+                metadata={"step_id": step.step_id, "tool_name": step.tool_name},
+            )
+            if governance_decision is not None and not governance_decision.allowed:
+                result_status = policy_decision_status(governance_decision)
+                result = _result_for_step(
+                    step,
+                    status=result_status,
+                    error_summary=policy_decision_error(governance_decision),
+                )
+                results.append(result)
+                step.status = "failed"
+                _skip_remaining(plan, from_index=step.step_index + 1)
+                audit_events.append(
+                    _audit(plan, f"runtime_step_{result_status}", actor, result.error_summary or "")
+                )
+                self._record_tool_usage(spec, result, actor, plan)
+                record_governance_risk_event(
+                    risk_scorer=self.governance_risk_scorer,
+                    risk_profiles=self.governance_risk_profiles,
+                    agent_id=_governance_agent_id(runtime_context, actor),
+                    autonomy_level=runtime_context.get("autonomy_level") or mode,
+                    side_effect_level=spec.side_effect_level,
+                    policy_violations=1 if governance_decision.violations else 0,
+                    unauthorized_tool_attempts=1
+                    if any(
+                        violation.violation_type
+                        in {"denied_tool_category", "tool_category_not_allowed"}
+                        for violation in governance_decision.violations
+                    )
+                    else 0,
+                    metadata={"decision": governance_decision.model_dump(mode="json")},
+                )
+                return _execution_result(
+                    plan=plan,
+                    mode=mode,
+                    status=result_status,
+                    results=results,
+                    artifact_ids=artifact_ids,
+                    job_ids=job_ids,
+                    warnings=warnings,
+                    audit_events=audit_events,
+                    started_at=started_at,
+                )
+
             policy_error = _policy_error(step, spec, mode, actor, approved)
             if policy_error:
                 result_status = (
@@ -278,6 +368,15 @@ class RuntimeActionExecutor:
                     _audit(plan, f"runtime_step_{result_status}", actor, policy_error)
                 )
                 self._record_tool_usage(spec, result, actor, plan)
+                record_governance_risk_event(
+                    risk_scorer=self.governance_risk_scorer,
+                    risk_profiles=self.governance_risk_profiles,
+                    agent_id=_governance_agent_id(runtime_context, actor),
+                    autonomy_level=runtime_context.get("autonomy_level") or mode,
+                    side_effect_level=spec.side_effect_level,
+                    policy_violations=1,
+                    metadata={"runtime_policy_error": policy_error},
+                )
                 return _execution_result(
                     plan=plan,
                     mode=mode,
@@ -793,6 +892,20 @@ def _policy_error(
     if spec.requires_approval_by_default and not _is_approved(step, approvals, step.tool_name):
         return "Tool requires approval."
     return None
+
+
+def _governance_agent_id(runtime_context: dict[str, Any], actor: str) -> str:
+    value = runtime_context.get("agent_id")
+    if isinstance(value, str) and value:
+        return value
+    return actor or "runtime-agent"
+
+
+def _governance_step_action(step: RuntimeActionStep) -> str:
+    value = step.metadata.get("governance_action")
+    if isinstance(value, str) and value:
+        return value
+    return step.action_type or step.tool_name
 
 
 def _is_approved(step: RuntimeActionStep, approvals: set[str], approval_type: str) -> bool:

@@ -5,7 +5,7 @@ from importlib import import_module
 from typing import Any, cast
 
 from rdkit import Chem
-from rdkit.Chem import Descriptors, Lipinski
+from rdkit.Chem import Descriptors, Lipinski, rdMolDescriptors
 
 from molecule_ranker.developability.schemas import (
     ADMETRiskLevel,
@@ -140,6 +140,7 @@ def _fallback_accessibility_score(mol: Chem.Mol, flags: list[str]) -> float:
 def _descriptor_snapshot(mol: Chem.Mol) -> dict[str, float | int]:
     descriptors = cast(Any, Descriptors)
     lipinski = cast(Any, Lipinski)
+    mol_descriptors = cast(Any, rdMolDescriptors)
     ring_info = mol.GetRingInfo()
     atom_rings = ring_info.AtomRings()
     heavy_atoms = int(lipinski.HeavyAtomCount(mol))
@@ -149,8 +150,8 @@ def _descriptor_snapshot(mol: Chem.Mol) -> dict[str, float | int]:
     return {
         "macrocycle_count": sum(1 for ring in atom_rings if len(ring) >= 8),
         "stereocenter_count": len(Chem.FindMolChiralCenters(mol, includeUnassigned=True)),
-        "bridgehead_atoms": int(lipinski.NumBridgeheadAtoms(mol)),
-        "spiro_atoms": int(lipinski.NumSpiroAtoms(mol)),
+        "bridgehead_atoms": int(mol_descriptors.CalcNumBridgeheadAtoms(mol)),
+        "spiro_atoms": int(mol_descriptors.CalcNumSpiroAtoms(mol)),
         "heteroatom_ratio": heteroatoms / heavy_atoms if heavy_atoms else 0.0,
         "molecular_weight": float(descriptors.MolWt(mol)),
         "rotatable_bonds": int(lipinski.NumRotatableBonds(mol)),

@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
+from molecule_ranker.agent_governance.capability_grants import CapabilityGrantManager
+from molecule_ranker.agent_governance.certification import AgentCertificationManager
+from molecule_ranker.agent_governance.schemas import AgentCapabilityScopeType
 from molecule_ranker.subagents.registry import (
     HIGH_RISK_TOOL_CATEGORIES,
     SubagentRegistry,
@@ -89,9 +92,13 @@ class MultiAgentCoordinator:
         *,
         registry: SubagentRegistry | None = None,
         tool_catalog: dict[str, list[str]] | None = None,
+        certification_manager: AgentCertificationManager | None = None,
+        capability_grant_manager: CapabilityGrantManager | None = None,
     ) -> None:
         self.registry = registry or SubagentRegistry()
         self.tool_catalog = tool_catalog or TOOL_CATALOG
+        self.certification_manager = certification_manager
+        self.capability_grant_manager = capability_grant_manager
 
     def coordinate(
         self,
@@ -104,6 +111,8 @@ class MultiAgentCoordinator:
         requested_tool_names: list[str] | None = None,
         output_dir: Path | None = None,
         force_disagreement: bool = False,
+        governance_scope_type: AgentCapabilityScopeType = "workflow",
+        governance_scope_id: str | None = None,
     ) -> MultiAgentSession:
         started_at = _now()
         session_id = f"multi-agent-session-{uuid4().hex[:12]}"
@@ -129,6 +138,8 @@ class MultiAgentCoordinator:
             mode=mode,
             scoped_artifact_ids=scoped_artifacts,
             requested_tool_names=requested_tool_names,
+            governance_scope_type=governance_scope_type,
+            governance_scope_id=governance_scope_id or session_id,
         )
         self._add_dependencies(tasks, mode)
         messages = [
@@ -229,6 +240,8 @@ class MultiAgentCoordinator:
         mode: CoordinationMode,
         scoped_artifact_ids: list[str],
         requested_tool_names: list[str] | None = None,
+        governance_scope_type: AgentCapabilityScopeType = "workflow",
+        governance_scope_id: str | None = None,
     ) -> list[SubagentTask]:
         profile_ids = self._select_subagents(user_goal, mode)
         tasks: list[SubagentTask] = []
@@ -242,6 +255,12 @@ class MultiAgentCoordinator:
                         "unauthorized tool for assigned subagent: " + ", ".join(unauthorized)
                     )
                 allowed_tools = list(dict.fromkeys(requested_tool_names))
+            self._check_subagent_governance(
+                profile,
+                requested_capabilities=requested_tool_names or [],
+                scope_type=governance_scope_type,
+                scope_id=governance_scope_id or parent_session_id,
+            )
             risk_level = _risk_level(user_goal)
             tasks.append(
                 SubagentTask(
@@ -277,6 +296,38 @@ class MultiAgentCoordinator:
                 )
             )
         return tasks
+
+    def _check_subagent_governance(
+        self,
+        profile: SubagentProfile,
+        *,
+        requested_capabilities: list[str],
+        scope_type: AgentCapabilityScopeType,
+        scope_id: str | None,
+    ) -> None:
+        if self.certification_manager is not None:
+            certifications = self.certification_manager.list_certifications(
+                agent_id=profile.subagent_id,
+                certification_type="subagent_role",
+                include_inactive=False,
+            )
+            if not certifications:
+                raise SubagentPolicyError(
+                    f"subagent {profile.subagent_id} lacks active subagent_role certification"
+                )
+        if self.capability_grant_manager is None:
+            return
+        for capability in requested_capabilities:
+            decision = self.capability_grant_manager.check_capability(
+                agent_id=profile.subagent_id,
+                capability=capability,
+                scope_type=cast(AgentCapabilityScopeType, scope_type),
+                scope_id=scope_id,
+            )
+            if not decision.allowed:
+                raise SubagentPolicyError(
+                    f"subagent {profile.subagent_id} lacks capability grant: {capability}"
+                )
 
     def request_critiques(
         self,

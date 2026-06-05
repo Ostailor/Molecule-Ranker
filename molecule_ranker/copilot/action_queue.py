@@ -4,6 +4,17 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from molecule_ranker.agent_governance.budgets import (
+    AgentAutonomyBudgetManager,
+    AgentBudgetReservation,
+    BudgetImpact,
+)
+from molecule_ranker.agent_governance.integration import governance_autonomy_level
+from molecule_ranker.agent_governance.run_control import (
+    AgentRunControlManager,
+    RunControlRequest,
+)
+from molecule_ranker.agent_governance.schemas import AgentAutonomyBudget
 from molecule_ranker.copilot.schemas import (
     ActionResultStatus,
     ActionStatus,
@@ -25,6 +36,9 @@ class CoPilotActionQueue:
         max_actions_per_run: int = 10,
         max_retries: int = 2,
         repeated_failure_limit: int = 3,
+        autonomy_budget_manager: AgentAutonomyBudgetManager | None = None,
+        autonomy_budget_id: str | None = None,
+        run_control_manager: AgentRunControlManager | None = None,
     ) -> None:
         self._now = now or (lambda: datetime.now(UTC))
         self._executor = executor or self._default_executor
@@ -32,6 +46,9 @@ class CoPilotActionQueue:
         self.max_actions_per_run = max_actions_per_run
         self.max_retries = max_retries
         self.repeated_failure_limit = repeated_failure_limit
+        self.autonomy_budget_manager = autonomy_budget_manager
+        self.autonomy_budget_id = autonomy_budget_id
+        self.run_control_manager = run_control_manager
         self.actions: dict[str, CoPilotAction] = {}
         self.results: dict[str, CoPilotActionResult] = {}
         self.audit_log: list[dict[str, Any]] = []
@@ -120,7 +137,27 @@ class CoPilotActionQueue:
                 break
             if not self._eligible_for_execution(action):
                 continue
+            governance_result, reservation = self._governance_preflight(
+                action,
+                session=session,
+            )
+            if governance_result is not None:
+                results.append(governance_result)
+                self.results[action.copilot_action_id] = governance_result
+                failed = self._with_status(action, "failed")
+                self.actions[action.copilot_action_id] = failed
+                self._audit(failed, str(governance_result.status), actor_id="governance")
+                executed_count += 1
+                continue
             result = self._execute_with_retry(action)
+            if reservation is not None:
+                if result.status == "succeeded":
+                    self.autonomy_budget_manager.commit_budget(reservation.reservation_id)  # type: ignore[union-attr]
+                else:
+                    self.autonomy_budget_manager.release_budget(  # type: ignore[union-attr]
+                        reservation.reservation_id,
+                        reason=f"Co-pilot action ended with {result.status}.",
+                    )
             results.append(result)
             self.results[action.copilot_action_id] = result
             final_status: ActionStatus = "succeeded" if result.status == "succeeded" else "failed"
@@ -169,6 +206,83 @@ class CoPilotActionQueue:
         if action.side_effect_level in {"external_write", "destructive"}:
             return False
         return action.risk_level in {"low", "medium"}
+
+    def _governance_preflight(
+        self,
+        action: CoPilotAction,
+        *,
+        session: CampaignCoPilotSession | None,
+    ) -> tuple[CoPilotActionResult | None, AgentBudgetReservation | None]:
+        if self.run_control_manager is not None:
+            decision = self.run_control_manager.evaluate(
+                RunControlRequest(
+                    agent_id=_copilot_agent_id(action),
+                    agent_type="campaign_copilot",
+                    campaign_id=action.campaign_id,
+                    action=action.action_type,
+                    autonomy_level=governance_autonomy_level(
+                        session.autonomy_level
+                        if session is not None
+                        else action.metadata.get("autonomy_level")
+                    ),
+                    side_effect_level=action.side_effect_level,
+                ),
+                now=self._now(),
+            )
+            if not decision.allowed:
+                status: ActionResultStatus = (
+                    "approval_required" if decision.requires_approval else "blocked_by_policy"
+                )
+                return (
+                    self._result(
+                        action,
+                        status=status,
+                        summary="; ".join(decision.reasons),
+                    ),
+                    None,
+                )
+        if self.autonomy_budget_manager is None:
+            return None, None
+        budget = self._budget_for_action(action)
+        if budget is None:
+            return None, None
+        reservation_result = self.autonomy_budget_manager.reserve_budget(
+            budget,
+            _budget_impact_for_action(action),
+            approvals=_approval_set(action),
+            now=self._now(),
+            metadata={"copilot_action_id": action.copilot_action_id},
+        )
+        if reservation_result.decision.allowed:
+            return None, reservation_result.reservation
+        status = (
+            "approval_required"
+            if reservation_result.decision.requires_approval
+            else "blocked_by_policy"
+        )
+        return (
+            self._result(
+                action,
+                status=status,
+                summary="; ".join(reservation_result.decision.reasons),
+            ),
+            None,
+        )
+
+    def _budget_for_action(self, action: CoPilotAction) -> AgentAutonomyBudget | str | None:
+        explicit = action.metadata.get("budget_id") or self.autonomy_budget_id
+        if isinstance(explicit, str) and explicit:
+            return explicit
+        if self.autonomy_budget_manager is None:
+            return None
+        agent_id = _copilot_agent_id(action)
+        for budget in self.autonomy_budget_manager.budgets:
+            if (
+                budget.campaign_id in {None, action.campaign_id}
+                and budget.agent_id in {None, agent_id}
+            ):
+                return budget
+        return None
 
     def _record_failure(
         self,
@@ -271,6 +385,46 @@ class CoPilotActionQueue:
                 "created_at": self._now(),
             }
         )
+
+
+def _copilot_agent_id(action: CoPilotAction) -> str:
+    value = action.metadata.get("agent_id")
+    if isinstance(value, str) and value:
+        return value
+    return f"campaign-copilot:{action.campaign_id}"
+
+
+def _approval_set(action: CoPilotAction) -> set[str]:
+    approvals = set()
+    if action.status == "approved":
+        approvals.add("budget_override")
+        approvals.add("high_cost_job")
+    raw = action.metadata.get("governance_approvals")
+    if isinstance(raw, list):
+        approvals.update(str(item) for item in raw if isinstance(item, str))
+    return approvals
+
+
+def _budget_impact_for_action(action: CoPilotAction) -> BudgetImpact:
+    raw = action.metadata.get("budget_impact")
+    if isinstance(raw, dict):
+        return BudgetImpact.model_validate(raw)
+    impact: dict[str, Any] = {"action_type": action.action_type}
+    if action.tool_name:
+        impact["tool_calls"] = 1
+    if action.side_effect_level == "artifact_write":
+        impact["artifact_writes"] = 1
+    elif action.side_effect_level == "db_write":
+        impact["db_writes"] = 1
+    elif action.side_effect_level == "external_read":
+        impact["external_reads"] = 1
+    elif action.side_effect_level == "external_write":
+        impact["external_writes"] = 1
+    elif action.side_effect_level == "destructive":
+        impact["destructive"] = True
+    if action.action_type == "run_campaign_replan":
+        impact["campaign_replans"] = 1
+    return BudgetImpact.model_validate(impact)
 
 
 AutonomousActionQueue = CoPilotActionQueue
