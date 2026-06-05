@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from molecule_ranker.cli import app
@@ -27,7 +28,7 @@ def test_subagents_cli_help_works() -> None:
     assert run_help.exit_code == 0, run_help.output
     assert session_help.exit_code == 0, session_help.output
     assert "profiles" in help_result.output
-    assert "--goal" in run_help.output
+    assert "--goal" in unstyle(run_help.output)
 
 
 def test_subagents_dry_run_session_created(tmp_path: Path) -> None:
