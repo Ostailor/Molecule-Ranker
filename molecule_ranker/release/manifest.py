@@ -56,7 +56,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
                 "Codex-generated campaign priorities, budgets, costs, metrics, outcomes, "
                 "or advancement decisions",
                 "campaign plans promoted to lab protocols or synthesis routes",
-                "major new science modules in the V2.4 enterprise release",
+                "major new science modules in the V2.5 enterprise release",
                 "expanded generation, docking, ADMET, graph reasoning, model training, "
                 "integrations, or campaign planning except for controlled runtime "
                 "orchestration, stability, validation, security, and enterprise readiness",
@@ -167,8 +167,8 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V2.4 is for internal research use only and is not a clinical product.",
-        "V2.4 adds agent self-evaluation, failure diagnosis, safe repair planning, "
+        "V2.5 is for internal research use only and is not a clinical product.",
+        "V2.5 adds agent self-evaluation, failure diagnosis, safe repair planning, "
         "bounded autonomous retry, repair memory, regression checks, and auditable "
         "repair reports over the existing governed Codex runtime and tool ecosystem.",
         "Agents may repair workflows but may not repair scientific truth by inventing "

@@ -321,11 +321,11 @@ def _check(
 
 
 def _check_version() -> dict[str, Any]:
-    passed = __version__ == "2.4.0"
+    passed = __version__ == "2.5.0"
     return _check(
-        "version_2_4_0",
+        "version_2_5_0",
         "pass" if passed else "fail",
-        "Version is 2.4.0." if passed else f"Version is {__version__}.",
+        "Version is 2.5.0." if passed else f"Version is {__version__}.",
     )
 
 

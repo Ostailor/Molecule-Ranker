@@ -15,30 +15,23 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V2.4 keeps molecule-ranker as a validated enterprise discovery "
-            "operating system and adds agent self-evaluation, failure diagnosis, "
-            "safe repair planning, bounded autonomous retry, repair memory, "
-            "regression checks, and auditable repair reports. V2.3 already added "
-            "specialist multi-agent scientific operations; V2.2 added a governed "
-            "Codex tool ecosystem; V2.1 added controlled Codex runtime-agent "
-            "execution through approved, audited, deterministic tools. V2.0 stabilized "
-            "enterprise contracts, production deployment, security controls, "
-            "identity and access control, tenant/project isolation, validation "
-            "evidence packages, operational runbooks, disaster recovery, "
-            "governance and audit readiness, performance and reliability targets, "
-            "release certification workflows, stable APIs and SDK behavior, "
-            "enterprise admin controls, end-to-end synthetic demo workflows, and "
-            "V2.0 documentation and training. V2.4 does not add major new science "
-            "capabilities and does not expand "
-            "molecule generation, docking, ADMET, graph reasoning, model training, "
-            "external integrations, or campaign planning except for controlled "
-            "runtime orchestration, stability, validation, security, and "
-            "enterprise readiness. The enterprise "
-            "research boundary remains intact: "
-            "campaign plans, hypotheses, research questions, graph paths, portfolio "
-            "recommendations, structure workflows, docking scores, model predictions, "
-            "and generated molecules are planning or prioritization signals, not "
-            "biomedical claims.",
+            "V2.5 adds an autonomous campaign co-pilot for human-governed "
+            "campaign-management workflows. The co-pilot monitors active campaigns, "
+            "detects source-backed events, routes deterministic triggers, proposes "
+            "safe next actions, executes low-risk follow-ups when autonomy allows, "
+            "requests approvals for risky actions, generates grounded status updates, "
+            "and exposes hosted API/dashboard surfaces. It inherits the V2.4 "
+            "validated enterprise discovery operating system, Codex runtime-agent "
+            "backbone, governed tool ecosystem, MCP-compatible gateway, multi-agent "
+            "scientific operations, safe repair loops, repair memory, regression "
+            "checks, hosted repair reporting, stable APIs and SDK behavior. V2.5 "
+            "does not add major new "
+            "science capabilities and does not expand molecule generation, docking, "
+            "ADMET, graph reasoning, model training, external integrations, or lab "
+            "execution. The research boundary remains intact: campaign plans, "
+            "hypotheses, research questions, graph paths, portfolio recommendations, "
+            "structure workflows, docking scores, model predictions, and generated "
+            "molecules are planning or prioritization signals, not biomedical claims.",
             "",
             "## Included",
             "",
@@ -114,6 +107,10 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "RepairExecutor, RegressionCheckAgent, RepairMemory, RepairPolicyEngine, "
             "AgentReliabilityDashboard, repair artifacts, repair eval suite, and safe "
             "autonomous recovery loops.",
+            "- V2.5 CampaignCoPilotAgent, CampaignMonitor, EventDetector, "
+            "TriggerRouter, CoPilotPolicyEngine, AutonomousActionQueue, "
+            "CampaignReplanExecutor, EscalationManager, CoPilotStatusReporter, "
+            "CoPilotMemory, CoPilotEvalSuite, and hosted co-pilot dashboard/API.",
             "- Operator, admin, and user documentation with backup/restore runbooks.",
             "- Synthetic demo project artifacts clearly labeled as non-evidence examples.",
             "",
@@ -138,6 +135,13 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "- campaign plans are research-management artifacts, not lab protocols",
             "- campaign priorities, budget fit, dependencies, and replan triggers are "
             "computed deterministically",
+            "- the campaign co-pilot is a campaign-management assistant, not a lab executor",
+            "- failed QC is never treated as positive or negative evidence",
+            "- generated molecules remain computational hypotheses unless exact imported "
+            "results support direct evidence, and advancement still requires human approval",
+            "- co-pilot actions cannot approve campaign advancement, stage gates, external "
+            "writes, destructive actions, generated-molecule assay advancement, high-cost "
+            "jobs, or policy overrides",
             "- benchmark results are evaluation artifacts, not biomedical evidence",
             "- prospective validation analytics are not clinical validation",
             "- Codex must not invent benchmark results, labels, metrics, or conclusions",
@@ -156,9 +160,9 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "inventing missing data",
             "- Repair executors must not approve their own risky repairs or bypass "
             "validators, RBAC, policy, approvals, or guardrails",
-            "- V2.4 validation evidence packages are software/process validation artifacts",
-            "- V2.4 enterprise validation is not clinical validation",
-            "- V2.4 support bundles are diagnostics manifests, not biomedical evidence",
+            "- V2.5 validation evidence packages are software/process validation artifacts",
+            "- V2.5 enterprise validation is not clinical validation",
+            "- V2.5 support bundles are diagnostics manifests, not biomedical evidence",
             "",
             "## Contracts",
             "",

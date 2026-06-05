@@ -1,3 +1,4 @@
+from molecule_ranker.agents.campaign_copilot import CampaignCoPilotAgent
 from molecule_ranker.agents.campaign_planning import CampaignPlanningAgent
 from molecule_ranker.agents.codex_backbone import CodexBackboneAgent
 from molecule_ranker.agents.developability_assessment import DevelopabilityAssessmentAgent
@@ -30,6 +31,7 @@ from molecule_ranker.agents.target_discovery import TargetDiscoveryAgent
 
 __all__ = [
     "DiseaseResolverAgent",
+    "CampaignCoPilotAgent",
     "CampaignPlanningAgent",
     "CodexBackboneAgent",
     "DevelopabilityAssessmentAgent",

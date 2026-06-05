@@ -828,7 +828,7 @@ def agent_reliability_dashboard_page(
     body = (
         _agent_nav()
         + "<h2>Agent reliability dashboard</h2>"
-        + "<p>V2.4 self-evaluation, failure diagnosis, autonomous repair, "
+        + "<p>V2.5 self-evaluation, failure diagnosis, autonomous repair, "
         + "regression checks, and auditable repair reports.</p>"
         + "<p>Agents may repair workflows. Agents may not repair scientific truth "
         + "by inventing missing data.</p>"
@@ -866,7 +866,7 @@ def repair_overview_dashboard_page(
     body = (
         _repair_nav()
         + "<h2>Repair overview</h2>"
-        + "<p>Hosted V2.4 workflow repair. Agents may repair workflows; agents may not "
+        + "<p>Hosted V2.5 workflow repair. Agents may repair workflows; agents may not "
         + "repair scientific truth by inventing missing data.</p>"
         + _table(
             ["Metric", "Count"],
@@ -4181,9 +4181,9 @@ def _structure_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.4</div>"
+        "<div class=\"brand\">molecule-ranker V2.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4326,9 +4326,9 @@ def _model_dashboard_html(title: str, workspace: ProjectWorkspace, body: str) ->
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.4</div>"
+        "<div class=\"brand\">molecule-ranker V2.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4361,9 +4361,9 @@ def _portfolio_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.4</div>"
+        "<div class=\"brand\">molecule-ranker V2.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4413,9 +4413,9 @@ def _campaign_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.4</div>"
+        "<div class=\"brand\">molecule-ranker V2.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -4856,9 +4856,9 @@ def _knowledge_graph_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.4</div>"
+        "<div class=\"brand\">molecule-ranker V2.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -5434,9 +5434,9 @@ def _evaluation_dashboard_shell(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.4</div>"
+        "<div class=\"brand\">molecule-ranker V2.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -5677,9 +5677,9 @@ def _hypothesis_dashboard_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.4.0-dashboard-1\">"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/dashboard.css?v=2.5.0-dashboard-1\">"
         "</head><body><div class=\"shell\"><header class=\"topbar\"><div class=\"topbar-inner\">"
-        "<div class=\"brand\">molecule-ranker V2.4</div>"
+        "<div class=\"brand\">molecule-ranker V2.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         f"{_link('/dashboard', 'Projects')}"
         f"{_link(f'/dashboard/projects/{project_id}', 'Project')}"
@@ -5910,9 +5910,9 @@ def _subagent_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.4.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.5.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.4</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.5</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/subagents/sessions", "Subagent sessions")
@@ -5947,9 +5947,9 @@ def _agent_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.4.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.5.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.4</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.5</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/agent/sessions", "Agent sessions")
@@ -6060,9 +6060,9 @@ def _repair_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_h(title)} · molecule-ranker</title>"
-        '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.4.0-repair-1">'
+        '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.5.0-repair-1">'
         "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.4</div>"
+        "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.5</div>"
         "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/repair", "Repair")
@@ -6191,9 +6191,9 @@ def _tool_dashboard_html(title: str, body: str) -> HTMLResponse:
         "<title>"
         + escape(title)
         + " · molecule-ranker</title>"
-        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.4.0-dashboard-1">'
+        + '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=2.5.0-dashboard-1">'
         + "</head><body><div class=\"shell\"><header class=\"topbar\">"
-        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.4</div>"
+        + "<div class=\"topbar-inner\"><div class=\"brand\">molecule-ranker V2.5</div>"
         + "<nav class=\"nav\" aria-label=\"Dashboard\">"
         + _link("/dashboard", "Projects")
         + _link("/dashboard/tools", "Tools")

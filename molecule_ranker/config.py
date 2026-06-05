@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 DEFAULT_GENERATION_ELEMENTS = ["C", "H", "N", "O", "S", "P", "F", "Cl", "Br", "I"]
+
+CampaignCoPilotAutonomy = Literal[
+    "observe_only",
+    "suggest_only",
+    "execute_safe_actions",
+    "execute_with_approval",
+    "supervised_auto",
+]
+CampaignCoPilotStatusUpdateMode = Literal[
+    "manual",
+    "daily",
+    "weekly",
+    "after important trigger",
+    "after campaign replan",
+]
 
 
 class RankerConfig(BaseModel):
@@ -151,6 +166,13 @@ class RankerConfig(BaseModel):
     require_generated_review_gate: bool = True
     campaign_planning_strategy: str = "balanced"
     max_campaign_work_packages: int = Field(default=50, ge=1)
+    enable_campaign_copilot: bool = False
+    campaign_copilot_autonomy: CampaignCoPilotAutonomy = "observe_only"
+    campaign_copilot_check_interval_seconds: int = Field(default=3600, ge=1)
+    campaign_copilot_max_actions_per_cycle: int = Field(default=10, ge=0)
+    campaign_copilot_status_update_mode: CampaignCoPilotStatusUpdateMode = "manual"
+    campaign_copilot_require_approval_for_replan: bool = True
+    campaign_copilot_pause_on_guardrail_failure: bool = True
     codex_tasks: list[str] = Field(
         default_factory=lambda: [
             "summarize_run",
@@ -322,6 +344,21 @@ class RankerConfig(BaseModel):
             "require_generated_review_gate": self.require_generated_review_gate,
             "campaign_planning_strategy": self.campaign_planning_strategy,
             "max_campaign_work_packages": self.max_campaign_work_packages,
+            "enable_campaign_copilot": self.enable_campaign_copilot,
+            "campaign_copilot_autonomy": self.campaign_copilot_autonomy,
+            "campaign_copilot_check_interval_seconds": (
+                self.campaign_copilot_check_interval_seconds
+            ),
+            "campaign_copilot_max_actions_per_cycle": (
+                self.campaign_copilot_max_actions_per_cycle
+            ),
+            "campaign_copilot_status_update_mode": self.campaign_copilot_status_update_mode,
+            "campaign_copilot_require_approval_for_replan": (
+                self.campaign_copilot_require_approval_for_replan
+            ),
+            "campaign_copilot_pause_on_guardrail_failure": (
+                self.campaign_copilot_pause_on_guardrail_failure
+            ),
             "codex_tasks": list(self.codex_tasks),
             "codex_store_transcripts": self.codex_store_transcripts,
             "codex_max_tasks_per_run": self.codex_max_tasks_per_run,

@@ -64,7 +64,7 @@ def write_repair_artifacts(
     repair_execution: RepairExecution | None = None,
     regression_checks: list[RegressionCheck] | None = None,
 ) -> dict[str, Path]:
-    """Write the canonical V2.4 repair artifact bundle."""
+    """Write the canonical V2.5 repair artifact bundle."""
 
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)

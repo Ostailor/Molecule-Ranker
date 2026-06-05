@@ -1,166 +1,163 @@
 # molecule-ranker
 
-Current version: `2.4.0`.
+`molecule-ranker` is an agent-first research prototype for transparent
+existing-molecule ranking and campaign workflow management. It resolves a
+disease through public biomedical data sources, retrieves evidence-backed
+targets and existing molecules, ranks candidates as research hypotheses, and
+adds a V2.5 autonomous campaign co-pilot for human-governed planning work.
 
-`molecule-ranker` is internal research software for source-backed molecule
-ranking, governed Codex orchestration, review workflows, multi-agent scientific
-operations, and audited workflow repair. It is an enterprise discovery operating system
-for operational research workflows, not a clinical product and not a source of
-scientific truth.
+The project is for research planning only. It does not discover cures; it
+provides no medical advice, lab execution, protocols, synthesis instructions,
+dosing guidance, patient guidance, or procedural wet-lab steps.
 
-The project keeps a strict research boundary: no major new science is created by
-agents, and the software provides no medical advice, lab protocols, synthesis
-instructions, dosing guidance, patient treatment guidance, or claims that a
-molecule is safe, active, effective, binding, synthesizable, or therapeutic.
-Codex, subagents, and repair loops may inspect artifacts, diagnose failures,
-rerun deterministic tools, request approvals, and repair workflows. They may not
-invent evidence, assay results, citations, molecules, graph facts, benchmark
-metrics, scientific scores, or approvals.
+## Current Version
+
+V2.5.0 adds an autonomous campaign co-pilot. The co-pilot monitors active
+campaigns, detects events, routes triggers, proposes safe next actions, executes
+safe low-risk follow-ups when autonomy allows, requests approvals for risky
+actions, generates campaign status updates, exposes a hosted dashboard/API
+surface, and runs deterministic eval and guardrail validation suites.
+
+The co-pilot is a campaign-management assistant, not a lab executor. Human
+approval remains required for campaign advancement, stage gates, external
+writes, generated-molecule assay advancement, destructive actions, high-cost
+jobs, and policy overrides. Codex and the co-pilot cannot approve their own
+actions.
+
+Scientific integrity rules are enforced:
+
+- No fabricated evidence, assay results, citations, molecules, graph facts,
+  metrics, scores, or approvals.
+- Failed QC is never treated as positive or negative evidence.
+- Generated molecules remain computational hypotheses unless exact imported
+  results support direct evidence, and advancement still requires human
+  approval.
+- Scores are prioritization aids, not validated predictions of activity,
+  safety, efficacy, binding, therapeutic value, or synthesizability.
 
 ## Install
 
-Python 3.11+ and `uv` are required.
+Python 3.11+ is required. Install with `uv`:
 
 ```bash
-uv sync --all-groups
+uv sync
+```
+
+Check the installed CLI and version:
+
+```bash
+uv run molecule-ranker --help
 uv run molecule-ranker version
 ```
 
-## Run A Ranking
+## Run Ranking
+
+Run an existing-molecule ranking job:
 
 ```bash
-uv run molecule-ranker rank "<disease-name>" \
-  --top 5 \
-  --output-dir results/<disease-slug>
+uv run molecule-ranker rank "Alzheimer disease" --top 10
 ```
 
-Typical outputs are written under the selected output directory:
-
-- `candidates.json`
-- `report.md`
-- `trace.json`
-- `generated_candidates.json` when generation is explicitly enabled
-
-## Run Codex
-
-Start the governed Codex runtime agent in dry-run mode:
+Useful options:
 
 ```bash
-uv run molecule-ranker agent start \
-  --goal "Rank Alzheimer disease and create a review workspace" \
-  --autonomy suggest_only \
-  --dry-run \
-  --output-dir .molecule-ranker/runtime-agent/alzheimer-review
+uv run molecule-ranker rank "Alzheimer disease" \
+  --top 10 \
+  --output-dir results \
+  --timeout 20 \
+  --max-targets 25 \
+  --max-molecules-per-target 10 \
+  --verbose
 ```
 
-List available subagent profiles:
+Print a JSON summary:
 
 ```bash
-uv run molecule-ranker subagents profiles
+uv run molecule-ranker rank "Alzheimer disease" --top 10 --json
 ```
 
-Run a subagent in dry-run mode:
-
-```bash
-uv run molecule-ranker subagents run \
-  --skill diagnose_project \
-  --project-id project-123 \
-  --autonomy execute_with_approval \
-  --dry-run
-```
-
-## Run Repair Workflows
-
-Diagnose a failed job or tool result:
-
-```bash
-uv run molecule-ranker repair diagnose \
-  --job-id job-123 \
-  --output failure_diagnosis.json
-
-uv run molecule-ranker repair diagnose \
-  --tool-result tool_result.json \
-  --output failure_diagnosis.json
-```
-
-Create and dry-run a repair plan:
-
-```bash
-uv run molecule-ranker repair plan \
-  --diagnosis failure_diagnosis.json \
-  --mode safe_only \
-  --output repair_plan.json
-
-uv run molecule-ranker repair execute \
-  --repair-plan repair_plan.json \
-  --dry-run \
-  --output repair_execution.json
-```
-
-Run regression checks and write an auditable repair report:
-
-```bash
-uv run molecule-ranker repair regression \
-  --repair-execution repair_execution.json \
-  --output regression_checks.json
-
-uv run molecule-ranker repair report \
-  --repair-execution repair_execution.json \
-  --output repair_report.md
-```
-
-Run the repair eval suite:
-
-```bash
-uv run molecule-ranker repair eval --suite default
-```
-
-## Run Hosted Mode
-
-Create a local platform database and admin user:
-
-```bash
-uv run molecule-ranker db init --db-path .molecule-ranker/platform.sqlite
-
-uv run molecule-ranker user create \
-  --email admin@example.com \
-  --password "change-me" \
-  --role admin \
-  --db-path .molecule-ranker/platform.sqlite
-```
-
-Start the hosted dashboard and API:
-
-```bash
-uv run molecule-ranker serve \
-  --host 127.0.0.1 \
-  --port 8765 \
-  --hosted \
-  --platform-db-path .molecule-ranker/platform.sqlite
-```
-
-Open:
+Ranking outputs are written under:
 
 ```text
-http://127.0.0.1:8765/dashboard
-http://127.0.0.1:8765/dashboard/repair
+results/<disease_slug>/report.md
+results/<disease_slug>/candidates.json
+results/<disease_slug>/trace.json
 ```
 
-Hosted APIs are available under `/api/v2/*`.
+The ranking CLI uses live public biomedical APIs. If required real data cannot
+be retrieved, it fails instead of inventing fallback targets, molecules,
+evidence, citations, or scores.
+
+## Run The Co-Pilot
+
+Start the co-pilot in observe-only mode:
+
+```bash
+uv run molecule-ranker copilot start \
+  --campaign-id campaign-123 \
+  --autonomy observe_only
+```
+
+Run one monitoring cycle:
+
+```bash
+uv run molecule-ranker copilot check --campaign-id campaign-123
+```
+
+Inspect co-pilot state:
+
+```bash
+uv run molecule-ranker copilot events --campaign-id campaign-123
+uv run molecule-ranker copilot triggers --campaign-id campaign-123
+uv run molecule-ranker copilot actions --campaign-id campaign-123
+```
+
+Approve or reject a proposed action after human review:
+
+```bash
+uv run molecule-ranker copilot approve-action \
+  --action-id action-123 \
+  --reviewer-id reviewer-456 \
+  --rationale "Reviewed source-grounded planning action."
+
+uv run molecule-ranker copilot reject-action \
+  --action-id action-123 \
+  --reviewer-id reviewer-456 \
+  --rationale "Insufficient support for this planning action."
+```
+
+Generate a grounded status update:
+
+```bash
+uv run molecule-ranker copilot status-update \
+  --campaign-id campaign-123 \
+  --output copilot_status_update.md
+```
+
+Run co-pilot evals and guardrail validation:
+
+```bash
+uv run molecule-ranker copilot eval --suite default
+uv run molecule-ranker validate copilot-guardrails
+```
+
+In a hosted deployment with the co-pilot API mounted, view the dashboard at:
+
+```text
+GET /copilot
+```
 
 ## Verify
+
+Run the full test suite:
+
+```bash
+uv run pytest
+```
+
+Run lint and type checking:
 
 ```bash
 uv run ruff check .
 uv run pyright
-uv run molecule-ranker validate repair-guardrails --json
-uv run molecule-ranker repair eval --suite default
-uv run pytest
-```
-
-Default tests use mocked public-source and mocked Codex responses. Live public
-API smoke tests are opt-in:
-
-```bash
-MOLECULE_RANKER_RUN_LIVE=1 uv run pytest -m live tests_live/
 ```

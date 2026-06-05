@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import uuid
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +44,20 @@ from molecule_ranker.codex_engineering import (
     build_test_loop_task,
 )
 from molecule_ranker.config import RankerConfig
+from molecule_ranker.copilot.cli_state import CoPilotCLIStateStore
+from molecule_ranker.copilot.evals import CoPilotEvalSuite
+from molecule_ranker.copilot.guardrail_validation import CoPilotGuardrailValidator
+from molecule_ranker.copilot.policy import CoPilotPolicyEngine
+from molecule_ranker.copilot.reports import CoPilotStatusReporter
+from molecule_ranker.copilot.schemas import (
+    ActionStatus,
+    AutonomyLevel,
+    CampaignCoPilotSession,
+    CampaignEvent,
+    CoPilotAction,
+    CoPilotTrigger,
+)
+from molecule_ranker.copilot.trigger_router import TriggerRouter
 from molecule_ranker.data_sources import (
     ChEMBLAdapter,
     OpenTargetsAdapter,
@@ -460,19 +475,19 @@ feedback_app = typer.Typer(
     no_args_is_help=True,
 )
 agent_app = typer.Typer(
-    help="V2.4 Codex runtime-agent and specialist multi-agent operations commands.",
+    help="V2.5 Codex runtime-agent and specialist multi-agent operations commands.",
     no_args_is_help=True,
 )
 repair_app = typer.Typer(
-    help="V2.4 repair diagnosis, planning, execution, and eval commands.",
+    help="V2.5 repair diagnosis, planning, execution, and eval commands.",
     no_args_is_help=True,
 )
 repair_memory_app = typer.Typer(
-    help="Inspect and exchange V2.4 operational repair memory.",
+    help="Inspect and exchange V2.5 operational repair memory.",
     no_args_is_help=True,
 )
 subagents_app = typer.Typer(
-    help="V2.4 specialized Codex subagent operations commands.",
+    help="V2.5 specialized Codex subagent operations commands.",
     no_args_is_help=True,
 )
 subagents_session_app = typer.Typer(
@@ -480,11 +495,11 @@ subagents_session_app = typer.Typer(
     no_args_is_help=True,
 )
 marketplace_app = typer.Typer(
-    help="V2.4 local/internal governed tool marketplace commands.",
+    help="V2.5 local/internal governed tool marketplace commands.",
     no_args_is_help=True,
 )
 tool_app = typer.Typer(
-    help="V2.4 governed tool ecosystem commands.",
+    help="V2.5 governed tool ecosystem commands.",
     no_args_is_help=True,
 )
 tool_package_app = typer.Typer(
@@ -501,6 +516,10 @@ tool_skills_app = typer.Typer(
 )
 tool_workflows_app = typer.Typer(
     help="List governed workflow templates.",
+    no_args_is_help=True,
+)
+copilot_app = typer.Typer(
+    help="V2.5 autonomous campaign co-pilot commands.",
     no_args_is_help=True,
 )
 app.add_typer(review_app, name="review")
@@ -538,6 +557,7 @@ app.add_typer(migrate_app, name="migrate")
 app.add_typer(support_app, name="support")
 app.add_typer(ops_app, name="ops")
 app.add_typer(feedback_app, name="feedback")
+app.add_typer(copilot_app, name="copilot")
 app.add_typer(agent_app, name="agent")
 app.add_typer(repair_app, name="repair")
 app.add_typer(subagents_app, name="subagents")
@@ -580,6 +600,183 @@ def main() -> None:
 def version() -> None:
     """Print the package version."""
     typer.echo(__version__)
+
+
+@copilot_app.command("start")
+def copilot_start(
+    campaign_id: Annotated[str, typer.Option("--campaign-id", help="Campaign to monitor.")],
+    autonomy: Annotated[
+        str,
+        typer.Option("--autonomy", help="Co-pilot autonomy level."),
+    ] = "observe_only",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Preview session creation without writing state."),
+    ] = False,
+) -> None:
+    """Start a campaign co-pilot session."""
+    autonomy_level = _validated_copilot_autonomy(autonomy)
+    store = CoPilotCLIStateStore()
+    session = CampaignCoPilotSession(
+        copilot_session_id=store.next_session_id(campaign_id),
+        campaign_id=campaign_id,
+        project_id=None,
+        program_id=None,
+        status="active",
+        autonomy_level=autonomy_level,
+        started_at=datetime.now(UTC),
+        stopped_at=None,
+        last_check_at=None,
+        metadata={"dry_run": dry_run},
+    )
+    if not dry_run:
+        store.upsert_session(session)
+    _echo_json({"dry_run": dry_run, "session": session.model_dump(mode="json")})
+
+
+@copilot_app.command("stop")
+def copilot_stop(
+    session_id: Annotated[str, typer.Option("--session-id", help="Co-pilot session ID.")],
+) -> None:
+    """Stop a campaign co-pilot session."""
+    store = CoPilotCLIStateStore()
+    session = _require_copilot_session(store, session_id)
+    stopped = session.model_copy(
+        update={"status": "stopped", "stopped_at": datetime.now(UTC)},
+        deep=True,
+    )
+    store.upsert_session(stopped)
+    _echo_model(stopped)
+
+
+@copilot_app.command("status")
+def copilot_status(
+    session_id: Annotated[str, typer.Option("--session-id", help="Co-pilot session ID.")],
+) -> None:
+    """Show a co-pilot session."""
+    _echo_model(_require_copilot_session(CoPilotCLIStateStore(), session_id))
+
+
+@copilot_app.command("check")
+def copilot_check(
+    campaign_id: Annotated[str, typer.Option("--campaign-id", help="Campaign to check.")],
+) -> None:
+    """Run one campaign co-pilot monitoring cycle."""
+    store = CoPilotCLIStateStore()
+    session = _copilot_session_for_campaign_or_exit(store, campaign_id)
+    event = _scheduled_copilot_check_event(store, campaign_id)
+    triggers = TriggerRouter().route([event])
+    actions = _copilot_actions_for_triggers(triggers, autonomy=session.autonomy_level)
+    checked = session.model_copy(update={"last_check_at": datetime.now(UTC)}, deep=True)
+    store.upsert_session(checked)
+    store.append_events([event])
+    store.append_triggers(triggers)
+    for action in actions:
+        store.upsert_action(action)
+    _echo_json(
+        {
+            "campaign_id": campaign_id,
+            "session_id": checked.copilot_session_id,
+            "events_detected": 1,
+            "triggers_routed": len(triggers),
+            "actions_proposed": len(actions),
+        }
+    )
+
+
+@copilot_app.command("events")
+def copilot_events(
+    campaign_id: Annotated[str, typer.Option("--campaign-id", help="Campaign ID.")],
+) -> None:
+    """List co-pilot events for a campaign."""
+    _echo_models(CoPilotCLIStateStore().list_events(campaign_id=campaign_id))
+
+
+@copilot_app.command("triggers")
+def copilot_triggers(
+    campaign_id: Annotated[str, typer.Option("--campaign-id", help="Campaign ID.")],
+) -> None:
+    """List co-pilot triggers for a campaign."""
+    _echo_models(CoPilotCLIStateStore().list_triggers(campaign_id=campaign_id))
+
+
+@copilot_app.command("actions")
+def copilot_actions(
+    campaign_id: Annotated[str, typer.Option("--campaign-id", help="Campaign ID.")],
+) -> None:
+    """List co-pilot actions for a campaign."""
+    _echo_models(CoPilotCLIStateStore().list_actions(campaign_id=campaign_id))
+
+
+@copilot_app.command("approve-action")
+def copilot_approve_action(
+    action_id: Annotated[str, typer.Option("--action-id", help="Action to approve.")],
+    reviewer_id: Annotated[str, typer.Option("--reviewer-id", help="Human reviewer ID.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Approval rationale.")],
+) -> None:
+    """Approve a queued co-pilot action."""
+    _review_copilot_action(
+        action_id,
+        reviewer_id=reviewer_id,
+        rationale=rationale,
+        status="approved",
+    )
+
+
+@copilot_app.command("reject-action")
+def copilot_reject_action(
+    action_id: Annotated[str, typer.Option("--action-id", help="Action to reject.")],
+    reviewer_id: Annotated[str, typer.Option("--reviewer-id", help="Human reviewer ID.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Rejection rationale.")],
+) -> None:
+    """Reject a queued co-pilot action."""
+    _review_copilot_action(
+        action_id,
+        reviewer_id=reviewer_id,
+        rationale=rationale,
+        status="rejected",
+    )
+
+
+@copilot_app.command("status-update")
+def copilot_status_update(
+    campaign_id: Annotated[str, typer.Option("--campaign-id", help="Campaign ID.")],
+    output: Annotated[
+        Path,
+        typer.Option("--output", help="Markdown output path."),
+    ] = Path("copilot_status_update.md"),
+) -> None:
+    """Generate a grounded co-pilot status update."""
+    store = CoPilotCLIStateStore()
+    events = store.list_events(campaign_id=campaign_id)
+    actions = store.list_actions(campaign_id=campaign_id)
+    now = datetime.now(UTC)
+    bundle = CoPilotStatusReporter(now=lambda: now).build_status_update(
+        campaign_id=campaign_id,
+        period_start=now,
+        period_end=now,
+        cadence="manual",
+        events=events,
+        actions=actions,
+    )
+    output.write_text(bundle.artifacts["copilot_status_update.md"] + "\n")
+    store.append_status_update(bundle.update)
+    _echo_json(
+        {
+            "campaign_id": campaign_id,
+            "status_update_id": bundle.update.status_update_id,
+            "output": str(output),
+        }
+    )
+
+
+@copilot_app.command("eval")
+def copilot_eval(
+    suite: Annotated[str, typer.Option("--suite", help="Co-pilot eval suite name.")] = "default",
+) -> None:
+    """Run deterministic co-pilot evaluation fixtures."""
+    report = CoPilotEvalSuite().run(suite=suite)
+    _echo_json(report.to_dict())
 
 
 @subagents_app.command("profiles")
@@ -1373,7 +1570,7 @@ def repair_eval_command(
     ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
 ) -> None:
-    """Run V2.4 repair-loop evals."""
+    """Run V2.5 repair-loop evals."""
 
     from molecule_ranker.agent_repair.evals import (
         run_repair_eval_suite,
@@ -1547,7 +1744,7 @@ def agent_explain(
 def agent_specialists(
     json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
 ) -> None:
-    """List V2.4 specialist Codex subagent roles."""
+    """List V2.5 specialist Codex subagent roles."""
 
     from molecule_ranker.runtime_agents.multi_agent import specialist_roster_summary
 
@@ -1566,7 +1763,7 @@ def agent_specialists(
 def agent_delegate(
     specialist_id: Annotated[
         str,
-        typer.Option("--specialist-id", help="V2.4 specialist agent ID."),
+        typer.Option("--specialist-id", help="V2.5 specialist agent ID."),
     ],
     goal: Annotated[str, typer.Option("--goal", help="Delegated specialist objective.")],
     project_id: Annotated[str | None, typer.Option("--project-id")] = None,
@@ -1587,7 +1784,7 @@ def agent_delegate(
         typer.Option("--output-dir", file_okay=False, help="Directory for runtime artifacts."),
     ] = Path(".molecule-ranker/runtime-agent"),
 ) -> None:
-    """Delegate a task to a V2.4 specialist and optionally execute approved tools."""
+    """Delegate a task to a V2.5 specialist and optionally execute approved tools."""
 
     from molecule_ranker.runtime_agents.multi_agent import MultiAgentScientificOrchestrator
     from molecule_ranker.runtime_agents.tool_registry import RuntimeToolRegistry
@@ -3783,7 +3980,7 @@ def validate_repair_guardrails_command(
     ] = Path("."),
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run V2.4 repair-specific red-team guardrail validation."""
+    """Run V2.5 repair-specific red-team guardrail validation."""
     from molecule_ranker.validation import run_repair_guardrail_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "repair_guardrails"
@@ -3803,6 +4000,15 @@ def validate_repair_guardrails_command(
         raise typer.Exit(code=1)
 
 
+@validate_app.command("copilot-guardrails")
+def validate_copilot_guardrails() -> None:
+    """Run deterministic V2.5 co-pilot red-team guardrail validation."""
+    report = CoPilotGuardrailValidator().run()
+    _echo_json(report.to_dict())
+    if report.failed:
+        raise typer.Exit(code=1)
+
+
 @validate_app.command("tools")
 def validate_tools_command(
     root_dir: Annotated[
@@ -3811,7 +4017,7 @@ def validate_tools_command(
     ] = Path("."),
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run the V2.4 governed tool ecosystem validation workflow."""
+    """Run the V2.5 governed tool ecosystem validation workflow."""
     from molecule_ranker.validation.tools import run_tool_ecosystem_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "tools"
@@ -16198,7 +16404,7 @@ def _run_engineering_command(command: list[str], *, cwd: Path) -> dict[str, Any]
     }
 
 
-def _echo_json(payload: dict[str, Any]) -> None:
+def _echo_json(payload: Any) -> None:
     typer.echo(json.dumps(payload, indent=2, sort_keys=True))
 
 
@@ -16543,6 +16749,105 @@ def _emit_restore_result(result: Any, *, json_output: bool) -> None:
             typer.echo(f"- {error}")
     if result.status == "fail":
         raise typer.Exit(code=1)
+
+
+def _validated_copilot_autonomy(value: str) -> AutonomyLevel:
+    allowed = {
+        "observe_only",
+        "suggest_only",
+        "execute_safe_actions",
+        "execute_with_approval",
+        "supervised_auto",
+    }
+    if value not in allowed:
+        raise typer.BadParameter(f"autonomy must be one of: {', '.join(sorted(allowed))}")
+    return cast(AutonomyLevel, value)
+
+
+def _scheduled_copilot_check_event(
+    store: CoPilotCLIStateStore,
+    campaign_id: str,
+) -> CampaignEvent:
+    event_id = store.next_event_id(campaign_id, "scheduled_check")
+    return CampaignEvent(
+        event_id=event_id,
+        campaign_id=campaign_id,
+        event_type="scheduled_check",
+        source_object_type="copilot_cli",
+        source_object_id=event_id,
+        severity="info",
+        summary="Scheduled co-pilot check completed.",
+        artifact_ids=[],
+        detected_at=datetime.now(UTC),
+        metadata={"detector_event_type": "scheduled_check"},
+    )
+
+
+def _copilot_actions_for_triggers(
+    triggers: list[CoPilotTrigger],
+    *,
+    autonomy: AutonomyLevel,
+) -> list[CoPilotAction]:
+    policy = CoPilotPolicyEngine()
+    actions: list[CoPilotAction] = []
+    for trigger in triggers:
+        actions.extend(policy.propose_actions(trigger, autonomy_level=autonomy))
+    return actions
+
+
+def _review_copilot_action(
+    action_id: str,
+    *,
+    reviewer_id: str,
+    rationale: str,
+    status: ActionStatus,
+) -> None:
+    if reviewer_id.lower() in {"codex", "copilot"}:
+        typer.echo("Error: co-pilot or Codex cannot approve/reject actions.", err=True)
+        raise typer.Exit(code=1)
+    store = CoPilotCLIStateStore()
+    action = store.get_action(action_id)
+    if action is None:
+        typer.echo(f"Error: unknown action {action_id}", err=True)
+        raise typer.Exit(code=1)
+    metadata = dict(action.metadata)
+    if status == "approved":
+        metadata.update({"approved_by": reviewer_id, "approval_rationale": rationale})
+    else:
+        metadata.update({"rejected_by": reviewer_id, "rejection_rationale": rationale})
+    reviewed = action.model_copy(update={"status": status, "metadata": metadata}, deep=True)
+    store.upsert_action(reviewed)
+    _echo_model(reviewed)
+
+
+def _require_copilot_session(
+    store: CoPilotCLIStateStore,
+    session_id: str,
+) -> CampaignCoPilotSession:
+    session = store.get_session(session_id)
+    if session is None:
+        typer.echo(f"Error: unknown co-pilot session {session_id}", err=True)
+        raise typer.Exit(code=1)
+    return session
+
+
+def _copilot_session_for_campaign_or_exit(
+    store: CoPilotCLIStateStore,
+    campaign_id: str,
+) -> CampaignCoPilotSession:
+    session = store.session_for_campaign(campaign_id)
+    if session is None:
+        typer.echo(f"Error: no co-pilot session for campaign {campaign_id}", err=True)
+        raise typer.Exit(code=1)
+    return session
+
+
+def _echo_model(model: BaseModel) -> None:
+    _echo_json(model.model_dump(mode="json"))
+
+
+def _echo_models(models: Sequence[BaseModel]) -> None:
+    _echo_json([model.model_dump(mode="json") for model in models])
 
 
 def _parse_cli_list(value: str) -> list[str]:

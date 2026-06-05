@@ -75,7 +75,7 @@ class ToolValidationReport:
 
 
 def run_tool_ecosystem_validation(output_dir: str | Path) -> ToolValidationReport:
-    """Run the V2.4 governed tool ecosystem golden and red-team validation."""
+    """Run the V2.5 governed tool ecosystem golden and red-team validation."""
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -114,7 +114,7 @@ def run_tool_ecosystem_validation(output_dir: str | Path) -> ToolValidationRepor
     safe_approval = marketplace.approve_package(
         safe_package.package_id,
         approved_by="validation-admin",
-        rationale="V2.4 validation safe fixture approval.",
+        rationale="V2.5 validation safe fixture approval.",
     )
     checks.append(
         _check(
@@ -602,7 +602,7 @@ def _runtime_plan(spec: RuntimeToolSpec) -> RuntimeActionPlan:
         plan_id="validation-tool-plan",
         session_id="validation-tool-session",
         user_goal="Run approved validation tool.",
-        plan_summary="Run approved V2.4 tool ecosystem validation fixture.",
+        plan_summary="Run approved V2.5 tool ecosystem validation fixture.",
         steps=[step],
         required_approvals=[],
         expected_artifacts=[],
@@ -644,7 +644,7 @@ def _write_tool_validation_reports(report: ToolValidationReport) -> list[Path]:
     md_path = report.output_dir / "tool_security_report.md"
     _write_json(json_path, report.as_dict())
     lines = [
-        "# V2.4 Tool Ecosystem Validation",
+        "# V2.5 Tool Ecosystem Validation",
         "",
         f"- Status: `{report.status}`",
         f"- Checks: {len(report.checks)}",
