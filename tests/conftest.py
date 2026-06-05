@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from typer.testing import CliRunner
 
 _original_cli_runner_init = CliRunner.__init__
 _original_cli_runner_invoke = CliRunner.invoke
+_cli_runner_init_parameters = inspect.signature(CliRunner.__init__).parameters
 
 
 def _cli_runner_init_with_separate_stderr(self: CliRunner, *args: Any, **kwargs: Any) -> None:
-    kwargs.setdefault("mix_stderr", False)
+    if "mix_stderr" in _cli_runner_init_parameters:
+        kwargs.setdefault("mix_stderr", False)
     _original_cli_runner_init(self, *args, **kwargs)
 
 
