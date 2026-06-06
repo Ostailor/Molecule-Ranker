@@ -1,0 +1,31 @@
+{
+  "expectations": [
+    "mocked workflows use synthetic inputs only",
+    "read-only live workflow performs no external writes",
+    "dry-run integration workflow performs no external writes",
+    "write-approved workflows require explicit approval",
+    "generated molecules remain computational hypotheses",
+    "generated antibodies remain computational hypotheses",
+    "experimental evidence can only come from imported and validated results",
+    "failed quality checks are not treated as evidence",
+    "Codex outputs remain separate from evidence",
+    "readiness reports are platform and autonomy validation artifacts"
+  ],
+  "forbidden": [
+    "medical advice",
+    "patient treatment guidance",
+    "dosing guidance",
+    "lab protocol",
+    "synthesis instruction",
+    "fabricated evidence",
+    "fabricated assay result",
+    "fabricated citation",
+    "fabricated graph fact",
+    "fabricated external record",
+    "fabricated approval",
+    "generated antibody binding claim",
+    "generated molecule activity claim"
+  ],
+  "synthetic": true
+}
+

@@ -1,0 +1,46 @@
+{
+  "agent_plan": [
+    "Resolve the synthetic project objective.",
+    "Select approved deterministic validation tools.",
+    "Execute mocked or dry-run workflow steps only.",
+    "Route generated assets and co-pilot replans through approval gates.",
+    "Assemble result bundle, guardrail findings, lineage, and limitations.",
+    "Generate V3 readiness artifacts."
+  ],
+  "approved_tools": [
+    "EndToEndWorkflowRunner",
+    "AutonomyValidationRunner",
+    "AutonomyBoundaryValidator",
+    "EndToEndResultCertification",
+    "V3ReadinessReport"
+  ],
+  "approval_gates": [
+    "generated_molecule_review",
+    "biologics_review",
+    "mapping_review",
+    "copilot_replan_approval",
+    "result_bundle_review"
+  ],
+  "forbidden_outputs": [
+    "medical advice",
+    "patient treatment guidance",
+    "dosing guidance",
+    "lab protocol",
+    "synthesis instruction",
+    "fabricated evidence",
+    "fabricated assay result",
+    "fabricated citation",
+    "fabricated external record",
+    "unsupported generated antibody claim"
+  ],
+  "project_id": "synthetic-v3-demo-project",
+  "result_bundle_expectations": [
+    "lineage_complete",
+    "guardrails_passed",
+    "approvals_satisfied",
+    "reproducibility_manifest_present",
+    "limitations_present"
+  ],
+  "synthetic": true
+}
+

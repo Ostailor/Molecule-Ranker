@@ -39,6 +39,10 @@ from molecule_ranker.agent_governance.simulator import (
     simulate_agent_action,
 )
 from molecule_ranker.agent_repair.hosted import RepairHostedStore
+from molecule_ranker.autonomy_validation.dashboard import (
+    V3ReadinessDashboardSnapshot,
+    build_v3_readiness_dashboard_snapshot,
+)
 from molecule_ranker.campaigns import CampaignPlan, CampaignStore
 from molecule_ranker.codex_backbone.guardrails import redact_secrets
 from molecule_ranker.integrations.connectors import create_connector
@@ -216,7 +220,7 @@ def e2e_workflow_list_dashboard_page(
     user: Annotated[UserAccount, Depends(require_dashboard_user)],
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> Response:
-    """Render hosted V2.8 end-to-end workflow list."""
+    """Render hosted V2.9 end-to-end workflow list."""
     _require_e2e_dashboard_permission(database, user, "e2e:read")
     rows = [
         [
@@ -233,7 +237,7 @@ def e2e_workflow_list_dashboard_page(
     body = (
         _e2e_nav()
         + "<h2>E2E workflow list</h2>"
-        + "<p>Hosted V2.8 governed discovery workflows are dry-run/read-only by default. "
+        + "<p>Hosted V2.9 governed discovery workflows are dry-run/read-only by default. "
         + "External writes and generated advancement require explicit approval.</p>"
         + _table(
             [
@@ -259,7 +263,7 @@ def e2e_workflow_detail_dashboard_page(
     user: Annotated[UserAccount, Depends(require_dashboard_user)],
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> Response:
-    """Render hosted V2.8 end-to-end workflow detail."""
+    """Render hosted V2.9 end-to-end workflow detail."""
     _require_e2e_dashboard_permission(database, user, "e2e:read")
     record = _e2e_dashboard_record_or_404(request, workflow_id)
     workflow = record.result.workflow
@@ -294,6 +298,440 @@ def e2e_workflow_detail_dashboard_page(
         + _e2e_remediation_summary(record)
     )
     return _e2e_html("E2E workflow detail", body)
+
+
+@router.get("/dashboard/v3-readiness", response_class=HTMLResponse)
+def v3_readiness_overview_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    report = snapshot.readiness_report
+    body = (
+        _v3_readiness_nav()
+        + _v3_readiness_escape_banner(snapshot)
+        + "<h2>V3 readiness overview</h2>"
+        + _definition_list(
+            {
+                "Version": snapshot.version,
+                "Readiness status": report.overall_status,
+                "Passed scenarios": report.passed_scenarios,
+                "Failed scenarios": report.failed_scenarios,
+                "Boundary tests passed": report.boundary_tests_passed,
+                "Boundary tests failed": report.boundary_tests_failed,
+                "Unsafe escapes": snapshot.metrics["unsafe_escape_count"],
+                "Status source": "computed from validation artifacts",
+            }
+        )
+        + "<p class=\"notice\"><strong>Readiness status is immutable here.</strong> "
+        + "Manual status changes require v3_readiness:admin and are audit-logged; "
+        + "Codex can summarize this dashboard but cannot change readiness status.</p>"
+        + _v3_readiness_summary_cards(snapshot)
+    )
+    return _v3_readiness_html("V3 readiness overview", body)
+
+
+@router.post("/dashboard/v3-readiness/run", response_class=HTMLResponse)
+async def v3_readiness_run_dashboard_action(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:run")
+    if not _csrf_token_valid(request, await request.body()):
+        raise HTTPException(status_code=403, detail="CSRF token required.")
+    request.app.state.v3_readiness_dashboard_snapshot = (
+        build_v3_readiness_dashboard_snapshot()
+    )
+    database.write_audit(
+        "v3_readiness_run",
+        actor_user_id=user.user_id,
+        summary="Regenerated hosted V3 readiness dashboard snapshot.",
+        object_type="v3_readiness",
+        object_id="dashboard_snapshot",
+        metadata={"permission": "v3_readiness:run"},
+    )
+    return RedirectResponse(
+        "/dashboard/v3-readiness",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/dashboard/v3-readiness/status", response_class=HTMLResponse)
+async def v3_readiness_status_dashboard_action(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:admin")
+    body = await request.body()
+    if not _csrf_token_valid(request, body):
+        raise HTTPException(status_code=403, detail="CSRF token required.")
+    form = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    requested_status = str((form.get("status") or [""])[0])
+    database.write_audit(
+        "v3_readiness_manual_status_change_attempt",
+        actor_user_id=user.user_id,
+        summary="Admin attempted V3 readiness status change; status remained computed.",
+        object_type="v3_readiness",
+        object_id="readiness_status",
+        metadata={
+            "requested_status": requested_status,
+            "status_changed": False,
+            "reason": "readiness_status_is_computed_from_validation_artifacts",
+        },
+    )
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    body_html = (
+        _v3_readiness_nav()
+        + "<h2>Readiness status is computed</h2>"
+        + "<p class=\"warning\"><strong>Status was not changed.</strong> "
+        + "The requested manual status change was audit-logged. V3 readiness status "
+        + "must be regenerated from validation artifacts.</p>"
+        + _definition_list(
+            {
+                "Requested status": requested_status,
+                "Current computed status": snapshot.readiness_report.overall_status,
+                "Codex role": "summarize only; cannot change readiness status",
+            }
+        )
+    )
+    return _v3_readiness_html("V3 readiness status immutable", body_html)
+
+
+@router.get("/dashboard/v3-readiness/runs", response_class=HTMLResponse)
+def v3_readiness_runs_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    rows = [
+        [
+            result.validation_run.scenario_id,
+            result.validation_run.status,
+            result.validation_run.workflow_id or "",
+            ", ".join(result.validation_run.approval_ids),
+            len(result.validation_run.artifact_ids),
+            ", ".join(str(failure.get("check", "")) for failure in result.validation_run.failures),
+        ]
+        for result in snapshot.autonomy_validation_runs
+    ]
+    return _v3_readiness_html(
+        "Autonomy validation runs",
+        _v3_readiness_nav()
+        + _v3_readiness_escape_banner(snapshot)
+        + "<h2>Autonomy validation runs</h2>"
+        + _table(
+            ["Scenario", "Status", "Workflow", "Approval gates", "Artifacts", "Failures"],
+            rows,
+            empty_message="No autonomy validation runs available.",
+        ),
+    )
+
+
+@router.get("/dashboard/v3-readiness/boundaries", response_class=HTMLResponse)
+def v3_readiness_boundaries_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    rows = []
+    for test in snapshot.boundary_tests:
+        prominent = (
+            "BOUNDARY FAILURE - unsafe escape cannot be hidden"
+            if test.passed is False
+            else "blocked/contained"
+        )
+        rows.append(
+            [
+                prominent,
+                test.boundary_test_id,
+                test.boundary_type,
+                test.expected_outcome,
+                "pass" if test.passed is True else "fail",
+                "; ".join(test.findings),
+            ]
+        )
+    return _v3_readiness_html(
+        "Boundary test results",
+        _v3_readiness_nav()
+        + _v3_readiness_escape_banner(snapshot)
+        + "<h2>Boundary test results</h2>"
+        + (
+            "<p class=\"warning\"><strong>Boundary failures and unsafe escapes cannot "
+            "be hidden.</strong></p>"
+        )
+        + _table(
+            ["Prominence", "Test", "Boundary type", "Expected outcome", "Status", "Findings"],
+            rows,
+            empty_message="No boundary tests available.",
+        ),
+    )
+
+
+@router.get("/dashboard/v3-readiness/reliability", response_class=HTMLResponse)
+def v3_readiness_reliability_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    rows = [
+        [
+            card.agent_type,
+            card.risk_level,
+            f"{card.reliability_score:.3f}",
+            f"{card.tool_success_rate:.3f}",
+            card.guardrail_failures,
+            card.policy_violations,
+            card.unsafe_action_attempts,
+            "; ".join(card.recommendations),
+        ]
+        for card in snapshot.agent_reliability_scorecards
+    ]
+    return _v3_readiness_html(
+        "Agent reliability scorecards",
+        _v3_readiness_nav()
+        + "<h2>Agent reliability scorecards</h2>"
+        + _table(
+            [
+                "Agent type",
+                "Risk",
+                "Reliability score",
+                "Tool success",
+                "Guardrail failures",
+                "Policy violations",
+                "Unsafe attempts",
+                "Recommendations",
+            ],
+            rows,
+            empty_message="No reliability scorecards available.",
+        ),
+    )
+
+
+@router.get("/dashboard/v3-readiness/certifications", response_class=HTMLResponse)
+def v3_readiness_certifications_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    rows = [
+        [
+            certification.certification_id,
+            certification.workflow_id,
+            certification.scenario_id,
+            "yes" if certification.certified else "no",
+            certification.certification_level,
+            "yes" if certification.lineage_complete else "no",
+            "yes" if certification.guardrails_passed else "no",
+            "; ".join(certification.findings),
+        ]
+        for certification in snapshot.result_certifications
+    ]
+    return _v3_readiness_html(
+        "Result certifications",
+        _v3_readiness_nav()
+        + "<h2>Result certifications</h2>"
+        + "<p>Certifications are platform/workflow certifications, not scientific validation.</p>"
+        + _table(
+            [
+                "Certification",
+                "Workflow",
+                "Scenario",
+                "Certified",
+                "Level",
+                "Lineage",
+                "Guardrails",
+                "Findings",
+            ],
+            rows,
+            empty_message="No result certifications available.",
+        ),
+    )
+
+
+@router.get("/dashboard/v3-readiness/safety-case", response_class=HTMLResponse)
+def v3_readiness_safety_case_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    rows = [
+        [
+            claim.get("claim_id", ""),
+            "supported" if claim.get("supported") else "not supported",
+            ", ".join(claim.get("supporting_validation_artifacts", [])),
+            ", ".join(claim.get("boundary_tests", [])),
+            ", ".join(claim.get("residual_risks", [])),
+        ]
+        for claim in snapshot.safety_case.claims
+    ]
+    return _v3_readiness_html(
+        "Safety case",
+        _v3_readiness_nav()
+        + "<h2>Safety case</h2>"
+        + (
+            "<p>This is autonomy/platform safety evidence, not a regulatory safety "
+            "case or clinical validation.</p>"
+        )
+        + _table(
+            ["Claim", "Status", "Supporting artifacts", "Boundary tests", "Residual risks"],
+            rows,
+            empty_message="No safety claims available.",
+        ),
+    )
+
+
+@router.get("/dashboard/v3-readiness/residual-risks", response_class=HTMLResponse)
+def v3_readiness_residual_risks_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    rows = [
+        [
+            risk.risk_id,
+            risk.risk_type,
+            risk.severity,
+            risk.likelihood,
+            risk.status,
+            risk.owner_role or "",
+            risk.mitigation,
+        ]
+        for risk in snapshot.residual_risk_register.risks
+    ]
+    return _v3_readiness_html(
+        "Residual risk register",
+        _v3_readiness_nav()
+        + "<h2>Residual risk register</h2>"
+        + _table(
+            ["Risk", "Type", "Severity", "Likelihood", "Status", "Owner", "Mitigation"],
+            rows,
+            empty_message="No residual risks available.",
+        ),
+    )
+
+
+@router.get("/dashboard/v3-readiness/rc-manifest", response_class=HTMLResponse)
+def v3_readiness_rc_manifest_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    manifest = snapshot.v3_rc_manifest
+    rows = [
+        [step.get("step_id", ""), step.get("status", "")]
+        for step in manifest.get("steps", [])
+        if isinstance(step, dict)
+    ]
+    return _v3_readiness_html(
+        "V3 RC manifest",
+        _v3_readiness_nav()
+        + "<h2>V3 RC manifest</h2>"
+        + _definition_list(
+            {
+                "Status": manifest.get("status", ""),
+                "Readiness status": manifest.get("readiness_status", ""),
+                "Unsafe escapes": manifest.get("unsafe_escape_count", 0),
+                "Status immutability": manifest.get("status_immutability", ""),
+            }
+        )
+        + _table(["Step", "Status"], rows, empty_message="No RC steps available.")
+        + "<h2>Manifest JSON</h2><pre>"
+        + _h(_compact_json(manifest))
+        + "</pre>",
+    )
+
+
+@router.get("/dashboard/v3-readiness/blockers", response_class=HTMLResponse)
+def v3_readiness_blockers_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    rows = [[issue] for issue in snapshot.readiness_report.blocking_issues]
+    return _v3_readiness_html(
+        "Failing blockers",
+        _v3_readiness_nav()
+        + _v3_readiness_escape_banner(snapshot)
+        + "<h2>Failing blockers</h2>"
+        + _table(["Blocking issue"], rows, empty_message="No blocking issues."),
+    )
+
+
+@router.get("/dashboard/v3-readiness/required-before-v3", response_class=HTMLResponse)
+def v3_readiness_required_before_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    rows = [[item] for item in snapshot.readiness_report.required_before_v3]
+    return _v3_readiness_html(
+        "Required before V3",
+        _v3_readiness_nav()
+        + "<h2>Required before V3</h2>"
+        + _table(["Required item"], rows, empty_message="No required items remain."),
+    )
+
+
+@router.get("/dashboard/v3-readiness/demo-workflows", response_class=HTMLResponse)
+def v3_readiness_demo_workflows_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_readiness_dashboard_permission(database, user, "v3_readiness:read")
+    snapshot = _v3_readiness_dashboard_snapshot(request)
+    rows = [
+        [
+            result["workflow"],
+            result["scenario_id"],
+            result["status"],
+            result.get("workflow_id") or "",
+            ", ".join(result.get("approval_gates", [])),
+            len(result.get("artifact_ids", [])),
+            "yes" if result.get("certified") is True else "",
+        ]
+        for result in snapshot.demo_workflow_results
+    ]
+    return _v3_readiness_html(
+        "Demo workflow results",
+        _v3_readiness_nav()
+        + "<h2>Demo workflow results</h2>"
+        + _table(
+            [
+                "Workflow",
+                "Scenario",
+                "Status",
+                "Workflow ID",
+                "Approval gates",
+                "Artifacts",
+                "Certified",
+            ],
+            rows,
+            empty_message="No demo workflow results available.",
+        ),
+    )
 
 
 @router.get("/dashboard/tools", response_class=HTMLResponse)
@@ -6826,6 +7264,102 @@ def _e2e_html(title: str, body: str) -> HTMLResponse:
 
 def _e2e_nav() -> str:
     return "<nav>" + _link("/dashboard/e2e", "E2E workflows") + "</nav>"
+
+
+def _v3_readiness_dashboard_snapshot(request: Request) -> V3ReadinessDashboardSnapshot:
+    snapshot = getattr(request.app.state, "v3_readiness_dashboard_snapshot", None)
+    if isinstance(snapshot, V3ReadinessDashboardSnapshot):
+        return snapshot
+    snapshot = build_v3_readiness_dashboard_snapshot()
+    request.app.state.v3_readiness_dashboard_snapshot = snapshot
+    return snapshot
+
+
+def _require_v3_readiness_dashboard_permission(
+    database: PlatformDatabase,
+    user: UserAccount,
+    permission: str,
+) -> None:
+    permissions = {str(item) for item in user.metadata.get("permissions", [])}
+    if (
+        user.is_admin
+        or "*" in permissions
+        or "v3_readiness:admin" in permissions
+        or permission in permissions
+        or has_permission(user, permission, database=database)
+    ):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=f"V3 readiness permission denied: {permission}",
+    )
+
+
+def _v3_readiness_html(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/integrations.css\">"
+        "</head><body>"
+        f"<header class=\"integration-header\"><h1>{_h(title)}</h1></header>"
+        "<main class=\"integration-content\">"
+        "<p class=\"notice\"><strong>V3 readiness is computed evidence.</strong> "
+        "This dashboard shows software/autonomy validation, not clinical or scientific "
+        "validation. Boundary failures and unsafe escapes cannot be hidden. Codex may "
+        "summarize dashboard evidence but cannot change readiness status.</p>"
+        f"{body}</main></body></html>\n"
+    )
+
+
+def _v3_readiness_nav() -> str:
+    links = {
+        "Overview": "/dashboard/v3-readiness",
+        "Autonomy runs": "/dashboard/v3-readiness/runs",
+        "Boundary tests": "/dashboard/v3-readiness/boundaries",
+        "Reliability": "/dashboard/v3-readiness/reliability",
+        "Certifications": "/dashboard/v3-readiness/certifications",
+        "Safety case": "/dashboard/v3-readiness/safety-case",
+        "Residual risks": "/dashboard/v3-readiness/residual-risks",
+        "RC manifest": "/dashboard/v3-readiness/rc-manifest",
+        "Blockers": "/dashboard/v3-readiness/blockers",
+        "Required before V3": "/dashboard/v3-readiness/required-before-v3",
+        "Demo workflows": "/dashboard/v3-readiness/demo-workflows",
+    }
+    return "<nav>" + " ".join(_link(href, label) for label, href in links.items()) + "</nav>"
+
+
+def _v3_readiness_escape_banner(snapshot: V3ReadinessDashboardSnapshot) -> str:
+    unsafe_escapes = int(snapshot.metrics.get("unsafe_escape_count", 0))
+    boundary_failures = int(snapshot.metrics.get("boundary_tests_failed", 0))
+    if unsafe_escapes or boundary_failures:
+        return (
+            "<section class=\"section warning\"><h2>Boundary failures are active</h2>"
+            "<p><strong>Unsafe escapes cannot be hidden.</strong> "
+            f"Unsafe escapes: {_h(unsafe_escapes)}. "
+            f"Boundary failures: {_h(boundary_failures)}.</p></section>"
+        )
+    return (
+        "<section class=\"section notice\"><h2>Boundary status</h2>"
+        "<p>Unsafe escapes: 0. Boundary failures: 0.</p></section>"
+    )
+
+
+def _v3_readiness_summary_cards(snapshot: V3ReadinessDashboardSnapshot) -> str:
+    rows = [
+        ["Autonomy validation runs", snapshot.metrics["scenario_count"]],
+        ["Boundary tests", snapshot.metrics["boundary_tests_total"]],
+        ["Unsafe action escape rate", f"{snapshot.metrics['unsafe_action_escape_rate']:.3f}"],
+        [
+            "Fabricated scientific truth escape rate",
+            f"{snapshot.metrics['fabricated_scientific_truth_escape_rate']:.3f}",
+        ],
+        ["External write escape rate", f"{snapshot.metrics['external_write_escape_rate']:.3f}"],
+        ["Agent reliability scorecards", len(snapshot.agent_reliability_scorecards)],
+        ["Result certifications", len(snapshot.result_certifications)],
+        ["Residual risks", len(snapshot.residual_risk_register.risks)],
+    ]
+    return "<h2>Dashboard sections</h2>" + _table(["Section", "Count"], rows)
 
 
 def _e2e_step_timeline(record: Any) -> str:

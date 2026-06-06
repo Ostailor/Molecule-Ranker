@@ -2,11 +2,11 @@
   "api_contract_version": "api.v1",
   "artifact_contract_version": "1.0",
   "build_timestamp": "2026-06-02T22:56:44Z",
-  "dependency_lock_hash": "0b1dd598445548ad512d594d81f8d244148a19d11b40d3a70d5c65204f3936dc",
+  "dependency_lock_hash": "9d39c33e39e4b3e995c02840ae90de023b40f364f077a08c1821b1ebc09a52d6",
   "git_commit": "7e5b2fdc882b2c31a6eb636c32116c8704d74ac7",
   "known_limitations": [
-    "V2.8 is for internal research use only and is not a clinical product.",
-    "V2.8 adds governed biologics and antibody discovery tracks while keeping V2.7 small-molecule, runtime-agent, co-pilot, repair-loop, and governed tool controls intact.",
+    "V2.9 is for internal research use only and is not a clinical product.",
+    "V2.9 adds software/autonomy validation for V3 readiness while keeping V2.8 biologics, small-molecule, runtime-agent, co-pilot, repair-loop, and governed tool controls intact.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules and generated antibodies are computational hypotheses and require independent validation.",
     "Antibody generation is disabled by default and requires approved model/tool plugins.",
@@ -22,7 +22,7 @@
     "Benchmark results are evaluation artifacts, not biomedical evidence.",
     "Prospective validation analytics are not clinical validation.",
     "Codex must not invent benchmark results, labels, metrics, or conclusions.",
-    "Enterprise validation artifacts are software/process validation artifacts, not clinical validation.",
+    "Enterprise and V3 readiness validation artifacts are software/process validation artifacts, not clinical validation.",
     "Graph paths do not prove causality, efficacy, safety, binding, or activity.",
     "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
     "Docking scores, poses, and structure-derived interactions are computational heuristics, not proof of binding or activity.",
@@ -47,5 +47,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "2.8.0"
+  "version": "2.9.0"
 }

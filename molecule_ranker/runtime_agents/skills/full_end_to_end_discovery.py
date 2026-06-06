@@ -24,7 +24,7 @@ GENERATED_ADVANCEMENT_APPROVAL = "generated_molecule_export"
 
 
 class FullEndToEndDiscoverySkillRequest(BaseModel):
-    """Inputs for the V2.8 full end-to-end discovery runtime skill."""
+    """Inputs for the V2.9 full end-to-end discovery runtime skill."""
 
     mode: WorkflowMode = "mocked"
     disease_name: str | None = None
@@ -59,7 +59,7 @@ class FullEndToEndDiscoverySkillResult(BaseModel):
 
 FULL_END_TO_END_DISCOVERY = RuntimeSkillSpec(
     skill_name="full_end_to_end_discovery",
-    description="Run the governed V2.8 full discovery loop and generate an auditable bundle.",
+    description="Run the governed V2.9 full discovery loop and generate an auditable bundle.",
     input_schema=_object_schema(
         {
             "mode": {
@@ -232,7 +232,7 @@ def run_full_end_to_end_discovery_skill(
     runner: EndToEndWorkflowRunner | None = None,
     now: Callable[[], datetime] | None = None,
 ) -> FullEndToEndDiscoverySkillResult:
-    """Execute the runtime skill through the deterministic V2.8 e2e runner."""
+    """Execute the runtime skill through the deterministic V2.9 e2e runner."""
 
     required_approvals = _missing_required_approvals(request)
     if required_approvals:

@@ -76,10 +76,10 @@ def run_pilot_readiness_audit(
 
     _add_check(
         checks,
-        "version_is_2_6_0",
-        "pass" if __version__ == "2.8.0" else "fail",
-        "Version is 2.8.0." if __version__ == "2.8.0" else f"Version is {__version__}.",
-        blocker=__version__ != "2.8.0",
+        "version_is_2_9_0",
+        "pass" if __version__ == "2.9.0" else "fail",
+        "Version is 2.9.0." if __version__ == "2.9.0" else f"Version is {__version__}.",
+        blocker=__version__ != "2.9.0",
     )
     _add_migration_check(checks, database)
     _add_writable_path_check(

@@ -52,7 +52,7 @@ ANTIBODY_FORBIDDEN_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 
 class EndToEndWorkflowValidator:
-    """Deterministic validation for V2.8 end-to-end workflow bundles."""
+    """Deterministic validation for V2.9 end-to-end workflow bundles."""
 
     def __init__(self, now: Callable[[], datetime] | None = None) -> None:
         self._now = now or (lambda: datetime.now(UTC))

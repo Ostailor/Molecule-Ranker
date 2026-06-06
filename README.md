@@ -82,14 +82,19 @@ The project also does not:
 
 ## Current Version
 
-The current version is **2.8.0**.
+The current version is **2.9.0**.
 
-V2.8.0 adds a governed biologics and antibody discovery track while preserving
-the V2.7 small-molecule and E2E workflow capabilities. Existing antibodies and
-biologics can be retrieved and ranked when records are source-backed. Antibody
-sequences can be validated, numbered, annotated for CDRs, checked for novelty
-against configured sources, and triaged with antibody-specific heuristic
-developability signals.
+V2.9.0 prepares the platform for V3.0 by adding software/autonomy validation
+for end-to-end workflows, result quality, governance boundaries, safety
+guardrails, and operational readiness. It preserves the V2.8 governed biologics
+and antibody discovery track, plus the existing small-molecule, runtime-agent,
+co-pilot, repair-loop, tool governance, review, graph, hypothesis, portfolio,
+campaign, evaluation, integration, and result-bundle systems.
+
+V2.9 does not add a new science modality. It is the V3 readiness and autonomy
+validation release: it proves the platform can run governed workflows from a
+user goal to an auditable result bundle while preserving policy boundaries,
+human governance, traceability, and reproducibility.
 
 Antibody generation is disabled by default. Generated antibody candidates are
 computational hypotheses only. Generation requires approved generators/tools,
@@ -101,12 +106,25 @@ expression, purification, immunization, wet-lab, dosing, or clinical protocols.
 Exact imported experimental evidence is required for direct support, and review
 gates plus governance apply before any advancement decision.
 
+V2.9 includes the `AutonomyValidationSuite`, `V3ReadinessReport`,
+`EndToEndResultCertification`, `HumanGovernanceMatrix`,
+`AgentReliabilityScorecard`, `SafetyCaseReport`, `ResidualRiskRegister`,
+`V3DemoProject`, `V3ReleaseCandidate` workflow, end-to-end autonomy red-team
+suite, V3 performance/reliability gate, and final V3 readiness dashboard. These
+reports are software/autonomy validation artifacts, not clinical validation or
+biomedical evidence.
+
 The system can run governed workflows from a disease or project objective to
 ranked small-molecule and antibody candidates, generated small-molecule
 hypotheses, optional approved-plugin antibody generation plans, review
 workspaces, portfolio and campaign plans, evaluation artifacts, lineage records,
 and result bundles. These workflows are auditable, resumable, and constrained by
 policy, approval, validation, and artifact-contract checks.
+
+Codex remains a governed runtime agent, not a scientific truth source. Codex can
+plan, execute approved tools, summarize validated artifacts, and help repair
+workflow failures, but it cannot create biomedical evidence, assay results,
+citations, graph facts, approvals, or scientific truth.
 
 The autonomous campaign co-pilot is a campaign-management assistant, not a lab
 executor or source of scientific truth. Failed QC is never treated as positive or negative evidence.
@@ -119,11 +137,12 @@ Agents cannot self-certify, self-approve, self-grant capabilities, or approve
 policy overrides. Higher autonomy requires active certification. External
 writes, generated-molecule advancement, destructive actions, high-cost jobs,
 and policy overrides require governance checks and human/admin approval where
-policy requires it.
+policy requires it. External writes require approval, and human governance
+remains required for high-risk actions.
 
 ## End-to-End Workflows
 
-V2.8 workflows run in four modes:
+V2.9 workflows run in four modes:
 
 - `mocked`: deterministic synthetic sources for local testing.
 - `dry_run`: planned actions and simulated integration changes with no external writes.
@@ -211,10 +230,96 @@ uv run molecule-ranker e2e lineage \
   --workflow-id e2e-workflow-id
 ```
 
-Run the deterministic V2.8 E2E eval suite:
+Run the deterministic V2.9 E2E eval suite:
 
 ```bash
 uv run molecule-ranker e2e eval --suite default
+```
+
+## V3 Readiness And Autonomy Validation
+
+V2.9 validates end-to-end workflows, autonomy boundaries, agent reliability,
+result certification, safety cases, residual risk, V3 demo workflows, and V3
+release-candidate readiness. The validation artifacts are platform and autonomy
+evidence only. They are not clinical validation, biomedical evidence, medical
+advice, or proof of binding, activity, safety, efficacy, manufacturability, or
+therapeutic value.
+
+Run the V3 readiness report:
+
+```bash
+uv run molecule-ranker validate v3-readiness \
+  --output-dir .molecule-ranker/validation/v3-readiness
+```
+
+Run autonomy boundary red-team tests:
+
+```bash
+uv run molecule-ranker validate autonomy-boundaries
+```
+
+Run all built-in autonomy scenarios:
+
+```bash
+uv run molecule-ranker validate autonomy --all
+```
+
+Certify an E2E result through the autonomy validator. The JSON output includes
+`result_certification`, which is platform/workflow certification, not scientific
+validation:
+
+```bash
+uv run molecule-ranker validate autonomy \
+  --scenario v3_full_demo_mocked \
+  --json
+```
+
+Direct certification is also available from Python for a known workflow ID and
+scenario:
+
+```bash
+uv run python - <<'PY'
+from molecule_ranker.autonomy_validation import certify_e2e_result
+from molecule_ranker.autonomy_validation.scenario_builder import get_builtin_autonomy_scenario
+
+scenario = get_builtin_autonomy_scenario("v3_full_demo_mocked")
+certification = certify_e2e_result("workflow-id", scenario)
+print(certification.model_dump(mode="json"))
+PY
+```
+
+Run the V3 release-candidate workflow:
+
+```bash
+uv run molecule-ranker v3 rc \
+  --output-dir .molecule-ranker/v3_rc
+```
+
+Run the V3 demo project in mocked mode:
+
+```bash
+bash examples/v3_demo/run_mocked_demo.sh
+```
+
+Run the V3 demo validation:
+
+```bash
+bash examples/v3_demo/run_validation.sh
+```
+
+View the readiness dashboard payload:
+
+```bash
+uv run molecule-ranker v3 dashboard \
+  --output-dir .molecule-ranker/validation/v3-dashboard \
+  --json
+```
+
+Run the V3 performance/reliability gate:
+
+```bash
+uv run molecule-ranker validate v3-performance \
+  --output-dir .molecule-ranker/validation/v3-performance
 ```
 
 ## Biologics And Antibody Track
@@ -430,6 +535,5 @@ uv run molecule-ranker validate release
 
 ## Roadmap
 
-- V2.8: governed biologics and antibody discovery track.
 - V2.9: V3 readiness and autonomy validation.
 - V3.0: autonomous discovery operating system with validated human-governed agentic workflows.

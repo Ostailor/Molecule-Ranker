@@ -55,7 +55,7 @@ class BiologicsDiscoveryConfig(BaseModel):
 
 
 class BiologicsDiscoveryAgent(BaseAgent):
-    """Run the governed V2.8 biologics and antibody discovery track."""
+    """Run the governed V2.9 biologics and antibody discovery track."""
 
     name = "BiologicsDiscoveryAgent"
 

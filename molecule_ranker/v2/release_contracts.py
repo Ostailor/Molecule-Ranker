@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-V2_SCHEMA_VERSION = "2.8"
-V2_CONTRACT_VERSION = "v2.8.0"
+V2_SCHEMA_VERSION = "2.9"
+V2_CONTRACT_VERSION = "v2.9.0"
 V2_API_CONTRACT_VERSION = "api.v2"
 
 ContractKind = Literal[
@@ -215,7 +215,7 @@ V2_ARTIFACT_SCHEMAS: dict[str, V2ArtifactSchemaContract] = {
             "safety_constraints",
         ),
         ("repair_plan", "audit_events", "warnings", "biologics_summary"),
-        "V2.8 bundles must preserve workflow state, lineage, validation gates, "
+        "V2.9 bundles must preserve workflow state, lineage, validation gates, "
         "safety constraints, and antibody-specific guardrails.",
     ),
     "antibody_sequence": _artifact_schema(
@@ -344,7 +344,7 @@ V2_RELEASE_CONTRACTS: tuple[V2ReleaseContract, ...] = (
         "schema",
         V2_ARTIFACT_SCHEMAS["end_to_end_result_bundle"].required_fields,
         compatibility_notes=(
-            "No breaking changes from the V2 contract; V2.8 adds additive biologics "
+            "No breaking changes from the V2 contract; V2.9 adds additive biologics "
             "workflow bundle fields without removing existing V2 API routes."
         ),
     ),
@@ -353,7 +353,7 @@ V2_RELEASE_CONTRACTS: tuple[V2ReleaseContract, ...] = (
         "schema",
         V2_ARTIFACT_SCHEMAS["antibody_sequence"].required_fields,
         compatibility_notes=(
-            "No breaking changes from the V2 contract; V2.8 adds additive antibody "
+            "No breaking changes from the V2 contract; V2.9 adds additive antibody "
             "sequence artifacts."
         ),
     ),
@@ -362,7 +362,7 @@ V2_RELEASE_CONTRACTS: tuple[V2ReleaseContract, ...] = (
         "schema",
         V2_ARTIFACT_SCHEMAS["antibody_sequence_validation"].required_fields,
         compatibility_notes=(
-            "No breaking changes from the V2 contract; V2.8 adds deterministic "
+            "No breaking changes from the V2 contract; V2.9 adds deterministic "
             "antibody validation artifacts."
         ),
     ),
@@ -371,7 +371,7 @@ V2_RELEASE_CONTRACTS: tuple[V2ReleaseContract, ...] = (
         "schema",
         V2_ARTIFACT_SCHEMAS["antibody_report_card"].required_fields,
         compatibility_notes=(
-            "No breaking changes from the V2 contract; V2.8 adds antibody review "
+            "No breaking changes from the V2 contract; V2.9 adds antibody review "
             "report-card artifacts."
         ),
     ),
@@ -380,7 +380,7 @@ V2_RELEASE_CONTRACTS: tuple[V2ReleaseContract, ...] = (
         "schema",
         V2_ARTIFACT_SCHEMAS["antibody_result_bundle"].required_fields,
         compatibility_notes=(
-            "No breaking changes from the V2 contract; V2.8 adds antibody and "
+            "No breaking changes from the V2 contract; V2.9 adds antibody and "
             "biologics result bundles."
         ),
     ),

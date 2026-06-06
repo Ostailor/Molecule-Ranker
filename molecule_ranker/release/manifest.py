@@ -56,7 +56,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
                 "Codex-generated campaign priorities, budgets, costs, metrics, outcomes, "
                 "or advancement decisions",
                 "campaign plans promoted to lab protocols or synthesis routes",
-                "major new science modules in the V2.6 enterprise release",
+                "major new science modules in the V2.9 readiness release",
                 "expanded generation, docking, ADMET, graph reasoning, model training, "
                 "integrations, or campaign planning except for controlled runtime "
                 "orchestration, stability, validation, security, and enterprise readiness",
@@ -167,10 +167,10 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V2.6 is for internal research use only and is not a clinical product.",
-        "V2.6 adds enterprise governance for Codex runtime agents, subagents, "
-        "tools, campaigns, and autonomous actions over the existing governed "
-        "Codex runtime and tool ecosystem.",
+        "V2.9 is for internal research use only and is not a clinical product.",
+        "V2.9 adds software/autonomy validation for V3 readiness while keeping "
+        "governed biologics, small-molecule, runtime-agent, co-pilot, repair-loop, "
+        "and governed tool controls intact.",
         "Agents may repair workflows but may not repair scientific truth by inventing "
         "missing data.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
@@ -189,8 +189,8 @@ def _known_limitations() -> list[str]:
         "Benchmark results are evaluation artifacts, not biomedical evidence.",
         "Prospective validation analytics are not clinical validation.",
         "Codex must not invent benchmark results, labels, metrics, or conclusions.",
-        "Enterprise validation artifacts are software/process validation artifacts, "
-        "not clinical validation.",
+        "Enterprise and V3 readiness validation artifacts are software/process "
+        "validation artifacts, not clinical validation.",
         "Graph paths do not prove causality, efficacy, safety, binding, or activity.",
         "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
         "Docking scores, poses, and structure-derived interactions are computational "

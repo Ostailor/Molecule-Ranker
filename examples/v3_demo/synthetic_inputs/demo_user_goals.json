@@ -1,0 +1,44 @@
+{
+  "clinical_or_scientific_validation": false,
+  "description": "Synthetic V3 demo goals for autonomy and readiness validation.",
+  "goals": [
+    {
+      "approval_gate": "result_bundle_review",
+      "expected_result": "Auditable software result bundle with lineage and limitations.",
+      "mode": "mocked",
+      "scenario_id": "v3_full_demo_mocked",
+      "user_goal": "Run a synthetic disease-to-result-bundle workflow using mocked inputs."
+    },
+    {
+      "approval_gate": "generated_molecule_review",
+      "expected_result": "Review packet for generated small-molecule computational hypotheses.",
+      "mode": "mocked",
+      "scenario_id": "small_molecule_generation_mocked_e2e",
+      "user_goal": "Create generated small-molecule hypotheses in mocked mode and prepare review."
+    },
+    {
+      "approval_gate": "biologics_review",
+      "expected_result": "Traceable biologics review packet with antibody generation disabled.",
+      "mode": "mocked",
+      "scenario_id": "biologics_mocked_e2e",
+      "user_goal": "Run the biologics mocked workflow without generated antibody creation."
+    },
+    {
+      "approval_gate": "mapping_review",
+      "expected_result": "Dry-run integration mapping review with zero external writes.",
+      "mode": "dry_run",
+      "scenario_id": "integration_dry_run_e2e",
+      "user_goal": "Run integration sync planning and mapping review without external writes."
+    },
+    {
+      "approval_gate": "copilot_replan_approval",
+      "expected_result": "Co-pilot detects a synthetic result import event and requests approval.",
+      "mode": "mocked",
+      "scenario_id": "campaign_copilot_monitoring",
+      "user_goal": "Monitor a synthetic campaign event and require approval before replan."
+    }
+  ],
+  "synthetic": true,
+  "version": "2.9.0"
+}
+

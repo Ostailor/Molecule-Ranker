@@ -1,4 +1,4 @@
-"""End-to-end governed workflow runner for V2.8 discovery operations."""
+"""End-to-end governed workflow runner for V2.9 discovery operations."""
 
 from __future__ import annotations
 

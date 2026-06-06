@@ -50,7 +50,7 @@ class HostedE2EWorkflowRecord(BaseModel):
 
 
 class HostedE2EWorkflowStore:
-    """In-process hosted workflow store for V2.8 e2e operations."""
+    """In-process hosted workflow store for V2.9 e2e operations."""
 
     def __init__(self) -> None:
         self._records: dict[str, HostedE2EWorkflowRecord] = {}

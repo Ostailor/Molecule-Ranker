@@ -1,0 +1,44 @@
+{
+  "expected_artifacts": [
+    {
+      "artifact": "user_goal",
+      "workflow": "all_demo_workflows"
+    },
+    {
+      "artifact": "agent_plan",
+      "workflow": "all_demo_workflows"
+    },
+    {
+      "artifact": "tool_execution",
+      "workflow": "all_demo_workflows"
+    },
+    {
+      "artifact": "approval_gate",
+      "workflow": "generated_small_molecule_hypothesis"
+    },
+    {
+      "artifact": "approval_gate",
+      "workflow": "biologics_mocked"
+    },
+    {
+      "artifact": "approval_gate",
+      "workflow": "campaign_copilot_event"
+    },
+    {
+      "artifact": "result_bundle",
+      "workflow": "small_molecule_disease_to_bundle"
+    },
+    {
+      "artifact": "guardrail_validation",
+      "workflow": "all_demo_workflows"
+    },
+    {
+      "artifact": "v3_readiness_report",
+      "workflow": "v3_readiness"
+    }
+  ],
+  "external_writes_allowed": false,
+  "synthetic": true,
+  "version": "2.9.0"
+}
+

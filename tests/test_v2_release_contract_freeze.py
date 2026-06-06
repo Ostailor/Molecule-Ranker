@@ -27,8 +27,8 @@ from molecule_ranker.v2.release_contracts import (
 def test_v2_release_contracts_freeze_required_surfaces() -> None:
     contract_ids = {contract.contract_id for contract in V2_RELEASE_CONTRACTS}
 
-    assert V2_SCHEMA_VERSION == "2.8"
-    assert V2_CONTRACT_VERSION == "v2.8.0"
+    assert V2_SCHEMA_VERSION == "2.9"
+    assert V2_CONTRACT_VERSION == "v2.9.0"
     assert {
         "api_routes",
         "artifact_schemas",
@@ -99,8 +99,8 @@ def test_v2_artifact_payload_requires_schema_and_contract_versions() -> None:
     assert validate_v2_artifact_payload(antibody_payload, "antibody_report_card").valid is True
     invalid = validate_v2_artifact_payload(invalid_payload, "generated_molecule")
     assert invalid.valid is False
-    assert "schema_version must be 2.8" in invalid.errors
-    assert "contract_version must be v2.8.0" in invalid.errors
+    assert "schema_version must be 2.9" in invalid.errors
+    assert "contract_version must be v2.9.0" in invalid.errors
 
 
 def test_v2_compatibility_matrix_reports_v1_migration_or_clear_failure() -> None:
@@ -163,7 +163,7 @@ def test_v2_api_contract_export_cli_writes_v2_schema(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     payload = json.loads(output.read_text())
-    assert payload["info"]["version"] == "2.8.0"
+    assert payload["info"]["version"] == "2.9.0"
     assert "/api/v2/version" in payload["paths"]
     assert "/api/v2/projects" in payload["paths"]
 

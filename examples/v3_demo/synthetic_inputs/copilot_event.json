@@ -1,0 +1,10 @@
+{
+  "event_id": "synthetic-copilot-event-001",
+  "event_type": "synthetic_result_import_detected",
+  "expected_action": "request_approval_before_replan",
+  "external_writes_allowed": false,
+  "project_id": "synthetic-v3-demo-project",
+  "synthetic": true,
+  "validation_note": "This event is a software validation fixture and does not represent experimental evidence."
+}
+

@@ -15,25 +15,23 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V2.6 adds enterprise-grade governance for Codex runtime agents, "
-            "specialist subagents, governed tools, autonomous campaigns, and "
-            "follow-up actions. Organizations can define autonomy policies, "
-            "capability grants, agent and campaign budgets, certification records, "
-            "run controls, kill switches, approval policies, incident records, "
-            "policy/prompt/tool drift checks, and governance reports for admins "
-            "and pilot sponsors. It inherits the V2.5 validated enterprise "
-            "discovery operating system, Codex runtime-agent backbone, governed "
-            "tool ecosystem, MCP-compatible gateway, multi-agent scientific "
-            "operations, agent self-evaluation and repair loops, autonomous "
-            "campaign co-pilot, monitoring, trigger routing, safe follow-ups, "
-            "approval queues, co-pilot evals and guardrails, and stable APIs and "
-            "SDK behavior. V2.6 does not add major new "
-            "science capabilities and does not expand molecule generation, docking, "
-            "ADMET, graph reasoning, model training, external integrations, or lab "
-            "execution. The research boundary remains intact: campaign plans, "
-            "hypotheses, research questions, graph paths, portfolio recommendations, "
-            "structure workflows, docking scores, model predictions, and generated "
-            "molecules are planning or prioritization signals, not biomedical claims.",
+            "V2.9 prepares molecule-ranker for V3.0 with software/autonomy "
+            "validation across end-to-end workflows, result certification, "
+            "governance boundaries, safety guardrails, residual risks, operational "
+            "readiness, and the final V3 readiness dashboard. It inherits the "
+            "validated enterprise discovery operating system, the V2.8 governed "
+            "biologics and antibody discovery track, plus the "
+            "small-molecule, runtime-agent, co-pilot, repair-loop, governed-tool, "
+            "MCP gateway, multi-agent, review, graph, hypothesis, portfolio, "
+            "campaign, evaluation, integration, result-bundle, stable APIs and SDK "
+            "systems. V2.9 "
+            "does not add major new science capabilities and does not expand "
+            "molecule generation, docking, ADMET, graph reasoning, model training, "
+            "external integrations, or lab execution. The research boundary "
+            "remains intact: campaign plans, hypotheses, research questions, graph "
+            "paths, portfolio recommendations, structure workflows, docking scores, "
+            "model predictions, generated molecules, and generated antibodies are "
+            "planning or prioritization signals, not biomedical claims.",
             "",
             "## Included",
             "",
@@ -118,6 +116,11 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "AgentRunControl, AgentIncident, AgentPolicyViolation, "
             "AgentGovernanceReport, AgentChangeRequest, AgentApprovalPolicy, "
             "AgentKillSwitch, and AgentGovernanceBoard controls.",
+            "- V2.9 AutonomyValidationSuite, V3ReadinessReport, "
+            "EndToEndResultCertification, HumanGovernanceMatrix, "
+            "AutonomyBoundaryTest, AgentReliabilityScorecard, SafetyCaseReport, "
+            "ResidualRiskRegister, V3DemoProject, V3ReleaseCandidate workflow, "
+            "end-to-end autonomy red-team suite, and final V3 readiness dashboard.",
             "- Operator, admin, and user documentation with backup/restore runbooks.",
             "- Synthetic demo project artifacts clearly labeled as non-evidence examples.",
             "",
@@ -171,9 +174,9 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "governance policy changes, budgets, capability grants, or certifications",
             "- Agent incidents, policy violations, guardrail failures, policy drift, "
             "prompt drift, and tool drift must remain visible in governance reports",
-            "- V2.6 validation evidence packages are software/process validation artifacts",
-            "- V2.6 enterprise validation is not clinical validation",
-            "- V2.6 support bundles are diagnostics manifests, not biomedical evidence",
+            "- V2.9 validation evidence packages are software/process validation artifacts",
+            "- V2.9 enterprise and readiness validation is not clinical validation",
+            "- V2.9 support bundles are diagnostics manifests, not biomedical evidence",
             "",
             "## Contracts",
             "",

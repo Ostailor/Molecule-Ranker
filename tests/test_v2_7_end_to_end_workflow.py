@@ -23,7 +23,7 @@ from molecule_ranker.v2 import V2_API_ROUTES, V2_ARTIFACT_SCHEMAS
 
 
 def test_v2_7_version_and_contract_entries() -> None:
-    assert __version__ == "2.8.0"
+    assert __version__ == "2.9.0"
     assert "/api/v2/integrations/operations/dashboard" in V2_API_ROUTES
     assert "end_to_end_result_bundle" in V2_ARTIFACT_SCHEMAS
 
@@ -37,7 +37,7 @@ def test_end_to_end_runner_produces_safe_auditable_bundle(tmp_path: Path) -> Non
 
     bundle = EndToEndWorkflowRunner().run(request, output_dir=tmp_path)
 
-    assert bundle.version == "2.8.0"
+    assert bundle.version == "2.9.0"
     assert bundle.status == "succeeded"
     assert bundle.mode == "mocked"
     assert bundle.workflow_state["current_stage"] == "completed"
@@ -172,7 +172,7 @@ def test_v2_end_to_end_cli_writes_bundle(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["bundle"]["version"] == "2.8.0"
+    assert payload["bundle"]["version"] == "2.9.0"
     assert (tmp_path / "end_to_end_result_bundle.json").exists()
 
 
@@ -208,4 +208,4 @@ def test_hosted_integration_operations_dashboard(tmp_path: Path) -> None:
     assert "Integration operations" in page.text
     assert "End-to-end workflow" in page.text
     assert api.status_code == 200, api.text
-    assert api.json()["dashboard"]["version"] == "2.8.0"
+    assert api.json()["dashboard"]["version"] == "2.9.0"

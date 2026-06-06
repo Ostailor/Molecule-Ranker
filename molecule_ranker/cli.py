@@ -330,12 +330,16 @@ validate_app = typer.Typer(
     help="Run molecule-ranker validation suites.",
     no_args_is_help=True,
 )
+autonomy_app = typer.Typer(
+    help="Run V2.9/V3 autonomy evaluation suites.",
+    no_args_is_help=True,
+)
 biologics_app = typer.Typer(
     help="Governed biologics and antibody discovery commands.",
     no_args_is_help=True,
 )
 e2e_app = typer.Typer(
-    help="Run and inspect V2.8 end-to-end governed discovery workflows.",
+    help="Run and inspect V2.9 end-to-end governed discovery workflows.",
     no_args_is_help=True,
 )
 policy_app = typer.Typer(
@@ -392,6 +396,10 @@ api_app = typer.Typer(
 )
 v2_app = typer.Typer(
     help="Inspect and validate frozen V2.0 enterprise release contracts.",
+    no_args_is_help=True,
+)
+v3_app = typer.Typer(
+    help="Run V2.9 autonomy validation and V3.0 readiness workflows.",
     no_args_is_help=True,
 )
 worker_app = typer.Typer(
@@ -570,6 +578,7 @@ app.add_typer(user_app, name="user")
 app.add_typer(auth_cli_app, name="auth")
 app.add_typer(config_app, name="config")
 app.add_typer(validate_app, name="validate")
+app.add_typer(autonomy_app, name="autonomy")
 app.add_typer(biologics_app, name="biologics")
 app.add_typer(e2e_app, name="e2e")
 app.add_typer(policy_app, name="policy")
@@ -577,6 +586,7 @@ app.add_typer(governance_app, name="governance")
 app.add_typer(eval_app, name="eval")
 app.add_typer(api_app, name="api")
 app.add_typer(v2_app, name="v2")
+app.add_typer(v3_app, name="v3")
 app.add_typer(worker_app, name="worker")
 app.add_typer(job_app, name="job")
 app.add_typer(notifications_app, name="notifications")
@@ -1248,9 +1258,7 @@ def governance_report(
             "risk_profiles",
             AgentRiskProfile,
         ),
-        certifications=_agent_certification_manager(
-            certification_state_path
-        ).list_certifications(),
+        certifications=_agent_certification_manager(certification_state_path).list_certifications(),
         incidents=_agent_incident_manager(incident_state_path).list_incidents(),
     )
     _echo_json(
@@ -1708,9 +1716,7 @@ def governance_certify(
             "allowed": decision.allowed,
             "reason": decision.reason,
             "certification": (
-                decision.certification.model_dump(mode="json")
-                if decision.certification
-                else None
+                decision.certification.model_dump(mode="json") if decision.certification else None
             ),
             "audit_event": decision.audit_event.model_dump(mode="json"),
         }
@@ -2859,9 +2865,7 @@ def repair_diagnose_command(
                 kwargs["failed_validation_report"] = artifact_payload
             else:
                 kwargs["missing_artifact"] = {
-                    "artifact_id": str(
-                        artifact_payload.get("artifact_id", failure_artifact.stem)
-                    )
+                    "artifact_id": str(artifact_payload.get("artifact_id", failure_artifact.stem))
                     if isinstance(artifact_payload, dict)
                     else failure_artifact.stem,
                     "path": str(failure_artifact),
@@ -3666,9 +3670,7 @@ def _agent_cli_tool_handler(step: Any, spec: Any) -> dict[str, Any]:
         "artifact_ids": artifact_ids,
         "job_ids": job_ids,
         "metadata": {
-            "artifact_provenance": {
-                artifact_id: step.step_id for artifact_id in artifact_ids
-            },
+            "artifact_provenance": {artifact_id: step.step_id for artifact_id in artifact_ids},
             "tool_registry_side_effect_level": spec.side_effect_level,
         },
     }
@@ -3872,9 +3874,7 @@ def marketplace_list_command(
         else marketplace.list_available_packages()
     )
     payload = {
-        "packages": [
-            _marketplace_package_payload(marketplace, package) for package in packages
-        ],
+        "packages": [_marketplace_package_payload(marketplace, package) for package in packages],
         "external_registry_enabled": marketplace.external_registry_enabled,
     }
     if json_output:
@@ -4005,8 +4005,7 @@ def marketplace_usage_command(
         _echo_json(payload)
     else:
         typer.echo(
-            f"{usage.package_id}@{usage.package_version}: "
-            f"{usage.total_invocations} invocation(s)"
+            f"{usage.package_id}@{usage.package_version}: {usage.total_invocations} invocation(s)"
         )
 
 
@@ -5337,7 +5336,7 @@ def validate_e2e_command(
     ] = "validation-project",
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Validate a deterministic V2.8 end-to-end workflow bundle."""
+    """Validate a deterministic V2.9 end-to-end workflow bundle."""
     from molecule_ranker.e2e.validation import EndToEndWorkflowValidator
     from molecule_ranker.e2e.workflow_runner import EndToEndWorkflowRunner, WorkflowRunRequest
 
@@ -5361,6 +5360,358 @@ def validate_e2e_command(
         for finding in validation.findings:
             typer.echo(f"- {finding}")
     if not validation.passed:
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("v3-readiness")
+def validate_v3_readiness_command(
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, help="Directory for V3 readiness artifacts."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run V2.9 software/autonomy validation for V3.0 readiness."""
+    from molecule_ranker.v3_readiness import AutonomyValidationSuite
+
+    suite = AutonomyValidationSuite()
+    report = suite.write_report(output_dir) if output_dir else suite.run()
+    payload = report.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"V3 readiness: {report.status}")
+        typer.echo(f"Version: {report.version}")
+        typer.echo(f"Scenarios: {len(report.scenario_results)}")
+        typer.echo(f"Boundary tests: {len(report.autonomy_boundary_tests)}")
+        typer.echo(f"Release candidate: {report.release_candidate.status}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("autonomy")
+def validate_autonomy_command(
+    scenario: Annotated[
+        str,
+        typer.Option("--scenario", help="Built-in autonomy scenario ID to validate."),
+    ] = "v3_full_demo_mocked",
+    all_scenarios: Annotated[
+        bool,
+        typer.Option("--all", help="Run all built-in autonomy scenarios."),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run V3 autonomy validation scenarios."""
+    from molecule_ranker.autonomy_validation.runner import AutonomyValidationRunner
+
+    runner = AutonomyValidationRunner()
+    try:
+        results = runner.run_all() if all_scenarios else [runner.run(scenario)]
+    except KeyError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    passed = all(result.passed for result in results)
+    payload = {
+        "status": "pass" if passed else "fail",
+        "scenario_count": len(results),
+        "passed": sum(1 for result in results if result.passed),
+        "failed": sum(1 for result in results if not result.passed),
+        "results": [
+            {
+                "validation_run": result.validation_run.model_dump(mode="json"),
+                "result_certification": result.result_certification.model_dump(mode="json")
+                if result.result_certification
+                else None,
+                "boundary_tests": [test.model_dump(mode="json") for test in result.boundary_tests],
+            }
+            for result in results
+        ],
+    }
+    if json_output:
+        _echo_json(payload if all_scenarios else payload["results"][0])
+    else:
+        typer.echo(f"Autonomy validation: {payload['status']}")
+        for result in results:
+            typer.echo(f"- {result.validation_run.scenario_id}: {result.validation_run.status}")
+            for failure in result.validation_run.failures:
+                typer.echo(f"  - {failure.get('check', 'unknown')}")
+    if not passed:
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("autonomy-boundaries")
+def validate_autonomy_boundaries_command(
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run V3 autonomy boundary red-team fixtures."""
+    from molecule_ranker.autonomy_validation.boundary_tests import (
+        run_autonomy_boundary_fixtures,
+    )
+
+    result = run_autonomy_boundary_fixtures()
+    payload = result.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Autonomy boundary validation: {'pass' if result.passed else 'fail'}")
+        typer.echo(f"Boundary fixtures: {len(result.boundary_tests)}")
+        typer.echo(f"Unsafe action escape rate: {result.unsafe_action_escape_rate:.3f}")
+        typer.echo(
+            "Fabricated scientific truth escape rate: "
+            f"{result.fabricated_scientific_truth_escape_rate:.3f}"
+        )
+        typer.echo(f"External write escape rate: {result.external_write_escape_rate:.3f}")
+        for test in result.boundary_tests:
+            if test.passed is False:
+                typer.echo(f"- {test.boundary_test_id}: {test.findings}")
+    if not result.passed:
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("v3-performance")
+def validate_v3_performance_command(
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            help="Directory for V3 performance/reliability artifacts.",
+        ),
+    ] = Path(".molecule-ranker") / "validation" / "v3_performance",
+    mocked_full_e2e_max_seconds: Annotated[
+        float,
+        typer.Option("--mocked-full-e2e-max-seconds", min=0.001),
+    ] = 10.0,
+    result_bundle_max_seconds: Annotated[
+        float,
+        typer.Option("--result-bundle-max-seconds", min=0.001),
+    ] = 5.0,
+    dashboard_max_latency_seconds: Annotated[
+        float,
+        typer.Option("--dashboard-max-latency-seconds", min=0.001),
+    ] = 10.0,
+    agent_planning_max_seconds: Annotated[
+        float,
+        typer.Option("--agent-planning-max-seconds", min=0.001),
+    ] = 5.0,
+    tool_failure_rate_max: Annotated[
+        float,
+        typer.Option("--tool-failure-rate-max", min=0.0, max=1.0),
+    ] = 0.05,
+    memory_max_mb: Annotated[
+        float,
+        typer.Option("--memory-max-mb", min=0.001),
+    ] = 256.0,
+    max_codex_tool_iterations: Annotated[
+        int,
+        typer.Option("--max-codex-tool-iterations", min=1),
+    ] = 20,
+    autonomy_budget_tool_call_limit: Annotated[
+        int,
+        typer.Option("--autonomy-budget-tool-call-limit", min=1),
+    ] = 20,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the V3 performance/reliability validation gate."""
+    from molecule_ranker.autonomy_validation.performance import (
+        V3PerformanceThresholds,
+        run_v3_performance_gate,
+    )
+
+    thresholds = V3PerformanceThresholds(
+        mocked_full_e2e_max_seconds=mocked_full_e2e_max_seconds,
+        result_bundle_generation_max_seconds=result_bundle_max_seconds,
+        dashboard_key_page_max_latency_seconds=dashboard_max_latency_seconds,
+        agent_planning_max_seconds=agent_planning_max_seconds,
+        tool_execution_failure_rate_max=tool_failure_rate_max,
+        mocked_memory_max_mb=memory_max_mb,
+        max_codex_tool_iterations=max_codex_tool_iterations,
+        autonomy_budget_tool_call_limit=autonomy_budget_tool_call_limit,
+    )
+    report = run_v3_performance_gate(output_dir=output_dir, thresholds=thresholds)
+    if json_output:
+        _echo_json(report.model_dump(mode="json"))
+    else:
+        typer.echo(f"V3 performance/reliability gate: {report.status}")
+        typer.echo(
+            f"Checks: {report.metrics['checks_passed']}/{report.metrics['checks_total']} passed"
+        )
+        typer.echo(f"Artifacts: {output_dir}")
+        for check in report.checks:
+            status = "pass" if check.passed else "fail"
+            typer.echo(
+                f"- {check.check_id}: {status} "
+                f"({check.observed_value:.4f} {check.unit} <= {check.threshold:.4f})"
+            )
+            for finding in check.findings:
+                typer.echo(f"  - {finding}")
+    if not report.passed:
+        raise typer.Exit(code=1)
+
+
+@autonomy_app.command("eval")
+def autonomy_eval_command(
+    suite: Annotated[
+        str,
+        typer.Option("--suite", help="Autonomy eval suite to run."),
+    ] = "v3",
+    lineage_threshold: Annotated[
+        float,
+        typer.Option(
+            "--lineage-threshold",
+            min=0.0,
+            max=1.0,
+            help="Minimum accepted lineage completeness.",
+        ),
+    ] = 1.0,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the comprehensive V3 autonomy eval suite."""
+    from molecule_ranker.autonomy_validation.evals import run_autonomy_eval_suite
+
+    try:
+        result = run_autonomy_eval_suite(
+            suite=suite,
+            lineage_threshold=lineage_threshold,
+        )
+    except KeyError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _echo_json(result.model_dump(mode="json"))
+    else:
+        typer.echo(f"Autonomy eval {result.suite}: {result.status}")
+        typer.echo(f"Cases: {result.passed_count}/{result.case_count} passed")
+        typer.echo(f"Scenario pass rate: {result.metrics.scenario_pass_rate:.3f}")
+        typer.echo(f"Unsafe escape rate: {result.metrics.unsafe_escape_rate:.3f}")
+        typer.echo(f"Approval recall: {result.metrics.approval_recall:.3f}")
+        typer.echo(f"Lineage completeness: {result.metrics.lineage_completeness:.3f}")
+        for failure in result.acceptance_failures:
+            typer.echo(f"- {failure}")
+    if result.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@v3_app.command("readiness")
+def v3_readiness_command(
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, help="Directory for V3 readiness artifacts."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the AutonomyValidationSuite and emit a V3ReadinessReport."""
+    from molecule_ranker.v3_readiness import AutonomyValidationSuite
+
+    suite = AutonomyValidationSuite()
+    report = suite.write_report(output_dir) if output_dir else suite.run()
+    if json_output:
+        _echo_json(report.model_dump(mode="json"))
+    else:
+        typer.echo(f"V3 readiness: {report.status}")
+        typer.echo(f"Report ID: {report.report_id}")
+        typer.echo(f"Final dashboard status: {report.final_dashboard['status']}")
+        if output_dir:
+            typer.echo(f"Output directory: {output_dir}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@v3_app.command("demo-project")
+def v3_demo_project_command(
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Emit the V3DemoProject software-readiness fixture."""
+    from molecule_ranker.v3_readiness import build_v3_demo_project
+
+    project = build_v3_demo_project()
+    if json_output:
+        _echo_json(project.model_dump(mode="json"))
+    else:
+        typer.echo(f"{project.name}: {project.project_id}")
+        typer.echo(project.purpose)
+
+
+@v3_app.command("release-candidate")
+def v3_release_candidate_command(
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, help="Directory for V3 readiness artifacts."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the V3ReleaseCandidate readiness workflow."""
+    from molecule_ranker.v3_readiness import AutonomyValidationSuite
+
+    report = (
+        AutonomyValidationSuite().write_report(output_dir)
+        if output_dir
+        else AutonomyValidationSuite().run()
+    )
+    candidate = report.release_candidate
+    if json_output:
+        _echo_json(candidate.model_dump(mode="json"))
+    else:
+        typer.echo(f"V3 release candidate {candidate.candidate_id}: {candidate.status}")
+        for finding in candidate.blocking_findings:
+            typer.echo(f"- {finding}")
+    if candidate.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@v3_app.command("rc")
+def v3_rc_command(
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for V3 RC artifacts."),
+    ] = Path(".molecule-ranker/v3_rc"),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the V3 release-candidate workflow and write RC artifacts."""
+    from molecule_ranker.autonomy_validation.v3_release_candidate import (
+        run_v3_release_candidate_workflow,
+    )
+
+    result = run_v3_release_candidate_workflow(output_dir)
+    if json_output:
+        _echo_json(result.model_dump(mode="json"))
+    else:
+        typer.echo(f"V3 release candidate: {result.status}")
+        typer.echo(f"Readiness: {result.readiness_status}")
+        typer.echo(f"Output directory: {result.output_dir}")
+        typer.echo(f"Result bundle: {result.artifacts['v3_rc_result_bundle.zip']}")
+        for issue in result.blocking_issues:
+            typer.echo(f"- {issue}")
+    if result.status != "passed":
+        raise typer.Exit(code=1)
+
+
+@v3_app.command("dashboard")
+def v3_dashboard_command(
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", file_okay=False, help="Directory for V3 readiness artifacts."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Emit the final V3 readiness dashboard."""
+    from molecule_ranker.v3_readiness import AutonomyValidationSuite
+
+    report = (
+        AutonomyValidationSuite().write_report(output_dir)
+        if output_dir
+        else AutonomyValidationSuite().run()
+    )
+    if json_output:
+        _echo_json(report.final_dashboard)
+    else:
+        dashboard = report.final_dashboard
+        typer.echo(f"{dashboard['title']}: {dashboard['status']}")
+        typer.echo(f"Version: {dashboard['version']}")
+        typer.echo(f"Scenarios passed: {dashboard['summary']['scenarios_passed']}")
+        typer.echo(f"Boundary tests passed: {dashboard['summary']['boundary_tests_passed']}")
+    if report.status != "pass":
         raise typer.Exit(code=1)
 
 
@@ -5422,7 +5773,7 @@ def e2e_run_command(
         typer.Option("--unavailable-data", help="Simulate unavailable live step type."),
     ] = None,
 ) -> None:
-    """Run a V2.8 governed end-to-end workflow."""
+    """Run a V2.9 governed end-to-end workflow."""
     request = _e2e_workflow_request(
         workflow=workflow,
         disease=disease,
@@ -5618,7 +5969,7 @@ def e2e_eval_command(
     ] = "default",
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run the deterministic V2.8 end-to-end eval suite."""
+    """Run the deterministic V2.9 end-to-end eval suite."""
     from molecule_ranker.e2e.evals import run_end_to_end_eval_suite
 
     try:
@@ -5634,14 +5985,8 @@ def e2e_eval_command(
         typer.echo(f"Status: {result.status}")
         typer.echo(f"Cases: {result.case_count}")
         typer.echo(f"Acceptance: {'pass' if result.acceptance_passed else 'fail'}")
-        typer.echo(
-            "External write escape rate: "
-            f"{result.metrics.external_write_escape_rate:.3f}"
-        )
-        typer.echo(
-            "Generated overclaim rate: "
-            f"{result.metrics.generated_overclaim_rate:.3f}"
-        )
+        typer.echo(f"External write escape rate: {result.metrics.external_write_escape_rate:.3f}")
+        typer.echo(f"Generated overclaim rate: {result.metrics.generated_overclaim_rate:.3f}")
         for failure in result.acceptance_failures:
             typer.echo(f"- {failure}")
     if not result.acceptance_passed:
@@ -5768,9 +6113,7 @@ def validate_repair_guardrails_command(
         _echo_json(payload)
     else:
         typer.echo(f"Repair guardrail validation: {report.status}")
-        typer.echo(
-            f"Red-team cases blocked: {report.blocked_count}/{len(report.red_team_results)}"
-        )
+        typer.echo(f"Red-team cases blocked: {report.blocked_count}/{len(report.red_team_results)}")
         typer.echo(f"Safe repair cases allowed: {report.allowed_count}/{len(report.safe_results)}")
         typer.echo(f"JSON: {output_dir / 'repair_guardrail_validation.json'}")
         typer.echo(f"Markdown: {output_dir / 'repair_guardrail_validation.md'}")
@@ -5786,7 +6129,7 @@ def validate_biologics_guardrails_command(
     ] = Path("."),
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run V2.8 biologics and generated-antibody guardrail validation."""
+    """Run V2.9 biologics and generated-antibody guardrail validation."""
     from molecule_ranker.validation import run_biologics_guardrail_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "biologics_guardrails"
@@ -5853,9 +6196,7 @@ def biologics_retrieve_command(
             ],
             "biologic_evidence": result.evidence_items,
             "warnings": result.warnings,
-            "output_files": {
-                name: str(path) for name, path in result.output_files.items()
-            },
+            "output_files": {name: str(path) for name, path in result.output_files.items()},
         }
     )
 
@@ -6250,17 +6591,10 @@ def validate_agent_governance_command(
     else:
         typer.echo(f"Agent governance validation: {report.status}")
         typer.echo(
-            "Red-team cases blocked: "
-            f"{report.blocked_red_team_count}/{report.red_team_case_count}"
+            f"Red-team cases blocked: {report.blocked_red_team_count}/{report.red_team_case_count}"
         )
-        typer.echo(
-            "Safe cases allowed: "
-            f"{report.allowed_safe_case_count}/{report.safe_case_count}"
-        )
-        typer.echo(
-            "Unsafe action escape rate: "
-            f"{report.metrics.unsafe_action_escape_rate:.2f}"
-        )
+        typer.echo(f"Safe cases allowed: {report.allowed_safe_case_count}/{report.safe_case_count}")
+        typer.echo(f"Unsafe action escape rate: {report.metrics.unsafe_action_escape_rate:.2f}")
     if report.status != "pass":
         raise typer.Exit(code=1)
 
@@ -7573,7 +7907,7 @@ def v2_end_to_end_command(
     ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
 ) -> None:
-    """Run the V2.8 governed end-to-end project workflow."""
+    """Run the V2.9 governed end-to-end project workflow."""
     from molecule_ranker.integrations.operations import (
         EndToEndWorkflowRequest,
         EndToEndWorkflowRunner,
@@ -7606,7 +7940,7 @@ def v2_end_to_end_command(
     if json_output:
         _echo_json(payload)
     else:
-        typer.echo(f"V2.8 end-to-end workflow: {bundle.status}")
+        typer.echo(f"V2.9 end-to-end workflow: {bundle.status}")
         typer.echo(f"Bundle: {payload['artifacts']['json']}")
 
 
@@ -18813,8 +19147,7 @@ def _e2e_validate_run_dir(run_dir: Path) -> Any:
 
     workflow = EndToEndWorkflow.model_validate(_read_cli_json(run_dir / "workflow.json"))
     steps = [
-        EndToEndWorkflowStep.model_validate(item)
-        for item in _read_cli_json(run_dir / "steps.json")
+        EndToEndWorkflowStep.model_validate(item) for item in _read_cli_json(run_dir / "steps.json")
     ]
     bundle_path = run_dir / "bundle.json"
     bundle = (
@@ -19150,8 +19483,7 @@ def _write_agent_budget_manager(path: Path, manager: Any) -> None:
         {
             "budgets": [budget.model_dump(mode="json") for budget in manager.budgets],
             "reservations": [
-                reservation.model_dump(mode="json")
-                for reservation in manager.reservations
+                reservation.model_dump(mode="json") for reservation in manager.reservations
             ],
         },
     )

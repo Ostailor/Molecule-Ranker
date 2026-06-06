@@ -25,7 +25,7 @@ def test_v2_validation_package_generated_with_valid_manifest(tmp_path: Path) -> 
     assert manifest["status"] == "pass"
     assert manifest["scope"] == "software_platform_validation"
     assert manifest["clinical_or_regulatory_status"] == "not_clinical_not_regulatory_approval"
-    assert manifest["version"] == "2.8.0"
+    assert manifest["version"] == "2.9.0"
     assert manifest["git_commit"]
     assert manifest["dependency_lock_hash"]
     assert set(REQUIRED_V2_VALIDATION_REPORTS).issubset(manifest["reports"])
