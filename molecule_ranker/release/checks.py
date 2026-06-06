@@ -790,13 +790,13 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "2.7.0":
-        return ReleaseCheck("version", "Version is 2.7.0", "pass", "Package version is 2.7.0.")
+    if __version__ == "2.8.0":
+        return ReleaseCheck("version", "Version is 2.8.0", "pass", "Package version is 2.8.0.")
     return ReleaseCheck(
         "version",
-        "Version is 2.7.0",
+        "Version is 2.8.0",
         "fail",
-        f"Package version is {__version__}, expected 2.7.0.",
+        f"Package version is {__version__}, expected 2.8.0.",
     )
 
 
@@ -1059,7 +1059,7 @@ def _check_readme(root: Path) -> ReleaseCheck:
         return ReleaseCheck("readme", "README updated", "fail", "README.md is missing.")
     text = readme.read_text(errors="ignore").lower()
     required = (
-        "2.7.0",
+        "2.8.0",
         "autonomous campaign co-pilot",
         "campaign-management assistant",
         "failed qc is never treated as positive or negative evidence",

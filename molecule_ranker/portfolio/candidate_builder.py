@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from molecule_ranker.biologics.schemas import BiologicCandidate, GeneratedAntibodyHypothesis
+from molecule_ranker.biologics.scoring import (
+    score_biologic_candidate_components,
+    score_generated_antibody_hypothesis,
+)
 from molecule_ranker.experiments.schemas import AssayResult
 from molecule_ranker.generation.schemas import GeneratedMolecule
 from molecule_ranker.schemas import GeneratedMoleculeHypothesis, MoleculeCandidate
@@ -32,8 +37,11 @@ def build_portfolio_candidates(
     *,
     existing_candidates: Sequence[MoleculeCandidate] = (),
     generated_molecules: Sequence[GeneratedMolecule | GeneratedMoleculeHypothesis] = (),
+    biologic_candidates: Sequence[BiologicCandidate] = (),
+    generated_antibodies: Sequence[GeneratedAntibodyHypothesis] = (),
     experimental_results: Sequence[AssayResult] = (),
     disease_name: str | None = None,
+    include_biologics_in_mixed_portfolio: bool = False,
 ) -> list[PortfolioCandidate]:
     results_by_key = _index_results(experimental_results)
     candidates = [
@@ -47,6 +55,15 @@ def build_portfolio_candidates(
             )
         else:
             candidates.append(_candidate_from_generated(molecule, results_by_key, disease_name))
+    if include_biologics_in_mixed_portfolio:
+        candidates.extend(
+            _candidate_from_biologic(candidate, disease_name)
+            for candidate in biologic_candidates
+        )
+        candidates.extend(
+            _candidate_from_generated_antibody(hypothesis, disease_name)
+            for hypothesis in generated_antibodies
+        )
     return candidates
 
 
@@ -276,6 +293,122 @@ def _candidate_from_generated_hypothesis(
                 result.result_id for result in exact_results
             ],
             "generated_hypothesis_only": not direct_evidence,
+        },
+    )
+
+
+def _candidate_from_biologic(
+    candidate: BiologicCandidate,
+    disease_name: str | None,
+) -> PortfolioCandidate:
+    components = score_biologic_candidate_components(candidate)
+    developability = _as_mapping(candidate.metadata.get("developability"))
+    sequence_flags = _string_list(developability.get("sequence_liability_flags"))
+    cdr_flags = _string_list(developability.get("cdr_liability_flags"))
+    risk_flags = [
+        "sequence_liability_risk"
+        if sequence_flags or cdr_flags
+        else "biologics_review_required"
+    ]
+    return PortfolioCandidate(
+        portfolio_candidate_id=candidate.biologic_id,
+        source_candidate_id=candidate.biologic_id,
+        candidate_name=candidate.name,
+        origin="external" if candidate.origin == "external" else "existing",
+        canonical_smiles=None,
+        inchi_key=None,
+        disease_name=candidate.disease_name or disease_name,
+        target_symbols=sorted(set(candidate.target_symbols)),
+        mechanism_label=str(candidate.metadata.get("mechanism_label") or candidate.biologic_type),
+        chemical_series_id=None,
+        scaffold_id=None,
+        evidence_score=components["evidence_score"],
+        generation_score=None,
+        developability_score=components["developability_heuristic_score"],
+        experimental_support_score=components["experimental_support_score"],
+        predictive_model_score=None,
+        structure_score=None,
+        experiment_readiness_score=components["review_readiness_score"],
+        uncertainty_score=components["uncertainty_penalty"],
+        novelty_score=components["novelty_score"],
+        diversity_features={
+            "modality": candidate.biologic_type,
+            "portfolio_modality_label": f"biologic:{candidate.biologic_type}",
+        },
+        risk_flags=risk_flags,
+        blocking_risks=[],
+        review_status=str(candidate.metadata.get("review_status") or "needs_expert_review"),
+        direct_experimental_evidence=candidate.direct_experimental_evidence,
+        generated_without_direct_evidence=False,
+        metadata={
+            "deterministic_source": "BiologicCandidate",
+            "modality": candidate.biologic_type,
+            "portfolio_modality_label": f"biologic:{candidate.biologic_type}",
+            "biologics_candidate": True,
+            "sequence_liability_flags": sequence_flags,
+            "cdr_liability_flags": cdr_flags,
+            "sequence_liability_risk": bool(sequence_flags or cdr_flags),
+            "mixed_portfolio_enabled_required": True,
+            "source_identifiers": dict(candidate.identifiers),
+        },
+    )
+
+
+def _candidate_from_generated_antibody(
+    hypothesis: GeneratedAntibodyHypothesis,
+    disease_name: str | None,
+) -> PortfolioCandidate:
+    components = score_generated_antibody_hypothesis(hypothesis)
+    developability = _as_mapping(hypothesis.metadata.get("developability"))
+    sequence_flags = _string_list(developability.get("sequence_liability_flags"))
+    cdr_flags = _string_list(developability.get("cdr_liability_flags"))
+    risk_flags = ["generated_antibody_requires_review", "generated_no_direct_evidence"]
+    blocking_risks = ["review_gate_required"]
+    if sequence_flags or cdr_flags:
+        risk_flags.append("sequence_liability_risk")
+        blocking_risks.append("sequence_liability_review_required")
+    return PortfolioCandidate(
+        portfolio_candidate_id=hypothesis.generated_antibody_id,
+        source_candidate_id=hypothesis.generated_antibody_id,
+        candidate_name=hypothesis.generated_antibody_id,
+        origin="generated",
+        canonical_smiles=None,
+        inchi_key=None,
+        disease_name=disease_name,
+        target_symbols=sorted(set(hypothesis.target_symbols)),
+        mechanism_label="generated_antibody_hypothesis",
+        chemical_series_id=None,
+        scaffold_id=None,
+        evidence_score=components["evidence_score"],
+        generation_score=components["total_score"],
+        developability_score=components["developability_heuristic_score"],
+        experimental_support_score=0.0,
+        predictive_model_score=None,
+        structure_score=None,
+        experiment_readiness_score=components["review_readiness_score"],
+        uncertainty_score=components["uncertainty_penalty"],
+        novelty_score=components["novelty_score"],
+        diversity_features={
+            "modality": "generated_antibody",
+            "portfolio_modality_label": "biologic:generated_antibody",
+        },
+        risk_flags=risk_flags,
+        blocking_risks=blocking_risks,
+        review_status="needs_expert_review",
+        direct_experimental_evidence=False,
+        generated_without_direct_evidence=True,
+        metadata={
+            "deterministic_source": "GeneratedAntibodyHypothesis",
+            "modality": "generated_antibody",
+            "portfolio_modality_label": "biologic:generated_antibody",
+            "biologics_candidate": True,
+            "generated_antibody_hypothesis": True,
+            "sequence_liability_flags": sequence_flags,
+            "cdr_liability_flags": cdr_flags,
+            "sequence_liability_risk": bool(sequence_flags or cdr_flags),
+            "review_gate_required": True,
+            "generated_hypothesis_only": True,
+            "no_binding_activity_claim": True,
         },
     )
 

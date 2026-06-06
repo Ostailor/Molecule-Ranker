@@ -8,10 +8,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 WorkflowType = Literal[
     "disease_to_ranked_candidates",
     "disease_to_generated_hypotheses",
+    "disease_to_antibody_candidates",
     "disease_to_review_workspace",
     "disease_to_campaign_plan",
     "disease_to_portfolio_and_campaign",
     "full_discovery_loop",
+    "full_discovery_loop_with_biologics",
+    "biologics_discovery_loop",
     "integration_sync_loop",
     "prospective_evaluation_loop",
 ]
@@ -35,6 +38,14 @@ WorkflowStepType = Literal[
     "disease_resolution",
     "target_discovery",
     "molecule_retrieval",
+    "antigen_context",
+    "antibody_retrieval",
+    "antibody_generation",
+    "antibody_sequence_validation",
+    "antibody_numbering",
+    "antibody_novelty",
+    "antibody_developability",
+    "antibody_review",
     "literature_retrieval",
     "generation",
     "developability",
@@ -135,6 +146,7 @@ class EndToEndResultBundle(EndToEndSchema):
     key_artifact_ids: list[str] = Field(default_factory=list)
     candidate_summary: dict[str, Any] = Field(default_factory=dict)
     generated_summary: dict[str, Any] = Field(default_factory=dict)
+    biologics_summary: dict[str, Any] = Field(default_factory=dict)
     evidence_summary: dict[str, Any] = Field(default_factory=dict)
     review_summary: dict[str, Any] = Field(default_factory=dict)
     campaign_summary: dict[str, Any] = Field(default_factory=dict)
@@ -157,6 +169,16 @@ class EndToEndResultBundle(EndToEndSchema):
         limitation_text = " ".join(self.limitations).lower()
         if "not scientific evidence" not in limitation_text:
             self.limitations.append(NOT_SCIENTIFIC_EVIDENCE_LIMITATION)
+        if self.biologics_summary.get("antibody_generation_enabled") is True:
+            if self.biologics_summary.get("review_gate_required") is not True:
+                raise ValueError("Antibody generation requires an explicit review gate.")
+            if self.biologics_summary.get("generated_antibodies_with_direct_evidence", 0):
+                exact_results = self.biologics_summary.get("exact_imported_experimental_result_ids")
+                if not exact_results:
+                    raise ValueError(
+                        "Generated antibodies need exact imported experimental results "
+                        "before direct evidence can be recorded."
+                    )
         return self
 
 

@@ -216,7 +216,7 @@ def e2e_workflow_list_dashboard_page(
     user: Annotated[UserAccount, Depends(require_dashboard_user)],
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> Response:
-    """Render hosted V2.7 end-to-end workflow list."""
+    """Render hosted V2.8 end-to-end workflow list."""
     _require_e2e_dashboard_permission(database, user, "e2e:read")
     rows = [
         [
@@ -233,7 +233,7 @@ def e2e_workflow_list_dashboard_page(
     body = (
         _e2e_nav()
         + "<h2>E2E workflow list</h2>"
-        + "<p>Hosted V2.7 governed discovery workflows are dry-run/read-only by default. "
+        + "<p>Hosted V2.8 governed discovery workflows are dry-run/read-only by default. "
         + "External writes and generated advancement require explicit approval.</p>"
         + _table(
             [
@@ -259,7 +259,7 @@ def e2e_workflow_detail_dashboard_page(
     user: Annotated[UserAccount, Depends(require_dashboard_user)],
     database: Annotated[PlatformDatabase, Depends(platform_database)],
 ) -> Response:
-    """Render hosted V2.7 end-to-end workflow detail."""
+    """Render hosted V2.8 end-to-end workflow detail."""
     _require_e2e_dashboard_permission(database, user, "e2e:read")
     record = _e2e_dashboard_record_or_404(request, workflow_id)
     workflow = record.result.workflow

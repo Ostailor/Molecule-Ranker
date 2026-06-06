@@ -27,8 +27,8 @@ from molecule_ranker.v2.release_contracts import (
 def test_v2_release_contracts_freeze_required_surfaces() -> None:
     contract_ids = {contract.contract_id for contract in V2_RELEASE_CONTRACTS}
 
-    assert V2_SCHEMA_VERSION == "2.7"
-    assert V2_CONTRACT_VERSION == "v2.7.0"
+    assert V2_SCHEMA_VERSION == "2.8"
+    assert V2_CONTRACT_VERSION == "v2.8.0"
     assert {
         "api_routes",
         "artifact_schemas",
@@ -43,6 +43,10 @@ def test_v2_release_contracts_freeze_required_surfaces() -> None:
         "integration_sync_schema",
         "codex_task_result_schema",
         "knowledge_graph_schema",
+        "antibody_sequence_schema",
+        "antibody_sequence_validation_schema",
+        "antibody_report_card_schema",
+        "antibody_result_bundle_schema",
     } <= contract_ids
     assert all(contract.schema_version == V2_SCHEMA_VERSION for contract in V2_RELEASE_CONTRACTS)
     assert all(
@@ -78,10 +82,25 @@ def test_v2_artifact_payload_requires_schema_and_contract_versions() -> None:
     }
 
     assert validate_v2_artifact_payload(valid_payload, "generated_molecule").valid is True
+    antibody_payload = {
+        "artifact_type": "antibody_report_card",
+        "schema_version": V2_SCHEMA_VERSION,
+        "contract_version": V2_CONTRACT_VERSION,
+        "report_card_id": "arc-1",
+        "candidate_id": "ab-1",
+        "target_context": {},
+        "sequence_validation": {},
+        "numbering": {},
+        "novelty_check": {},
+        "developability": {},
+        "review_status": "needs_expert_review",
+        "limitations": ["Generated antibodies are computational hypotheses only."],
+    }
+    assert validate_v2_artifact_payload(antibody_payload, "antibody_report_card").valid is True
     invalid = validate_v2_artifact_payload(invalid_payload, "generated_molecule")
     assert invalid.valid is False
-    assert "schema_version must be 2.7" in invalid.errors
-    assert "contract_version must be v2.7.0" in invalid.errors
+    assert "schema_version must be 2.8" in invalid.errors
+    assert "contract_version must be v2.8.0" in invalid.errors
 
 
 def test_v2_compatibility_matrix_reports_v1_migration_or_clear_failure() -> None:
@@ -144,7 +163,7 @@ def test_v2_api_contract_export_cli_writes_v2_schema(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     payload = json.loads(output.read_text())
-    assert payload["info"]["version"] == "2.7.0"
+    assert payload["info"]["version"] == "2.8.0"
     assert "/api/v2/version" in payload["paths"]
     assert "/api/v2/projects" in payload["paths"]
 

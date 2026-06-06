@@ -3,6 +3,7 @@ from __future__ import annotations
 from molecule_ranker.subagents.registry import (
     EVIDENCE_CREATING_TOOL_CATEGORIES,
     HIGH_RISK_TOOL_CATEGORIES,
+    BiologicsEngineerSubagent,
     MoleculeDesignerSubagent,
     SubagentRegistry,
     builtin_subagent_profiles,
@@ -12,6 +13,7 @@ EXPECTED_PROFILE_IDS = {
     "program-manager",
     "evidence-reviewer",
     "molecule-designer",
+    "biologics-engineer",
     "developability-safety",
     "experiment-analyst",
     "predictive-modeler",
@@ -33,6 +35,7 @@ def test_builtin_subagent_profiles_cover_all_roles() -> None:
 
     assert {profile.subagent_id for profile in profiles} == EXPECTED_PROFILE_IDS
     assert registry.by_role("evidence_reviewer").subagent_id == "evidence-reviewer"
+    assert registry.by_role("biologics_engineer").subagent_id == "biologics-engineer"
     assert registry.require("program-manager").can_delegate is True
 
 
@@ -74,6 +77,29 @@ def test_generated_molecule_boundaries_are_present() -> None:
     ]
     assert any("computational hypotheses" in boundary for boundary in boundaries)
     assert any("approved generation/design tools" in boundary for boundary in boundaries)
+
+
+def test_biologics_engineer_profile_exists_with_guardrails_and_tasks() -> None:
+    profile = BiologicsEngineerSubagent
+
+    assert profile.subagent_id == "biologics-engineer"
+    assert profile.role == "biologics_engineer"
+    assert "antibody_validation" in profile.allowed_tool_categories
+    assert "antibody_novelty" in profile.allowed_tool_categories
+    assert "sequence_fabrication" in profile.denied_tool_categories
+    assert "assay_result_creation" in profile.denied_tool_categories
+    assert "invent sequences" in profile.metadata["cannot"]
+    assert "invent epitopes" in profile.metadata["cannot"]
+    assert "invent binding claims" in profile.metadata["cannot"]
+    assert "provide expression/purification/lab protocols" in profile.metadata["cannot"]
+    assert "approve generated antibody advancement" in profile.metadata["cannot"]
+    assert profile.metadata["codex_tasks"] == [
+        "summarize_biologic_candidate",
+        "explain_antibody_liabilities",
+        "draft_biologics_review_questions",
+        "summarize_antigen_context",
+        "draft_biologics_campaign_summary",
+    ]
 
 
 def test_specific_cannot_rules_for_gate_protocol_prediction_and_platform_boundaries() -> None:

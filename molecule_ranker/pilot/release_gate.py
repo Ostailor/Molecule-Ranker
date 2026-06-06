@@ -233,11 +233,11 @@ def render_pilot_exit_review_markdown(review: dict[str, Any]) -> str:
 
 
 def _version_check() -> dict[str, Any]:
-    passed = __version__ == "2.7.0"
+    passed = __version__ == "2.8.0"
     return _check(
         "package_version_is_2_6_0",
         "pass" if passed else "fail",
-        "Package version is 2.7.0." if passed else f"Package version is {__version__}.",
+        "Package version is 2.8.0." if passed else f"Package version is {__version__}.",
     )
 
 

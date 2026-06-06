@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -187,6 +188,12 @@ def export_high_level_work_package_list(
     external_system_target: dict[str, Any] | None = None,
 ) -> CampaignExternalExportResult:
     payload = build_high_level_work_package_payload(campaign, plan)
+    _require_biologics_registry_export_approval(
+        payload,
+        external_write=external_write,
+        explicit_permission=explicit_permission,
+        external_system_target=external_system_target,
+    )
     return _export_campaign_package(
         payload,
         output_dir,
@@ -426,6 +433,30 @@ def _validate_campaign_export_payload(payload: Any) -> None:
         return
     if isinstance(payload, str) and contains_procedural_lab_detail(payload):
         raise ValueError("Campaign exports must not include protocols or synthesis details.")
+
+
+def _require_biologics_registry_export_approval(
+    payload: dict[str, Any],
+    *,
+    external_write: bool,
+    explicit_permission: bool,
+    external_system_target: dict[str, Any] | None,
+) -> None:
+    if not external_write:
+        return
+    target_text = " ".join(str(value) for value in (external_system_target or {}).values()).lower()
+    payload_text = json.dumps(payload, sort_keys=True).lower()
+    biologics_registry = (
+        "biologic" in target_text
+        or "antibody" in target_text
+        or "registry" in target_text
+        or "biologic" in payload_text
+        or "antibody" in payload_text
+    )
+    if biologics_registry and not explicit_permission:
+        raise PermissionError(
+            "External biologics registry export requires explicit approval."
+        )
 
 
 def _ensure_plan_matches_campaign(campaign: Campaign, plan: CampaignPlan) -> None:

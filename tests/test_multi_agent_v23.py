@@ -26,6 +26,7 @@ def test_v23_specialist_roster_contains_required_operational_roles() -> None:
         "program_management",
         "evidence_review",
         "molecule_design",
+        "biologics_engineering",
         "developability_safety",
         "experimental_feedback",
         "predictive_modeling",
@@ -68,6 +69,27 @@ def test_specialist_delegation_scopes_artifacts_tools_policy_and_audit() -> None
     assert delegation.plan.metadata["specialist_agent"]["agent_id"] == "evidence-reviewer"
     assert delegation.plan.metadata["sandbox_profile"] == "read_only_runtime"
     assert delegation.audit_events[0].event_type == "specialist_task_delegated"
+
+
+def test_biologics_engineer_specialist_uses_biologics_tools() -> None:
+    registry = RuntimeToolRegistry.default()
+    orchestrator = MultiAgentScientificOrchestrator(tool_registry=registry)
+
+    delegation = orchestrator.delegate_task(
+        specialist_id="biologics-engineer",
+        objective="Explain antibody liabilities and novelty for biologic candidate.",
+        session_id="session-v28",
+        delegated_by="program-manager",
+        current_artifacts=[{"artifact_id": "biologics-artifact-1", "kind": "biologics"}],
+        scoped_artifact_ids=["biologics-artifact-1"],
+        requested_tool_names=["explain_antibody_liabilities"],
+        user_permissions=_all_permissions(registry),
+    )
+
+    assert delegation.task.status == "planned"
+    assert delegation.plan.metadata["specialist_agent"]["kind"] == "biologics_engineering"
+    assert delegation.plan.steps[0].tool_name == "explain_antibody_liabilities"
+    assert delegation.plan.steps[0].metadata["specialist_id"] == "biologics-engineer"
 
 
 def test_specialist_delegation_rejects_unknown_artifacts_and_disallowed_tools() -> None:
@@ -149,6 +171,29 @@ def test_specialist_output_schema_and_peer_critique_guardrails() -> None:
     assert critique.verdict == "escalate_human"
     assert critique.required_human_review is True
     assert any("fake citation" in issue.lower() for issue in critique.issues)
+
+
+def test_generated_antibody_overclaim_blocked_by_peer_critique() -> None:
+    orchestrator = MultiAgentScientificOrchestrator()
+    unsafe = SpecialistAgentOutput(
+        task_id="task-biologics-1",
+        specialist_id="biologics-engineer",
+        summary="The generated antibody binds TNF and is developable.",
+        grounded_artifact_ids=["artifact-1"],
+        findings=[],
+        recommendations=[],
+        limitations=[],
+    )
+
+    critique = orchestrator.critique_output(
+        reviewer_specialist_id="guardrail-safety-reviewer",
+        output=unsafe,
+        scoped_artifact_ids=["artifact-1"],
+    )
+
+    assert critique.verdict == "escalate_human"
+    assert critique.required_human_review is True
+    assert any("generated antibody" in issue.lower() for issue in critique.issues)
 
 
 def test_agent_specialist_cli_commands(tmp_path: Path) -> None:

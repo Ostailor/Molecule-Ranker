@@ -108,6 +108,16 @@ def default_objectives() -> list[PortfolioObjective]:
             description="Reward distinct source-backed mechanism labels.",
         ),
         PortfolioObjective(
+            objective_id="modality_diversity",
+            name="Modality diversity",
+            objective_type="cover",
+            metric_name="modality_diversity",
+            weight=0.05,
+            direction="higher_is_better",
+            hard=False,
+            description="Reward distinct candidate modalities in explicitly mixed portfolios.",
+        ),
+        PortfolioObjective(
             objective_id="correlated_risk",
             name="Correlated risk minimization",
             objective_type="minimize",
@@ -312,6 +322,19 @@ def maximize_mechanism_diversity(candidates: Sequence[PortfolioCandidate]) -> Ob
     )
 
 
+def maximize_modality_diversity(candidates: Sequence[PortfolioCandidate]) -> ObjectiveEvaluation:
+    modalities = [_candidate_modality(candidate) for candidate in candidates]
+    score = _fraction(len(set(modalities)), len(candidates))
+    return _evaluation(
+        score,
+        "Rewards representation of distinct modality labels when mixed portfolios are enabled.",
+        {
+            "distinct_modalities": float(len(set(modalities))),
+            "modality_annotated_candidates": float(sum(bool(item) for item in modalities)),
+        },
+    )
+
+
 def minimize_correlated_risk(candidates: Sequence[PortfolioCandidate]) -> ObjectiveEvaluation:
     risk_modes = Counter(
         mode for candidate in candidates for mode in _candidate_risk_modes(candidate)
@@ -402,6 +425,8 @@ OBJECTIVE_FUNCTIONS: dict[str, PortfolioObjectiveFunction] = {
     "maximize_scaffold_diversity": maximize_scaffold_diversity,
     "mechanism_diversity": maximize_mechanism_diversity,
     "maximize_mechanism_diversity": maximize_mechanism_diversity,
+    "modality_diversity": maximize_modality_diversity,
+    "maximize_modality_diversity": maximize_modality_diversity,
     "correlated_risk": minimize_correlated_risk,
     "minimize_correlated_risk": minimize_correlated_risk,
     "generated_overexposure": minimize_generated_overexposure,
@@ -509,6 +534,10 @@ def _candidate_metric_value(candidate: PortfolioCandidate, metric_name: str) -> 
         ),
         "maximize_mechanism_diversity": lambda candidate: (
             1.0 if candidate.mechanism_label and _has_source_backed_support(candidate) else 0.0
+        ),
+        "modality_diversity": lambda candidate: 1.0 if _candidate_modality(candidate) else 0.0,
+        "maximize_modality_diversity": lambda candidate: (
+            1.0 if _candidate_modality(candidate) else 0.0
         ),
         "correlated_risk": lambda candidate: 1.0 - _candidate_risk_burden(candidate),
         "minimize_correlated_risk": lambda candidate: 1.0 - _candidate_risk_burden(candidate),
@@ -677,6 +706,18 @@ def _has_source_backed_support(candidate: PortfolioCandidate) -> bool:
 
 def _scaffold_key(candidate: PortfolioCandidate) -> str | None:
     return candidate.scaffold_id or candidate.chemical_series_id
+
+
+def _candidate_modality(candidate: PortfolioCandidate) -> str:
+    raw = (
+        candidate.metadata.get("portfolio_modality_label")
+        or candidate.metadata.get("modality")
+        or candidate.diversity_features.get("portfolio_modality_label")
+        or candidate.diversity_features.get("modality")
+    )
+    if raw:
+        return str(raw)
+    return "small_molecule"
 
 
 def _first_score(*values: Any) -> float | None:

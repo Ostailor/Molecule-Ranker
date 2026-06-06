@@ -514,7 +514,7 @@ class ExternalWorkflowOrchestrator:
             plan_id=f"e2e-plan-{workflow_id}",
             session_id=f"e2e-session-{workflow_id}",
             user_goal=request.objective,
-            plan_summary="V2.7 governed end-to-end discovery workflow.",
+            plan_summary="V2.8 governed end-to-end discovery workflow.",
             steps=steps,
             required_approvals=["external_write"]
             if request.requested_external_write
@@ -671,7 +671,7 @@ def render_integration_operations_dashboard(dashboard: dict[str, Any] | None = N
         "<p class=\"notice\"><strong>End-to-end workflow</strong> execution is mocked or "
         "dry-run by default. Live external writes require explicit approval, governance "
         "permission, and deterministic validation before data can affect evidence or scoring.</p>"
-        "<section><h2>V2.7 capabilities</h2><ul>"
+        "<section><h2>V2.8 capabilities</h2><ul>"
         f"{caps}</ul></section>"
         "<section><h2>Workflow stages</h2><table><thead><tr><th>Stage</th><th>Policy</th>"
         f"</tr></thead><tbody>{rows}</tbody></table></section>"
@@ -710,7 +710,7 @@ def _stage_artifact(stage: str, request: EndToEndWorkflowRequest) -> WorkflowArt
         artifact_id=f"e2e-{stage}-{digest[:12]}",
         artifact_type=f"workflow_{stage}",
         stage=stage,
-        source="v2.7_end_to_end_runner",
+        source="v2.8_end_to_end_runner",
         sha256=digest,
         metadata={
             "scientific_truth": False,

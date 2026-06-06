@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-V2_SCHEMA_VERSION = "2.7"
-V2_CONTRACT_VERSION = "v2.7.0"
+V2_SCHEMA_VERSION = "2.8"
+V2_CONTRACT_VERSION = "v2.8.0"
 V2_API_CONTRACT_VERSION = "api.v2"
 
 ContractKind = Literal[
@@ -214,9 +214,75 @@ V2_ARTIFACT_SCHEMAS: dict[str, V2ArtifactSchemaContract] = {
             "lineage_links",
             "safety_constraints",
         ),
-        ("repair_plan", "audit_events", "warnings"),
-        "V2.7 bundles must preserve workflow state, lineage, validation gates, "
-        "and safety constraints.",
+        ("repair_plan", "audit_events", "warnings", "biologics_summary"),
+        "V2.8 bundles must preserve workflow state, lineage, validation gates, "
+        "safety constraints, and antibody-specific guardrails.",
+    ),
+    "antibody_sequence": _artifact_schema(
+        "antibody_sequence",
+        (
+            "candidate_id",
+            "candidate_name",
+            "origin",
+            "chain_sequences",
+            "hypothesis_only",
+            "evidence_boundary",
+        ),
+        (
+            "target_context_id",
+            "source_refs",
+            "exact_imported_experimental_result_ids",
+            "warnings",
+        ),
+        "Generated antibody sequences are computational hypotheses and require exact "
+        "imported experimental results before direct evidence is recorded.",
+    ),
+    "antibody_sequence_validation": _artifact_schema(
+        "antibody_sequence_validation",
+        (
+            "candidate_id",
+            "valid",
+            "chain_lengths",
+            "deterministic",
+            "errors",
+            "warnings",
+        ),
+        ("numbering_scheme", "cdr_annotations"),
+        "Antibody sequence validation is deterministic triage and does not establish binding.",
+    ),
+    "antibody_report_card": _artifact_schema(
+        "antibody_report_card",
+        (
+            "report_card_id",
+            "candidate_id",
+            "target_context",
+            "sequence_validation",
+            "numbering",
+            "novelty_check",
+            "developability",
+            "review_status",
+            "limitations",
+        ),
+        ("evidence_summary", "reviewer_decisions", "lineage_records"),
+        "Antibody report cards are review artifacts, not claims of binding, neutralization, "
+        "safety, developability, or manufacturability.",
+    ),
+    "antibody_result_bundle": _artifact_schema(
+        "antibody_result_bundle",
+        (
+            "workflow_id",
+            "antibody_candidates",
+            "target_contexts",
+            "validation_results",
+            "novelty_checks",
+            "developability_triage",
+            "review_gates",
+            "lineage_links",
+            "limitations",
+        ),
+        ("generation_plan", "approved_plugin_ids", "exact_imported_experimental_result_ids"),
+        "Antibody result bundles require lineage, deterministic validation, novelty checks, "
+        "developability triage, and expert review gates.",
     ),
 }
 
@@ -278,8 +344,44 @@ V2_RELEASE_CONTRACTS: tuple[V2ReleaseContract, ...] = (
         "schema",
         V2_ARTIFACT_SCHEMAS["end_to_end_result_bundle"].required_fields,
         compatibility_notes=(
-            "No breaking changes from the V2 contract; V2.7 adds additive end-to-end "
-            "workflow bundles without removing existing V2 API routes."
+            "No breaking changes from the V2 contract; V2.8 adds additive biologics "
+            "workflow bundle fields without removing existing V2 API routes."
+        ),
+    ),
+    _release_contract(
+        "antibody_sequence_schema",
+        "schema",
+        V2_ARTIFACT_SCHEMAS["antibody_sequence"].required_fields,
+        compatibility_notes=(
+            "No breaking changes from the V2 contract; V2.8 adds additive antibody "
+            "sequence artifacts."
+        ),
+    ),
+    _release_contract(
+        "antibody_sequence_validation_schema",
+        "schema",
+        V2_ARTIFACT_SCHEMAS["antibody_sequence_validation"].required_fields,
+        compatibility_notes=(
+            "No breaking changes from the V2 contract; V2.8 adds deterministic "
+            "antibody validation artifacts."
+        ),
+    ),
+    _release_contract(
+        "antibody_report_card_schema",
+        "schema",
+        V2_ARTIFACT_SCHEMAS["antibody_report_card"].required_fields,
+        compatibility_notes=(
+            "No breaking changes from the V2 contract; V2.8 adds antibody review "
+            "report-card artifacts."
+        ),
+    ),
+    _release_contract(
+        "antibody_result_bundle_schema",
+        "schema",
+        V2_ARTIFACT_SCHEMAS["antibody_result_bundle"].required_fields,
+        compatibility_notes=(
+            "No breaking changes from the V2 contract; V2.8 adds antibody and "
+            "biologics result bundles."
         ),
     ),
 )

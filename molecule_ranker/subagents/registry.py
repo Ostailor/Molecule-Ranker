@@ -51,6 +51,7 @@ def builtin_subagent_profiles() -> list[SubagentProfile]:
         ProgramManagerSubagent,
         EvidenceReviewerSubagent,
         MoleculeDesignerSubagent,
+        BiologicsEngineerSubagent,
         DevelopabilitySafetySubagent,
         ExperimentAnalystSubagent,
         PredictiveModelerSubagent,
@@ -185,6 +186,76 @@ MoleculeDesignerSubagent = _profile(
             "generated molecules are computational hypotheses only",
             "activity claims require exact imported evidence",
             "molecules must originate from approved generation/design tools",
+        ],
+    },
+)
+
+BiologicsEngineerSubagent = _profile(
+    subagent_id="biologics-engineer",
+    name="BiologicsEngineerSubagent",
+    role="biologics_engineer",
+    description=(
+        "Reviews antibody and biologic candidates, plans antibody-specific analysis, "
+        "and critiques generated antibody hypotheses."
+    ),
+    allowed=[
+        "biologics_retrieval",
+        "antibody_validation",
+        "antibody_developability",
+        "antibody_novelty",
+        "biologics_reports",
+        "review",
+        "portfolio",
+        "campaign",
+    ],
+    denied=[
+        "sequence_fabrication",
+        "epitope_fabrication",
+        "binding_claim",
+        "assay_result_fabrication",
+        "lab_protocol_write",
+        "expression_purification_protocol",
+        "dosing_guidance",
+        "generated_antibody_advancement_approval",
+    ],
+    permissions=[
+        "biologics:read",
+        "biologics:analyze",
+        "review:write",
+        "portfolio:read",
+        "campaign:plan",
+    ],
+    autonomy="execute_safe_tools",
+    guardrail_profile="biologics_engineering",
+    responsibilities=[
+        "review antibody and biologic candidates",
+        "plan antibody-specific analysis",
+        "use governed biologics tools",
+        "critique generated antibody hypotheses",
+        "check sequence, developability, and novelty summaries",
+    ],
+    cannot=[
+        "invent sequences",
+        "invent epitopes",
+        "invent binding claims",
+        "invent assay results",
+        "provide expression/purification/lab protocols",
+        "provide dosing",
+        "approve generated antibody advancement",
+    ],
+    extra_metadata={
+        "codex_tasks": [
+            "summarize_biologic_candidate",
+            "explain_antibody_liabilities",
+            "draft_biologics_review_questions",
+            "summarize_antigen_context",
+            "draft_biologics_campaign_summary",
+        ],
+        "generated_antibody_boundaries": [
+            "generated antibodies are computational hypotheses only",
+            "direct evidence requires exact imported experimental results",
+            "sequence similarity or model output cannot establish binding",
+            "generated antibodies require expert review before advancement",
         ],
     },
 )
@@ -392,6 +463,7 @@ PlatformOperatorSubagent = _profile(
 
 __all__ = [
     "CampaignPlannerSubagent",
+    "BiologicsEngineerSubagent",
     "DevelopabilitySafetySubagent",
     "EVIDENCE_CREATING_TOOL_CATEGORIES",
     "EvaluationValidatorSubagent",

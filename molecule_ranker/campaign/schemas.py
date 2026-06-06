@@ -51,7 +51,7 @@ _PROTOCOL_DETAIL_PATTERN = re.compile(
     r"\d+(?:\.\d+)?\s*(?:nm|um|mm|mg|ml|ul|hours?|hrs?|minutes?|mins?|seconds?|secs?|c)"
     r"|concentration|temperature|reagent|reagents|incubate|incubation|pipette|wash|"
     r"centrifuge|protocol step|step-by-step|synthetic route|synthesis route|animal dosing|"
-    r"human dosing|patient treatment"
+    r"human dosing|patient treatment|expression conditions|purification method|purification steps"
     r")\b",
     re.IGNORECASE,
 )

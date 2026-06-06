@@ -38,6 +38,21 @@ CLAIM_RE = re.compile(
     r"\b(?:safe|active|effective|binding|binds|synthesizable)\b",
     re.I,
 )
+ANTIBODY_OVERCLAIM_RE = re.compile(
+    r"\b(?:generated\s+)?(?:antibod(?:y|ies)|biologic(?:s)?|nanobod(?:y|ies)|"
+    r"protein\s+binder(?:s)?)\b.{0,80}\b(?:binds?|binding|neutraliz(?:e|es|ing|ation)|"
+    r"treats?|cures?|safe|developable|manufacturable|expressible)\b|"
+    r"\b(?:binds?|binding|neutraliz(?:e|es|ing|ation)|treats?|cures?|safe|"
+    r"developable|manufacturable|expressible)\b.{0,80}\b(?:generated\s+)?"
+    r"(?:antibod(?:y|ies)|biologic(?:s)?|nanobod(?:y|ies)|protein\s+binder(?:s)?)\b",
+    re.I,
+)
+BIOLOGICS_PROTOCOL_RE = re.compile(
+    r"\b(?:expression\s+protocol|purification\s+protocol|expression/purification|"
+    r"transfect|harvest\s+cells|protein\s+a\s+purification|elution\s+buffer|"
+    r"immunization\s+protocol)\b",
+    re.I,
+)
 MEDICAL_ADVICE_RE = re.compile(
     r"\b(?:diagnose|treat|treatment|patient|clinical use|prescribe|contraindication)\b",
     re.I,
@@ -242,9 +257,25 @@ class RuntimeGuardrailChecker:
             violations.append(
                 _violation("output", "unsupported_claim", "Blocked unsupported activity claim.")
             )
+        if ANTIBODY_OVERCLAIM_RE.search(text):
+            violations.append(
+                _violation(
+                    "output",
+                    "generated_antibody_overclaim",
+                    "Blocked unsupported generated antibody/biologics claim.",
+                )
+            )
         if MEDICAL_ADVICE_RE.search(text):
             violations.append(
                 _violation("output", "clinical_medical_advice", "Blocked clinical/medical advice.")
+            )
+        if BIOLOGICS_PROTOCOL_RE.search(text):
+            violations.append(
+                _violation(
+                    "output",
+                    "biologics_protocol",
+                    "Blocked biologics expression, purification, or immunization protocol text.",
+                )
             )
         if LAB_PROTOCOL_RE.search(text):
             violations.append(_violation("output", "lab_protocol", "Blocked lab protocol text."))

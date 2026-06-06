@@ -26,6 +26,11 @@ REQUIRED_LIMITATIONS = [
     ),
     "No claims of activity, safety, or efficacy are made.",
     "Codex summaries are drafted only from deterministic bundle data.",
+    "Antibody generation is disabled by default and requires approved tool plugins.",
+    (
+        "Generated antibodies are computational hypotheses only and do not establish "
+        "binding, neutralization, treatment, safety, developability, or manufacturability."
+    ),
 ]
 
 FORBIDDEN_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -36,6 +41,11 @@ FORBIDDEN_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bactivity\b", re.I), "screening observation"),
     (re.compile(r"\bsafety\b", re.I), "risk review"),
     (re.compile(r"\befficacy\b", re.I), "outcome review"),
+    (re.compile(r"\bneutraliz(?:e|es|ation)\b", re.I), "functional claim"),
+    (re.compile(r"\btreats?\b", re.I), "clinical-use claim"),
+    (re.compile(r"\bcures?\b", re.I), "clinical-use claim"),
+    (re.compile(r"\bmanufacturable\b", re.I), "manufacturing risk review"),
+    (re.compile(r"\bvalidated\s+binder\b", re.I), "review candidate"),
 )
 
 
@@ -55,6 +65,7 @@ class ResultBundleInput(ResultBundleModel):
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     candidate_summary: dict[str, Any] = Field(default_factory=dict)
     generated_molecule_summary: dict[str, Any] = Field(default_factory=dict)
+    biologics_summary: dict[str, Any] = Field(default_factory=dict)
     evidence_summary: dict[str, Any] = Field(default_factory=dict)
     developability_summary: dict[str, Any] = Field(default_factory=dict)
     experimental_evidence_summary: dict[str, Any] = Field(default_factory=dict)
@@ -151,6 +162,7 @@ class EndToEndResultBundleGenerator:
             "developability_summary": bundle_input.developability_summary,
             "experimental_evidence_summary": bundle_input.experimental_evidence_summary,
             "graph_hypothesis_summary": bundle_input.graph_hypothesis_summary,
+            "biologics_summary": bundle_input.biologics_summary,
             "codex_subagent_copilot_summary": bundle_input.codex_summary,
             "approval_summary": bundle_input.approval_summary,
             "guardrail_summary": bundle_input.guardrail_summary,
@@ -173,6 +185,7 @@ class EndToEndResultBundleGenerator:
             ],
             candidate_summary=bundle_input.candidate_summary,
             generated_summary=bundle_input.generated_molecule_summary,
+            biologics_summary=bundle_input.biologics_summary,
             evidence_summary={
                 **bundle_input.evidence_summary,
                 "experimental_evidence": bundle_input.experimental_evidence_summary,
@@ -286,6 +299,7 @@ class EndToEndResultBundleGenerator:
         summary_lines = [
             ("Candidates", bundle.candidate_summary),
             ("Generated molecules", bundle.generated_summary),
+            ("Biologics and antibodies", bundle.biologics_summary),
             ("Evidence", bundle.evidence_summary),
             ("Developability", metadata.get("developability_summary", {})),
             ("Graph and hypotheses", metadata.get("graph_hypothesis_summary", {})),

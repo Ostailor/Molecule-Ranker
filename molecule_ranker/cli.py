@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
 import typer
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from molecule_ranker import __version__
 from molecule_ranker.agents.base import AgentExecutionError, PipelineContext
@@ -330,8 +330,12 @@ validate_app = typer.Typer(
     help="Run molecule-ranker validation suites.",
     no_args_is_help=True,
 )
+biologics_app = typer.Typer(
+    help="Governed biologics and antibody discovery commands.",
+    no_args_is_help=True,
+)
 e2e_app = typer.Typer(
-    help="Run and inspect V2.7 end-to-end governed discovery workflows.",
+    help="Run and inspect V2.8 end-to-end governed discovery workflows.",
     no_args_is_help=True,
 )
 policy_app = typer.Typer(
@@ -566,6 +570,7 @@ app.add_typer(user_app, name="user")
 app.add_typer(auth_cli_app, name="auth")
 app.add_typer(config_app, name="config")
 app.add_typer(validate_app, name="validate")
+app.add_typer(biologics_app, name="biologics")
 app.add_typer(e2e_app, name="e2e")
 app.add_typer(policy_app, name="policy")
 app.add_typer(governance_app, name="governance")
@@ -5332,7 +5337,7 @@ def validate_e2e_command(
     ] = "validation-project",
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Validate a deterministic V2.7 end-to-end workflow bundle."""
+    """Validate a deterministic V2.8 end-to-end workflow bundle."""
     from molecule_ranker.e2e.validation import EndToEndWorkflowValidator
     from molecule_ranker.e2e.workflow_runner import EndToEndWorkflowRunner, WorkflowRunRequest
 
@@ -5417,7 +5422,7 @@ def e2e_run_command(
         typer.Option("--unavailable-data", help="Simulate unavailable live step type."),
     ] = None,
 ) -> None:
-    """Run a V2.7 governed end-to-end workflow."""
+    """Run a V2.8 governed end-to-end workflow."""
     request = _e2e_workflow_request(
         workflow=workflow,
         disease=disease,
@@ -5613,7 +5618,7 @@ def e2e_eval_command(
     ] = "default",
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run the deterministic V2.7 end-to-end eval suite."""
+    """Run the deterministic V2.8 end-to-end eval suite."""
     from molecule_ranker.e2e.evals import run_end_to_end_eval_suite
 
     try:
@@ -5769,6 +5774,448 @@ def validate_repair_guardrails_command(
         typer.echo(f"Safe repair cases allowed: {report.allowed_count}/{len(report.safe_results)}")
         typer.echo(f"JSON: {output_dir / 'repair_guardrail_validation.json'}")
         typer.echo(f"Markdown: {output_dir / 'repair_guardrail_validation.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@validate_app.command("biologics-guardrails")
+def validate_biologics_guardrails_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, dir_okay=True, help="Validation output root."),
+    ] = Path("."),
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run V2.8 biologics and generated-antibody guardrail validation."""
+    from molecule_ranker.validation import run_biologics_guardrail_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "biologics_guardrails"
+    report = run_biologics_guardrail_validation(output_dir)
+    payload = report.as_dict()
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Biologics guardrail validation: {report.status}")
+        typer.echo(
+            f"Forbidden cases blocked: {report.blocked_count}/{len(report.red_team_results)}"
+        )
+        typer.echo(f"Allowed cases passed: {report.allowed_count}/{len(report.safe_results)}")
+        typer.echo(f"JSON: {output_dir / 'biologics_guardrail_validation.json'}")
+        typer.echo(f"Markdown: {output_dir / 'biologics_guardrail_validation.md'}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@biologics_app.command("retrieve")
+def biologics_retrieve_command(
+    target_symbols: Annotated[
+        list[str] | None,
+        typer.Option("--target-symbol", help="Target symbol to query. Repeatable."),
+    ] = None,
+    disease_name: Annotated[
+        str | None,
+        typer.Option("--disease", help="Disease context for retrieval."),
+    ] = None,
+    records: Annotated[
+        Path | None,
+        typer.Option(
+            "--records",
+            exists=True,
+            dir_okay=False,
+            help="Source-backed biologic records JSON.",
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            help="Directory for biologics retrieval artifacts.",
+        ),
+    ] = None,
+) -> None:
+    """Retrieve existing source-backed biologic candidates."""
+    from molecule_ranker.biologics.retrieval import retrieve_existing_biologics
+
+    result = retrieve_existing_biologics(
+        target_symbols=target_symbols or (),
+        disease_name=disease_name,
+        user_candidate_records=_biologics_record_list(records),
+        output_dir=output_dir,
+    )
+    _echo_json(
+        {
+            "biologic_candidates": [
+                candidate.model_dump(mode="json") for candidate in result.candidates
+            ],
+            "antibody_sequences": [
+                sequence.model_dump(mode="json") for sequence in result.sequences
+            ],
+            "biologic_evidence": result.evidence_items,
+            "warnings": result.warnings,
+            "output_files": {
+                name: str(path) for name, path in result.output_files.items()
+            },
+        }
+    )
+
+
+@biologics_app.command("validate-sequence")
+def biologics_validate_sequence_command(
+    sequence: Annotated[
+        str,
+        typer.Option("--sequence", help="Antibody amino-acid sequence to validate."),
+    ],
+    sequence_id: Annotated[
+        str,
+        typer.Option(
+            "--sequence-id",
+            help="Sequence identifier for the validation artifact.",
+        ),
+    ] = "seq-cli-1",
+    biologic_id: Annotated[
+        str | None,
+        typer.Option("--biologic-id", help="Optional biologic candidate identifier."),
+    ] = None,
+    chain_type: Annotated[
+        str,
+        typer.Option("--chain-type", help="Antibody chain type."),
+    ] = "heavy",
+    generated: Annotated[
+        bool,
+        typer.Option("--generated/--imported", help="Mark the sequence as generated."),
+    ] = False,
+    allow_ambiguous: Annotated[
+        bool,
+        typer.Option(
+            "--allow-ambiguous",
+            help="Warn, rather than fail, for ambiguous residues when schema accepts them.",
+        ),
+    ] = False,
+) -> None:
+    """Validate an antibody sequence with deterministic heuristic checks."""
+    antibody_sequence, construction_error = _biologics_cli_sequence(
+        sequence=sequence,
+        sequence_id=sequence_id,
+        biologic_id=biologic_id,
+        chain_type=chain_type,
+        generated=generated,
+    )
+    if construction_error is not None:
+        _echo_json(construction_error)
+        raise typer.Exit(code=1)
+
+    from molecule_ranker.biologics.validation import validate_antibody_sequence
+
+    payload = validate_antibody_sequence(
+        antibody_sequence,
+        allow_ambiguous=allow_ambiguous,
+    )
+    _echo_json(payload)
+    if not payload["valid"] or payload["rejected"]:
+        raise typer.Exit(code=1)
+
+
+@biologics_app.command("number-sequence")
+def biologics_number_sequence_command(
+    sequence: Annotated[
+        str,
+        typer.Option("--sequence", help="Antibody amino-acid sequence."),
+    ],
+    sequence_id: Annotated[str, typer.Option("--sequence-id")] = "seq-cli-1",
+    biologic_id: Annotated[str | None, typer.Option("--biologic-id")] = None,
+    chain_type: Annotated[str, typer.Option("--chain-type")] = "heavy",
+    scheme: Annotated[str, typer.Option("--scheme", help="Numbering scheme.")] = "imgt",
+) -> None:
+    """Number an antibody sequence using configured tools or heuristic fallback."""
+    antibody_sequence, construction_error = _biologics_cli_sequence(
+        sequence=sequence,
+        sequence_id=sequence_id,
+        biologic_id=biologic_id,
+        chain_type=chain_type,
+    )
+    if construction_error is not None:
+        _echo_json(construction_error)
+        raise typer.Exit(code=1)
+
+    from molecule_ranker.biologics.numbering import number_antibody_sequence
+
+    numbering = number_antibody_sequence(antibody_sequence, scheme=scheme)  # type: ignore[arg-type]
+    _echo_json({"numbering": numbering.model_dump(mode="json")})
+
+
+@biologics_app.command("annotate-cdr")
+def biologics_annotate_cdr_command(
+    sequence: Annotated[
+        str,
+        typer.Option("--sequence", help="Antibody amino-acid sequence."),
+    ],
+    sequence_id: Annotated[str, typer.Option("--sequence-id")] = "seq-cli-1",
+    biologic_id: Annotated[str | None, typer.Option("--biologic-id")] = None,
+    chain_type: Annotated[str, typer.Option("--chain-type")] = "heavy",
+    scheme: Annotated[str, typer.Option("--scheme", help="Numbering scheme.")] = "imgt",
+) -> None:
+    """Annotate CDRs when numbering confidence permits."""
+    antibody_sequence, construction_error = _biologics_cli_sequence(
+        sequence=sequence,
+        sequence_id=sequence_id,
+        biologic_id=biologic_id,
+        chain_type=chain_type,
+    )
+    if construction_error is not None:
+        _echo_json(construction_error)
+        raise typer.Exit(code=1)
+
+    from molecule_ranker.biologics.numbering import (
+        annotate_cdrs,
+        number_antibody_sequence,
+        validate_cdr_regions,
+    )
+
+    numbering = number_antibody_sequence(antibody_sequence, scheme=scheme)  # type: ignore[arg-type]
+    annotation = annotate_cdrs(antibody_sequence, numbering)
+    _echo_json(
+        {
+            "numbering": numbering.model_dump(mode="json"),
+            "cdr_annotation": annotation.model_dump(mode="json"),
+            "cdr_findings": validate_cdr_regions(annotation),
+        }
+    )
+
+
+@biologics_app.command("assess-developability")
+def biologics_assess_developability_command(
+    sequence: Annotated[
+        str,
+        typer.Option("--sequence", help="Antibody amino-acid sequence."),
+    ],
+    sequence_id: Annotated[str, typer.Option("--sequence-id")] = "seq-cli-1",
+    biologic_id: Annotated[str, typer.Option("--biologic-id")] = "bio-cli-1",
+    chain_type: Annotated[str, typer.Option("--chain-type")] = "heavy",
+    generated: Annotated[bool, typer.Option("--generated/--imported")] = False,
+) -> None:
+    """Assess antibody developability heuristics for review triage."""
+    antibody_sequence, construction_error = _biologics_cli_sequence(
+        sequence=sequence,
+        sequence_id=sequence_id,
+        biologic_id=biologic_id,
+        chain_type=chain_type,
+        generated=generated,
+    )
+    if construction_error is not None:
+        _echo_json(construction_error)
+        raise typer.Exit(code=1)
+
+    from molecule_ranker.biologics.developability import assess_antibody_developability
+
+    assessment = assess_antibody_developability(
+        assessment_id=f"dev-{sequence_id}",
+        biologic_id=biologic_id,
+        sequences=[antibody_sequence],
+    )
+    _echo_json({"developability": assessment.model_dump(mode="json")})
+
+
+@biologics_app.command("assess-novelty")
+def biologics_assess_novelty_command(
+    sequence: Annotated[
+        str,
+        typer.Option("--sequence", help="Antibody amino-acid sequence."),
+    ],
+    sequence_id: Annotated[str, typer.Option("--sequence-id")] = "seq-cli-1",
+    biologic_id: Annotated[str, typer.Option("--biologic-id")] = "bio-cli-1",
+    chain_type: Annotated[str, typer.Option("--chain-type")] = "heavy",
+    known_sequences: Annotated[
+        Path | None,
+        typer.Option(
+            "--known-sequences",
+            exists=True,
+            dir_okay=False,
+            help="Known sequence mapping JSON.",
+        ),
+    ] = None,
+    generated: Annotated[bool, typer.Option("--generated/--imported")] = False,
+) -> None:
+    """Check antibody novelty against supplied/configured comparison sources."""
+    antibody_sequence, construction_error = _biologics_cli_sequence(
+        sequence=sequence,
+        sequence_id=sequence_id,
+        biologic_id=biologic_id,
+        chain_type=chain_type,
+        generated=generated,
+    )
+    if construction_error is not None:
+        _echo_json(construction_error)
+        raise typer.Exit(code=1)
+
+    from molecule_ranker.biologics.novelty import assess_antibody_novelty
+
+    assessment = assess_antibody_novelty(
+        novelty_id=f"nov-{sequence_id}",
+        biologic_id=biologic_id,
+        sequences=[antibody_sequence],
+        known_sequences=_biologics_known_sequence_mapping(known_sequences),
+    )
+    _echo_json({"novelty": assessment.model_dump(mode="json")})
+
+
+@biologics_app.command("generate")
+def biologics_generate_command(
+    enable_antibody_generation: Annotated[
+        bool,
+        typer.Option(
+            "--enable-antibody-generation/--disable-antibody-generation",
+            help="Explicitly enable governed antibody hypothesis generation.",
+        ),
+    ] = False,
+    method: Annotated[
+        str,
+        typer.Option(
+            "--method",
+            help="Generator method: null, conservative-cdr-mutator, or external-plugin.",
+        ),
+    ] = "null",
+) -> None:
+    """Run an approved antibody generator interface when explicitly enabled."""
+    if not enable_antibody_generation:
+        _echo_json(
+            {
+                "generated_antibody_hypotheses": [],
+                "generation_enabled": False,
+                "warnings": [
+                    "Antibody generation is disabled by default.",
+                    "Generated antibodies are computational hypotheses only.",
+                ],
+            }
+        )
+        return
+
+    if method == "external-plugin":
+        from molecule_ranker.biologics.generation import EXTERNAL_PLUGIN_DISABLED_WARNING
+
+        _echo_json(
+            {
+                "generated_antibody_hypotheses": [],
+                "generation_enabled": False,
+                "warnings": [EXTERNAL_PLUGIN_DISABLED_WARNING],
+            }
+        )
+        raise typer.Exit(code=1)
+
+    if method not in {"null", "conservative-cdr-mutator"}:
+        raise typer.BadParameter(
+            "method must be null, conservative-cdr-mutator, or external-plugin"
+        )
+
+    _echo_json(
+        {
+            "generated_antibody_hypotheses": [],
+            "generation_enabled": True,
+            "generation_method": method,
+            "warnings": [
+                "No seed sequences were supplied through this CLI command.",
+                "Generated antibodies are computational hypotheses only.",
+            ],
+        }
+    )
+
+
+@biologics_app.command("rank")
+def biologics_rank_command(
+    candidates: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidates",
+            exists=True,
+            dir_okay=False,
+            help="Biologic candidates JSON.",
+        ),
+    ] = None,
+) -> None:
+    """Rank biologic candidates separately from generated antibody hypotheses."""
+    from molecule_ranker.biologics.schemas import BiologicCandidate
+    from molecule_ranker.biologics.scoring import rank_biologic_candidates
+
+    ranked = rank_biologic_candidates(
+        [
+            BiologicCandidate.model_validate(record)
+            for record in _biologics_candidate_records(candidates)
+        ]
+    )
+    _echo_json(
+        {
+            "ranked_biologic_candidates": [
+                {
+                    **candidate.model_dump(mode="json"),
+                    "rank": rank,
+                }
+                for rank, candidate in enumerate(ranked, start=1)
+            ],
+            "generated_antibody_hypotheses": [],
+            "warnings": [
+                "Biologic candidates and generated antibody hypotheses are ranked separately."
+            ],
+        }
+    )
+
+
+@biologics_app.command("report")
+def biologics_report_command(
+    candidate: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidate",
+            exists=True,
+            dir_okay=False,
+            help="Biologic candidate JSON.",
+        ),
+    ] = None,
+    biologic_id: Annotated[str, typer.Option("--biologic-id")] = "bio-cli-1",
+    name: Annotated[str, typer.Option("--name")] = "Biologic candidate",
+    biologic_type: Annotated[str, typer.Option("--biologic-type")] = "monoclonal_antibody",
+    origin: Annotated[str, typer.Option("--origin")] = "existing",
+    target_symbols: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--target-symbol",
+            help="Target symbol for inline report candidate. Repeatable.",
+        ),
+    ] = None,
+    disease_name: Annotated[str | None, typer.Option("--disease")] = None,
+) -> None:
+    """Build an antibody/biologic candidate report card."""
+    from molecule_ranker.biologics.reports import build_biologic_report_card
+
+    biologic_candidate = _biologics_report_candidate(
+        candidate,
+        biologic_id=biologic_id,
+        name=name,
+        biologic_type=biologic_type,
+        origin=origin,
+        target_symbols=target_symbols or [],
+        disease_name=disease_name,
+    )
+    _echo_json({"report_card": build_biologic_report_card(candidate=biologic_candidate)})
+
+
+@biologics_app.command("validate-guardrails")
+def biologics_validate_guardrails_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option(
+            "--root",
+            file_okay=False,
+            dir_okay=True,
+            help="Validation output root.",
+        ),
+    ] = Path("."),
+) -> None:
+    """Run biologics and generated-antibody guardrail validation."""
+    from molecule_ranker.validation import run_biologics_guardrail_validation
+
+    output_dir = root_dir / ".molecule-ranker" / "validation" / "biologics_guardrails"
+    report = run_biologics_guardrail_validation(output_dir)
+    _echo_json(report.as_dict())
     if report.status != "pass":
         raise typer.Exit(code=1)
 
@@ -7126,7 +7573,7 @@ def v2_end_to_end_command(
     ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
 ) -> None:
-    """Run the V2.7 governed end-to-end project workflow."""
+    """Run the V2.8 governed end-to-end project workflow."""
     from molecule_ranker.integrations.operations import (
         EndToEndWorkflowRequest,
         EndToEndWorkflowRunner,
@@ -7159,7 +7606,7 @@ def v2_end_to_end_command(
     if json_output:
         _echo_json(payload)
     else:
-        typer.echo(f"V2.7 end-to-end workflow: {bundle.status}")
+        typer.echo(f"V2.8 end-to-end workflow: {bundle.status}")
         typer.echo(f"Bundle: {payload['artifacts']['json']}")
 
 
@@ -18492,6 +18939,136 @@ def _parse_cli_datetime(value: str) -> datetime:
 
 def _read_cli_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _biologics_record_list(path: Path | None) -> list[dict[str, Any]]:
+    if path is None:
+        return []
+    payload = _read_cli_json(path)
+    if isinstance(payload, dict):
+        for key in (
+            "biologic_candidates",
+            "records",
+            "candidates",
+            "user_candidate_records",
+        ):
+            values = payload.get(key)
+            if isinstance(values, list):
+                return [dict(value) for value in values if isinstance(value, dict)]
+        return [payload]
+    if isinstance(payload, list):
+        return [dict(value) for value in payload if isinstance(value, dict)]
+    raise typer.BadParameter("biologics records JSON must be an object or list of objects")
+
+
+def _biologics_candidate_records(path: Path | None) -> list[dict[str, Any]]:
+    if path is None:
+        return []
+    payload = _read_cli_json(path)
+    if isinstance(payload, dict):
+        values = payload.get("biologic_candidates")
+        if isinstance(values, list):
+            return [dict(value) for value in values if isinstance(value, dict)]
+        return [payload]
+    if isinstance(payload, list):
+        return [dict(value) for value in payload if isinstance(value, dict)]
+    raise typer.BadParameter("candidate JSON must be an object or list of objects")
+
+
+def _biologics_known_sequence_mapping(path: Path | None) -> dict[str, str]:
+    if path is None:
+        return {}
+    payload = _read_cli_json(path)
+    if isinstance(payload, dict):
+        values = payload.get("known_sequences", payload)
+        if isinstance(values, dict):
+            return {
+                str(record_id): str(sequence)
+                for record_id, sequence in values.items()
+                if isinstance(sequence, str)
+            }
+    raise typer.BadParameter("--known-sequences must be a JSON object mapping IDs to sequences")
+
+
+def _biologics_cli_sequence(
+    *,
+    sequence: str,
+    sequence_id: str,
+    biologic_id: str | None = None,
+    chain_type: str = "heavy",
+    generated: bool = False,
+) -> tuple[Any, dict[str, Any] | None]:
+    from molecule_ranker.biologics.schemas import AntibodySequence
+
+    normalized = "".join(sequence.split()).upper()
+    try:
+        antibody_sequence = AntibodySequence(
+            sequence_id=sequence_id,
+            biologic_id=biologic_id,
+            chain_type=chain_type,  # type: ignore[arg-type]
+            amino_acid_sequence=normalized,
+            sequence_length=len(normalized),
+            species_origin=None,
+            is_generated=generated,
+            parent_sequence_ids=[],
+            source="generated" if generated else "user_supplied",
+            source_record_id=None,
+            metadata={},
+        )
+    except ValidationError as exc:
+        return None, {
+            "sequence_id": sequence_id,
+            "valid": False,
+            "rejected": generated,
+            "sequence_length": len(normalized),
+            "chain_type": chain_type,
+            "is_generated": generated,
+            "errors": [error["msg"] for error in exc.errors()],
+            "warnings": (
+                ["Generated antibody sequences are computational hypotheses only."]
+                if generated
+                else []
+            ),
+            "liability_flags": [],
+            "duplicated_sequence_ids": [],
+            "deterministic": True,
+        }
+    return antibody_sequence, None
+
+
+def _biologics_report_candidate(
+    path: Path | None,
+    *,
+    biologic_id: str,
+    name: str,
+    biologic_type: str,
+    origin: str,
+    target_symbols: list[str],
+    disease_name: str | None,
+) -> Any:
+    from molecule_ranker.biologics.schemas import BiologicCandidate
+
+    if path is not None:
+        payload = _read_cli_json(path)
+        if isinstance(payload, dict) and isinstance(payload.get("report_card"), dict):
+            payload = payload["report_card"]
+        return BiologicCandidate.model_validate(payload)
+    return BiologicCandidate(
+        biologic_id=biologic_id,
+        name=name,
+        biologic_type=biologic_type,  # type: ignore[arg-type]
+        origin=origin,  # type: ignore[arg-type]
+        target_symbols=target_symbols,
+        antigen_names=[],
+        disease_name=disease_name,
+        identifiers={},
+        sequence_ids=[],
+        structure_ids=[],
+        evidence_item_ids=[],
+        direct_experimental_evidence=False,
+        warnings=[],
+        metadata={},
+    )
 
 
 def _load_governance_state_models(

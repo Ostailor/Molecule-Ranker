@@ -9,6 +9,7 @@ SubagentRole = Literal[
     "program_manager",
     "evidence_reviewer",
     "molecule_designer",
+    "biologics_engineer",
     "developability_safety",
     "experiment_analyst",
     "predictive_modeler",

@@ -171,8 +171,13 @@ class PortfolioOptimizationAgent(BaseAgent):
         candidates = build_portfolio_candidates(
             existing_candidates=_existing_candidates(context.candidates),
             generated_molecules=_generated_candidates(context),
+            biologic_candidates=_biologic_candidates(context),
+            generated_antibodies=_generated_antibodies(context),
             experimental_results=_experimental_results(context),
             disease_name=_disease_name(context),
+            include_biologics_in_mixed_portfolio=bool(
+                context.config.get("enable_mixed_biologics_portfolio", False)
+            ),
         )
         budget = ResourceBudget(
             budget_id="portfolio-agent-budget",
@@ -230,6 +235,25 @@ def _generated_candidates(
     context: PipelineContext,
 ) -> list[GeneratedMoleculeHypothesis]:
     return list(context.generated_candidates)
+
+
+def _biologic_candidates(context: PipelineContext) -> list[Any]:
+    payload = context.config.get("biologics")
+    if not isinstance(payload, dict):
+        return []
+    candidates = payload.get("candidates") or payload.get("biologic_candidates") or []
+    return list(candidates) if isinstance(candidates, list) else []
+
+
+def _generated_antibodies(context: PipelineContext) -> list[Any]:
+    payload = context.config.get("biologics")
+    if not isinstance(payload, dict):
+        return []
+    generated = payload.get("generated_antibodies") or payload.get(
+        "generated_antibody_hypotheses",
+        [],
+    )
+    return list(generated) if isinstance(generated, list) else []
 
 
 def _experimental_results(context: PipelineContext) -> list[AssayResult]:

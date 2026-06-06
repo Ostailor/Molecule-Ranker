@@ -88,6 +88,11 @@ def _bundle_input() -> ResultBundleInput:
         ],
         candidate_summary={"count": 2},
         generated_molecule_summary={"count": 0, "review_required": True},
+        biologics_summary={
+            "antibody_generation_enabled": False,
+            "review_gate_required": True,
+            "generated_antibodies_with_direct_evidence": 0,
+        },
         evidence_summary={"source_backed_items": 1},
         developability_summary={"reviewed_items": 0},
         experimental_evidence_summary={"validated_assay_results": 1},
@@ -144,6 +149,18 @@ def test_limitations_included(tmp_path) -> None:
     assert "not scientific evidence" in limitation_text
     assert "no medical advice" in limitation_text
     assert "dry-run only" in limitation_text
+    assert "antibody generation is disabled by default" in limitation_text
+
+
+def test_biologics_summary_included(tmp_path) -> None:
+    generated = EndToEndResultBundleGenerator(now=lambda: NOW).generate(
+        _bundle_input(),
+        output_dir=tmp_path,
+    )
+    payload = json.loads(generated.files["json"].read_text())
+
+    assert payload["biologics_summary"]["antibody_generation_enabled"] is False
+    assert payload["metadata"]["biologics_summary"]["review_gate_required"] is True
 
 
 def test_forbidden_text_absent(tmp_path) -> None:

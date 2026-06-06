@@ -376,7 +376,7 @@ def _policy(**overrides: object) -> AgentGovernancePolicy:
         "policy_id": "policy-1",
         "org_id": "org-1",
         "name": "Default governed runtime agent policy",
-        "version": "2.7.0",
+        "version": "2.8.0",
         "status": "active",
         "max_autonomy_level": "execute_with_approval",
         "allowed_agent_ids": ["agent-ranking"],

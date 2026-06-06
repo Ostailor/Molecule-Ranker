@@ -27,6 +27,21 @@ CLINICAL_SAFETY_RE = re.compile(
     r"\b(?:clinically safe|safe in patients|unsafe in patients|approved treatment)\b",
     re.I,
 )
+ANTIBODY_OVERCLAIM_RE = re.compile(
+    r"\b(?:generated\s+)?(?:antibod(?:y|ies)|biologic(?:s)?|nanobod(?:y|ies)|"
+    r"protein\s+binder(?:s)?)\b.{0,80}\b(?:binds?|binding|neutraliz(?:e|es|ing|ation)|"
+    r"treats?|cures?|safe|developable|manufacturable|expressible)\b|"
+    r"\b(?:binds?|binding|neutraliz(?:e|es|ing|ation)|treats?|cures?|safe|"
+    r"developable|manufacturable|expressible)\b.{0,80}\b(?:generated\s+)?"
+    r"(?:antibod(?:y|ies)|biologic(?:s)?|nanobod(?:y|ies)|protein\s+binder(?:s)?)\b",
+    re.I,
+)
+BIOLOGICS_PROTOCOL_RE = re.compile(
+    r"\b(?:expression\s+protocol|purification\s+protocol|expression/purification|"
+    r"transfect|harvest\s+cells|protein\s+a\s+purification|elution\s+buffer|"
+    r"immunization\s+protocol)\b",
+    re.I,
+)
 POLICY_PERMISSION_RE = re.compile(
     r"\b(?:approve stage gate|approve campaign|external write|policy override|"
     r"destructive action)\b",
@@ -124,6 +139,7 @@ def review_result(
     critiques.extend(_uncertainty_critiques(result, critic_subagent_id))
     critiques.extend(_contradiction_critiques(result, critic_subagent_id))
     critiques.extend(_safety_critiques(result, critic_subagent_id))
+    critiques.extend(_biologics_critiques(result, critic_subagent_id))
     critiques.extend(_operational_critiques(result, critic_subagent_id))
     if not critiques:
         critiques.append(
@@ -386,6 +402,38 @@ def _safety_critiques(
             required_fixes=["Reframe as non-clinical triage or escalate."],
             confidence=0.89,
             metadata={"fixable": True},
+        )
+    ]
+
+
+def _biologics_critiques(
+    result: SubagentResult,
+    critic_subagent_id: str,
+) -> list[SubagentCritique]:
+    text = _result_text(result)
+    findings: list[str] = []
+    if ANTIBODY_OVERCLAIM_RE.search(text):
+        findings.append("Output makes an unsupported generated antibody or biologics claim.")
+    if BIOLOGICS_PROTOCOL_RE.search(text):
+        findings.append("Output includes expression, purification, or immunization procedure text.")
+    if not findings:
+        return []
+    return [
+        _critique(
+            critic_subagent_id=critic_subagent_id,
+            result=result,
+            critique_type="scientific_guardrail",
+            passed=False,
+            findings=findings,
+            required_fixes=[
+                "Remove unsupported biologics claims or procedure text and escalate if needed."
+            ],
+            confidence=0.93,
+            metadata={
+                "fixable": False,
+                "non_overridable": True,
+                "issue_codes": ["biologics_guardrail"],
+            },
         )
     ]
 

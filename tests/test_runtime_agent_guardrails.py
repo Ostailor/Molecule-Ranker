@@ -69,6 +69,31 @@ def test_lab_protocol_text_blocked() -> None:
     assert any("dosing" in violation.message for violation in result.violations)
 
 
+def test_unsafe_biologics_protocol_output_blocked() -> None:
+    checker = RuntimeGuardrailChecker()
+
+    result = checker.check_output(
+        "Expression protocol: transfect cells, harvest cells, then protein A purification.",
+    )
+
+    assert result.allowed is False
+    assert any("biologics expression" in violation.message for violation in result.violations)
+
+
+def test_generated_antibody_overclaim_blocked() -> None:
+    checker = RuntimeGuardrailChecker()
+
+    result = checker.check_output(
+        "The generated antibody binds TNF and is safe, developable, and manufacturable.",
+    )
+
+    assert result.allowed is False
+    assert any(
+        violation.code == "generated_antibody_overclaim"
+        for violation in result.violations
+    )
+
+
 def test_unsupported_score_mutation_blocked() -> None:
     checker = RuntimeGuardrailChecker()
     result = RuntimeToolResult(

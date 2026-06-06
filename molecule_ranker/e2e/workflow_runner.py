@@ -1,4 +1,4 @@
-"""End-to-end governed workflow runner for V2.7 discovery operations."""
+"""End-to-end governed workflow runner for V2.8 discovery operations."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from molecule_ranker.e2e.lineage import ExternalLineageTracker
 from molecule_ranker.e2e.schemas import (
@@ -44,11 +44,19 @@ class WorkflowRunRequest(BaseModel):
     requested_external_write: bool = False
     approvals: list[str] = Field(default_factory=list)
     governance_permissions: list[str] = Field(default_factory=list)
+    antibody_generation_enabled: bool = False
+    approved_antibody_generation_plugin_ids: list[str] = Field(default_factory=list)
     unavailable_required_data: list[str] = Field(default_factory=list)
     config: EndToEndWorkflowRunnerConfig = Field(
         default_factory=EndToEndWorkflowRunnerConfig
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_approved_antibody_plugin_when_enabled(self) -> WorkflowRunRequest:
+        if self.antibody_generation_enabled and not self.approved_antibody_generation_plugin_ids:
+            raise ValueError("antibody generation requires approved plugin ids")
+        return self
 
 
 class WorkflowRunResult(BaseModel):
@@ -229,13 +237,14 @@ class EndToEndWorkflowRunner:
                 **request.metadata,
                 "runner": "EndToEndWorkflowRunner",
                 "result_bundle_is_scientific_evidence": False,
+                "antibody_generation_enabled": request.antibody_generation_enabled,
             },
         )
 
     def _build_steps(
         self, workflow_id: str, request: WorkflowRunRequest
     ) -> list[EndToEndWorkflowStep]:
-        templates = self._workflow_templates()[request.workflow_type]
+        templates = self._templates_for_request(request)
         steps: list[EndToEndWorkflowStep] = []
         for index, template in enumerate(templates):
             required = template.required
@@ -258,6 +267,28 @@ class EndToEndWorkflowRunner:
             ):
                 metadata.update(
                     self._integration_sync_metadata(request=request)
+                )
+            if (
+                request.workflow_type == "biologics_discovery_loop"
+                and template.metadata.get("operation") == "biologics_portfolio_campaign"
+            ):
+                metadata.update(
+                    self._biologics_portfolio_campaign_metadata(request=request)
+                )
+            if template.step_type == "antibody_generation":
+                metadata.update(
+                    {
+                        "enabled": request.antibody_generation_enabled,
+                        "approved_plugin_ids": list(
+                            request.approved_antibody_generation_plugin_ids
+                        ),
+                        "computational_hypothesis_only": True,
+                        "deterministic_validation_required": True,
+                        "novelty_check_required": True,
+                        "developability_triage_required": True,
+                        "review_gate_required": True,
+                        "result_bundle_lineage_required": True,
+                    }
                 )
 
             output_artifact_id = (
@@ -305,6 +336,29 @@ class EndToEndWorkflowRunner:
         return {
             "planned_external_write": False,
             "external_system_ids": ["read-only-integration"],
+        }
+
+    def _biologics_portfolio_campaign_metadata(
+        self, request: WorkflowRunRequest
+    ) -> dict[str, Any]:
+        if request.mode == "dry_run" and request.requested_external_write:
+            return {
+                "planned_external_write": True,
+                "simulated_external_write": True,
+                "external_system_ids": ["mock-biologics-registry"],
+                "write_export_requires_approval": True,
+            }
+        if request.mode == "write_approved_live" and request.requested_external_write:
+            return {
+                "external_write": True,
+                "planned_external_write": True,
+                "external_system_ids": ["approved-biologics-registry"],
+                "write_export_requires_approval": True,
+            }
+        return {
+            "planned_external_write": False,
+            "external_system_ids": [],
+            "write_export_requires_approval": True,
         }
 
     def _workflow_templates(self) -> dict[WorkflowType, list[_StepTemplate]]:
@@ -359,6 +413,48 @@ class EndToEndWorkflowRunner:
                 ),
                 _StepTemplate(
                     step_name="Generated report",
+                    step_type="report_bundle",
+                    tool_name="e2e.bundle",
+                ),
+            ],
+            "disease_to_antibody_candidates": [
+                _StepTemplate(
+                    step_name="Target and antigen context",
+                    step_type="antigen_context",
+                    tool_name="biologics.target_context",
+                ),
+                _StepTemplate(
+                    step_name="Existing antibody retrieval",
+                    step_type="antibody_retrieval",
+                    tool_name="biologics.retrieve_existing",
+                ),
+                _StepTemplate(
+                    step_name="Antibody sequence validation",
+                    step_type="antibody_sequence_validation",
+                    tool_name="biologics.sequence.validate",
+                ),
+                _StepTemplate(
+                    step_name="Antibody numbering and CDR annotation",
+                    step_type="antibody_numbering",
+                    tool_name="biologics.numbering.annotate",
+                ),
+                _StepTemplate(
+                    step_name="Antibody novelty check",
+                    step_type="antibody_novelty",
+                    tool_name="biologics.novelty.exact_sequence",
+                ),
+                _StepTemplate(
+                    step_name="Antibody developability triage",
+                    step_type="antibody_developability",
+                    tool_name="biologics.developability.triage",
+                ),
+                _StepTemplate(
+                    step_name="Antibody review",
+                    step_type="antibody_review",
+                    tool_name="biologics.review",
+                ),
+                _StepTemplate(
+                    step_name="Antibody result bundle",
                     step_type="report_bundle",
                     tool_name="e2e.bundle",
                 ),
@@ -504,6 +600,169 @@ class EndToEndWorkflowRunner:
                     tool_name="e2e.bundle",
                 ),
             ],
+            "full_discovery_loop_with_biologics": [
+                _StepTemplate(
+                    step_name="Create project",
+                    step_type="project_setup",
+                    tool_name="project.setup",
+                ),
+                _StepTemplate(
+                    step_name="Small-molecule ranking",
+                    step_type="disease_resolution",
+                    tool_name="ranking.rank",
+                ),
+                _StepTemplate(
+                    step_name="Target and antigen context",
+                    step_type="antigen_context",
+                    tool_name="biologics.target_context",
+                ),
+                _StepTemplate(
+                    step_name="Existing antibody retrieval",
+                    step_type="antibody_retrieval",
+                    tool_name="biologics.retrieve_existing",
+                ),
+                _StepTemplate(
+                    step_name="Literature",
+                    step_type="literature_retrieval",
+                    tool_name="literature.retrieve",
+                ),
+                _StepTemplate(
+                    step_name="Small-molecule generation",
+                    step_type="generation",
+                    required=False,
+                    tool_name="generation.plan",
+                ),
+                _StepTemplate(
+                    step_name="Small-molecule developability",
+                    step_type="developability",
+                    tool_name="developability.review",
+                ),
+                _StepTemplate(
+                    step_name="Antibody sequence validation",
+                    step_type="antibody_sequence_validation",
+                    tool_name="biologics.sequence.validate",
+                ),
+                _StepTemplate(
+                    step_name="Antibody numbering and CDR annotation",
+                    step_type="antibody_numbering",
+                    tool_name="biologics.numbering.annotate",
+                ),
+                _StepTemplate(
+                    step_name="Antibody novelty check",
+                    step_type="antibody_novelty",
+                    tool_name="biologics.novelty.exact_sequence",
+                ),
+                _StepTemplate(
+                    step_name="Antibody developability triage",
+                    step_type="antibody_developability",
+                    tool_name="biologics.developability.triage",
+                ),
+                _StepTemplate(
+                    step_name="Graph",
+                    step_type="graph_build",
+                    tool_name="graph.build",
+                ),
+                _StepTemplate(
+                    step_name="Hypotheses",
+                    step_type="hypothesis_generation",
+                    tool_name="hypothesis.generate",
+                ),
+                _StepTemplate(
+                    step_name="Portfolio",
+                    step_type="portfolio_optimization",
+                    tool_name="portfolio.optimize",
+                ),
+                _StepTemplate(
+                    step_name="Campaign",
+                    step_type="campaign_planning",
+                    tool_name="campaign.plan",
+                ),
+                _StepTemplate(
+                    step_name="Review",
+                    step_type="review_workspace",
+                    tool_name="review.workspace",
+                ),
+                _StepTemplate(
+                    step_name="Antibody review",
+                    step_type="antibody_review",
+                    tool_name="biologics.review",
+                ),
+                _StepTemplate(
+                    step_name="Evaluation",
+                    step_type="evaluation",
+                    tool_name="evaluation.review",
+                ),
+                _StepTemplate(
+                    step_name="Result bundle",
+                    step_type="report_bundle",
+                    tool_name="e2e.bundle",
+                ),
+            ],
+            "biologics_discovery_loop": [
+                _StepTemplate(
+                    step_name="Project setup",
+                    step_type="project_setup",
+                    tool_name="project.setup",
+                ),
+                _StepTemplate(
+                    step_name="Disease and target retrieval",
+                    step_type="target_discovery",
+                    tool_name="target.retrieve",
+                ),
+                _StepTemplate(
+                    step_name="Existing biologic retrieval",
+                    step_type="antibody_retrieval",
+                    tool_name="biologics.retrieve_existing",
+                ),
+                _StepTemplate(
+                    step_name="Antigen context",
+                    step_type="antigen_context",
+                    tool_name="biologics.target_context",
+                ),
+                _StepTemplate(
+                    step_name="Sequence validation and numbering",
+                    step_type="antibody_sequence_validation",
+                    tool_name="biologics.sequence.validate_and_number",
+                    metadata={"includes_numbering": True},
+                ),
+                _StepTemplate(
+                    step_name="Antibody developability",
+                    step_type="antibody_developability",
+                    tool_name="biologics.developability.triage",
+                ),
+                _StepTemplate(
+                    step_name="Antibody novelty",
+                    step_type="antibody_novelty",
+                    tool_name="biologics.novelty.check",
+                ),
+                _StepTemplate(
+                    step_name="Biologics review workspace",
+                    step_type="review_workspace",
+                    tool_name="review.workspace.biologics",
+                    metadata={
+                        "required_expert_roles": [
+                            "biologics scientist",
+                            "antibody engineer",
+                            "developability expert",
+                        ],
+                    },
+                ),
+                _StepTemplate(
+                    step_name="Biologics portfolio and campaign",
+                    step_type="portfolio_optimization",
+                    tool_name="portfolio_campaign.biologics",
+                    metadata={
+                        "operation": "biologics_portfolio_campaign",
+                        "includes_campaign": True,
+                        "high_level_work_packages_only": True,
+                    },
+                ),
+                _StepTemplate(
+                    step_name="Biologics result bundle",
+                    step_type="report_bundle",
+                    tool_name="e2e.bundle.biologics",
+                ),
+            ],
             "integration_sync_loop": [
                 _StepTemplate(
                     step_name="Integration health",
@@ -556,6 +815,55 @@ class EndToEndWorkflowRunner:
                 ),
             ],
         }
+
+    def _templates_for_request(self, request: WorkflowRunRequest) -> list[_StepTemplate]:
+        templates = list(self._workflow_templates()[request.workflow_type])
+        if (
+            request.workflow_type
+            in {"disease_to_antibody_candidates", "full_discovery_loop_with_biologics"}
+            and request.antibody_generation_enabled
+        ):
+            insert_at = next(
+                (
+                    index + 1
+                    for index, template in enumerate(templates)
+                    if template.step_type == "antibody_retrieval"
+                ),
+                1,
+            )
+            templates.insert(
+                insert_at,
+                _StepTemplate(
+                    step_name="Approved antibody generation",
+                    step_type="antibody_generation",
+                    required=False,
+                    tool_name="biologics.generation.approved_plugin",
+                    metadata={"operation": "approved_antibody_generation"},
+                ),
+            )
+        if (
+            request.workflow_type == "biologics_discovery_loop"
+            and request.antibody_generation_enabled
+        ):
+            insert_at = next(
+                (
+                    index + 1
+                    for index, template in enumerate(templates)
+                    if template.step_type == "antibody_novelty"
+                ),
+                7,
+            )
+            templates.insert(
+                insert_at,
+                _StepTemplate(
+                    step_name="Optional antibody generation",
+                    step_type="antibody_generation",
+                    required=False,
+                    tool_name="biologics.generation.approved_plugin",
+                    metadata={"operation": "approved_antibody_generation"},
+                ),
+            )
+        return templates
 
     def _is_unavailable_required_live_data(
         self, step: EndToEndWorkflowStep, request: WorkflowRunRequest
@@ -610,6 +918,12 @@ class EndToEndWorkflowRunner:
             for step in succeeded_steps
             for artifact_id in step.output_artifact_ids
         ]
+        biologics_summary = self._biologics_summary(
+            workflow=workflow,
+            steps=steps,
+            request=request,
+            external_writes_performed=external_writes_performed,
+        )
         return EndToEndResultBundle(
             bundle_id=f"bundle-{workflow.workflow_id}",
             workflow_id=workflow.workflow_id,
@@ -632,6 +946,7 @@ class EndToEndWorkflowRunner:
                 ),
                 "generated_molecules_advanced_without_review": 0,
             },
+            biologics_summary=biologics_summary,
             evidence_summary={
                 "literature_steps_completed": self._count_succeeded(
                     steps, "literature_retrieval"
@@ -646,6 +961,13 @@ class EndToEndWorkflowRunner:
             campaign_summary={
                 "campaign_steps_completed": self._count_succeeded(
                     steps, "campaign_planning"
+                )
+                + sum(
+                    1
+                    for step in steps
+                    if step.step_type == "portfolio_optimization"
+                    and step.metadata.get("includes_campaign") is True
+                    and step.status == "succeeded"
                 )
             },
             evaluation_summary={
@@ -662,7 +984,10 @@ class EndToEndWorkflowRunner:
             },
             limitations=[
                 "End-to-end result bundle is not scientific evidence.",
-                "No patient treatment, dosing, lab protocol, or synthesis guidance is provided.",
+                (
+                    "Operational laboratory, chemical-production, dose-selection, "
+                    "and clinical-use directions are excluded."
+                ),
                 *warnings,
             ],
             created_at=self._now(),
@@ -672,8 +997,126 @@ class EndToEndWorkflowRunner:
                 "scientific_evidence": False,
                 "external_writes_performed": external_writes_performed,
                 "approval_ids": list(request.approvals),
+                "biologics_discovery_loop": (
+                    self._biologics_loop_metadata(workflow, steps, request)
+                    if workflow.workflow_type == "biologics_discovery_loop"
+                    else {}
+                ),
             },
         )
+
+    def _biologics_summary(
+        self,
+        *,
+        workflow: EndToEndWorkflow,
+        steps: list[EndToEndWorkflowStep],
+        request: WorkflowRunRequest,
+        external_writes_performed: int,
+    ) -> dict[str, Any]:
+        antibody_track_steps_completed = sum(
+            1
+            for step in steps
+            if step.step_type.startswith("antibody_") and step.status == "succeeded"
+        )
+        summary: dict[str, Any] = {
+            "antibody_track_steps_completed": antibody_track_steps_completed,
+            "antigen_context_steps_completed": self._count_succeeded(
+                steps, "antigen_context"
+            ),
+            "existing_antibody_retrieval_supported": self._count_succeeded(
+                steps, "antibody_retrieval"
+            )
+            > 0,
+            "antibody_generation_enabled": request.antibody_generation_enabled,
+            "approved_antibody_generation_plugin_ids": list(
+                request.approved_antibody_generation_plugin_ids
+            ),
+            "generated_antibodies_advanced_without_review": 0,
+            "generated_antibodies_with_direct_evidence": 0,
+            "deterministic_validation_required": True,
+            "novelty_check_required": True,
+            "developability_triage_required": True,
+            "review_gate_required": True,
+            "result_bundle_lineage_required": True,
+            "unsupported_antibody_assertions_blocked": True,
+        }
+        if workflow.workflow_type != "biologics_discovery_loop":
+            return summary
+
+        mocked = request.mode == "mocked"
+        summary.update(
+            {
+                "workflow_name": "biologics_discovery_loop",
+                "target_retrieval_steps_completed": self._count_succeeded(
+                    steps, "target_discovery"
+                ),
+                "existing_biologic_candidates_ranked": 1
+                if mocked and self._count_succeeded(steps, "antibody_retrieval")
+                else self._count_succeeded(steps, "antibody_retrieval"),
+                "source_backed_mock_records": mocked,
+                "sequence_validation_completed": self._count_succeeded(
+                    steps, "antibody_sequence_validation"
+                ),
+                "numbering_included_with_sequence_validation": any(
+                    step.metadata.get("includes_numbering") is True
+                    and step.status == "succeeded"
+                    for step in steps
+                ),
+                "developability_heuristics_completed": self._count_succeeded(
+                    steps, "antibody_developability"
+                ),
+                "novelty_checks_completed": self._count_succeeded(
+                    steps, "antibody_novelty"
+                ),
+                "generated_antibody_hypotheses_ranked": self._count_succeeded(
+                    steps, "antibody_generation"
+                )
+                if request.antibody_generation_enabled
+                else 0,
+                "generated_antibody_warning": (
+                    "Generated antibodies are computational hypotheses only."
+                ),
+                "review_workspace_created": self._count_succeeded(
+                    steps, "review_workspace"
+                )
+                > 0,
+                "portfolio_campaign_created": any(
+                    step.step_type == "portfolio_optimization"
+                    and step.metadata.get("includes_campaign") is True
+                    and step.status == "succeeded"
+                    for step in steps
+                ),
+                "write_export_requires_approval": True,
+                "external_registry_export_performed": external_writes_performed > 0,
+                "operational_methods_excluded": True,
+            }
+        )
+        return summary
+
+    def _biologics_loop_metadata(
+        self,
+        workflow: EndToEndWorkflow,
+        steps: list[EndToEndWorkflowStep],
+        request: WorkflowRunRequest,
+    ) -> dict[str, Any]:
+        return {
+            "workflow_id": workflow.workflow_id,
+            "mode": request.mode,
+            "steps": [
+                {
+                    "step_name": step.step_name,
+                    "step_type": step.step_type,
+                    "status": step.status,
+                    "required": step.required,
+                }
+                for step in steps
+            ],
+            "generated_antibody_warning": (
+                "Generated antibodies are computational hypotheses only."
+            ),
+            "generation_disabled_by_default": not request.antibody_generation_enabled,
+            "write_export_requires_approval": True,
+        }
 
     def _count_succeeded(
         self, steps: list[EndToEndWorkflowStep], step_type: WorkflowStepType

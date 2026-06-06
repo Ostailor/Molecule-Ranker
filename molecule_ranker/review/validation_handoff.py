@@ -140,6 +140,8 @@ def _suggested_validation_categories(item: Any) -> list[str]:
 
 def _required_expert_roles(item: Any) -> list[str]:
     roles = ["biologist", "pharmacologist"]
+    if str(getattr(item, "item_type", "")) in {"biologic", "generated_antibody"}:
+        roles.extend(["biologics scientist", "antibody engineer", "developability expert"])
     if item.candidate_origin == "generated" or _has_developability_risk(item):
         roles.append("medicinal_chemist")
     if _has_safety_risk(item):

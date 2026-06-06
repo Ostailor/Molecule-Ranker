@@ -94,6 +94,7 @@ class DossierWriterAgent:
                     "Experimental evidence",
                     "Literature evidence",
                     "Generated molecule provenance",
+                    "Antibody sequence",
                     "Source provenance and artifact paths",
                 }
             ],
@@ -104,6 +105,8 @@ class DossierWriterAgent:
                 in {
                     "Safety and warning evidence",
                     "Developability assessment",
+                    "Antibody developability",
+                    "Antibody novelty",
                     "Key uncertainties",
                     "Recommended follow-up questions",
                 }
@@ -154,7 +157,7 @@ def _build_sections(
     comments: list[Any],
     followups: list[Any],
 ) -> list[dict[str, Any]]:
-    return [
+    sections = [
         {
             "title": "Executive summary",
             "content": {
@@ -277,9 +280,42 @@ def _build_sections(
             },
         },
     ]
+    if _is_biologic_item(item):
+        insert_at = next(
+            index
+            for index, section in enumerate(sections)
+            if section["title"] == "Key uncertainties"
+        )
+        sections[insert_at:insert_at] = [
+            {
+                "title": "Antibody sequence",
+                "content": _antibody_sequence_content(item),
+            },
+            {
+                "title": "Antibody developability",
+                "content": _antibody_developability_content(item),
+            },
+            {
+                "title": "Antibody novelty",
+                "content": _antibody_novelty_content(item),
+            },
+        ]
+    return sections
 
 
 def _executive_summary(item: Any) -> str:
+    if _is_biologic_item(item):
+        generated = item.item_type == "generated_antibody"
+        warning = (
+            "Generated antibody hypotheses are computational hypotheses only and "
+            "have no direct evidence without exact imported experimental results. "
+            if generated
+            else ""
+        )
+        return (
+            f"Expert biologics triage dossier for {item.candidate_name}. "
+            f"{warning}This packet supports antibody/biologics review only."
+        )
     if item.candidate_origin == "generated":
         return (
             f"Expert triage dossier for generated hypothesis {item.candidate_name}. "
@@ -293,6 +329,17 @@ def _executive_summary(item: Any) -> str:
 
 
 def _origin_content(item: Any) -> dict[str, Any]:
+    if _is_biologic_item(item):
+        return {
+            "origin_label": item.item_type,
+            "biologic_type": item.metadata.get("biologic_type"),
+            "notice": item.metadata.get("generated_antibody_warning")
+            or "Biologics review item; antibody facts must remain source-backed.",
+            "interpretation_boundary": (
+                "Sequence, novelty, and developability sections are deterministic "
+                "triage context, not binding or manufacturability evidence."
+            ),
+        }
     if item.candidate_origin == "generated":
         return {
             "origin_label": "generated hypothesis",
@@ -348,8 +395,59 @@ def _generated_content(item: Any) -> dict[str, Any]:
     }
 
 
+def _is_biologic_item(item: Any) -> bool:
+    return str(getattr(item, "item_type", "")) in {"biologic", "generated_antibody"}
+
+
+def _antibody_sequence_content(item: Any) -> dict[str, Any]:
+    if not _is_biologic_item(item):
+        return {"applicable": False}
+    return {
+        "applicable": True,
+        "sequence": _safe_payload(item.metadata.get("antibody_sequence", {})),
+        "note": (
+            "Sequence metadata is included for expert review only; no binding, "
+            "safety, developability, or manufacturability claim is made."
+        ),
+    }
+
+
+def _antibody_developability_content(item: Any) -> dict[str, Any]:
+    if not _is_biologic_item(item):
+        return {"applicable": False}
+    return {
+        "applicable": True,
+        "developability": _safe_payload(
+            item.metadata.get("antibody_developability")
+            or item.developability_summary
+        ),
+        "heuristic_boundary": (
+            "Antibody developability is heuristic triage only and does not establish "
+            "manufacturability or safety."
+        ),
+    }
+
+
+def _antibody_novelty_content(item: Any) -> dict[str, Any]:
+    if not _is_biologic_item(item):
+        return {"applicable": False}
+    return {
+        "applicable": True,
+        "novelty": _safe_payload(item.metadata.get("antibody_novelty", {})),
+        "source_limit": (
+            "Novelty checks are limited to configured sources checked and do not "
+            "claim global novelty."
+        ),
+    }
+
+
 def _uncertainties(item: Any) -> list[str]:
     uncertainties: list[str] = []
+    if item.item_type == "generated_antibody":
+        uncertainties.append(
+            "Generated antibodies have no direct binding, neutralization, safety, "
+            "developability, manufacturability, or experimental evidence claim."
+        )
     if item.candidate_origin == "generated":
         uncertainties.append(GENERATED_DIRECT_EVIDENCE_NOTICE)
     if not item.literature_summary or not _citation_metadata(item.literature_summary):
@@ -359,7 +457,10 @@ def _uncertainties(item: Any) -> list[str]:
     if item.risk_flags:
         uncertainties.append("Risk flags require expert review before any handoff.")
     if not item.canonical_smiles:
-        uncertainties.append("Structure metadata is missing from the review item.")
+        if _is_biologic_item(item):
+            uncertainties.append("Small-molecule structure metadata is not applicable.")
+        else:
+            uncertainties.append("Structure metadata is missing from the review item.")
     return uncertainties or ["No additional uncertainty notes were generated."]
 
 
@@ -373,6 +474,14 @@ def _default_followup_questions(item: Any) -> list[str]:
         questions.insert(
             0,
             "What additional computational checks are needed for this generated hypothesis?",
+        )
+    if _is_biologic_item(item):
+        questions.extend(
+            [
+                "What antibody sequence liabilities require specialist review?",
+                "What biologics novelty and source-limit assumptions require review?",
+                "What developability heuristic flags should an antibody engineer triage?",
+            ]
         )
     return questions
 

@@ -16,6 +16,11 @@ EXPECTED_TOOL_NAMES = {
     "benchmark_generation",
     "run_developability",
     "assess_developability_artifact",
+    "retrieve_biologics",
+    "validate_antibody_sequence",
+    "assess_antibody_developability",
+    "assess_antibody_novelty",
+    "build_biologics_report",
     "run_literature_update",
     "summarize_literature",
     "import_assay_results",
@@ -57,6 +62,11 @@ EXPECTED_TOOL_NAMES = {
     "explain_failure",
     "plan_followup",
     "draft_memo",
+    "summarize_biologic_candidate",
+    "explain_antibody_liabilities",
+    "draft_biologics_review_questions",
+    "summarize_antigen_context",
+    "draft_biologics_campaign_summary",
 }
 
 
@@ -111,6 +121,11 @@ def test_codex_tools_cannot_approve_stage_gates_or_campaign_advancement() -> Non
         "explain_failure",
         "plan_followup",
         "draft_memo",
+        "summarize_biologic_candidate",
+        "explain_antibody_liabilities",
+        "draft_biologics_review_questions",
+        "summarize_antigen_context",
+        "draft_biologics_campaign_summary",
     }
     for spec in codex_tools:
         assert spec.side_effect_level == "codex_subprocess"

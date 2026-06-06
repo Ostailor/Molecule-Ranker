@@ -52,6 +52,34 @@ def test_e2e_dry_run_workflow_no_writes(tmp_path: Path) -> None:
     assert run_payload["planned_external_writes"] == 1
 
 
+def test_e2e_cli_biologics_discovery_loop(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "e2e",
+            "run",
+            "--workflow",
+            "biologics_discovery_loop",
+            "--disease",
+            "Rheumatoid arthritis",
+            "--mode",
+            "mocked",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    workflow_id = _workflow_id(tmp_path)
+    bundle = json.loads((tmp_path / workflow_id / "bundle.json").read_text())
+    assert bundle["biologics_summary"]["workflow_name"] == "biologics_discovery_loop"
+    assert bundle["biologics_summary"]["antibody_generation_enabled"] is False
+    assert (
+        bundle["biologics_summary"]["generated_antibody_warning"]
+        == "Generated antibodies are computational hypotheses only."
+    )
+
+
 def test_e2e_resume_after_optional_failure(tmp_path: Path) -> None:
     first = runner.invoke(
         app,

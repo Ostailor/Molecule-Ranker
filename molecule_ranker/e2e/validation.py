@@ -41,9 +41,18 @@ REQUIRED_BUNDLE_METADATA_KEYS = {
     "lineage_records",
 }
 
+ANTIBODY_FORBIDDEN_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bvalidated\s+binder\b", re.I), "unsupported antibody binding claim"),
+    (re.compile(r"\bneutraliz(?:e|es|ation)\b", re.I), "unsupported antibody neutralization claim"),
+    (re.compile(r"\btreats?\b", re.I), "unsupported treatment claim"),
+    (re.compile(r"\bcures?\b", re.I), "unsupported cure claim"),
+    (re.compile(r"\bmanufacturable\b", re.I), "unsupported manufacturability claim"),
+    (re.compile(r"\bis\s+developable\b", re.I), "unsupported developability claim"),
+)
+
 
 class EndToEndWorkflowValidator:
-    """Deterministic validation for V2.7 end-to-end workflow bundles."""
+    """Deterministic validation for V2.8 end-to-end workflow bundles."""
 
     def __init__(self, now: Callable[[], datetime] | None = None) -> None:
         self._now = now or (lambda: datetime.now(UTC))
@@ -137,6 +146,8 @@ class EndToEndWorkflowValidator:
                     "codex_outputs_separate": guardrails_passed,
                     "evaluation_artifacts_separate": guardrails_passed,
                     "no_forbidden_text": guardrails_passed,
+                    "antibody_generation_default_off": guardrails_passed,
+                    "generated_antibody_evidence_boundary": guardrails_passed,
                 },
             },
         )
@@ -275,6 +286,10 @@ class EndToEndWorkflowValidator:
             if pattern.search(text):
                 findings.append(f"forbidden text present: {label}")
                 failed = True
+        for pattern, label in ANTIBODY_FORBIDDEN_TEXT_PATTERNS:
+            if pattern.search(text):
+                findings.append(f"forbidden antibody text present: {label}")
+                failed = True
         if self._has_truth_flag(payload):
             findings.append("fabricated evidence or external record flag present")
             failed = True
@@ -285,6 +300,31 @@ class EndToEndWorkflowValidator:
         if generated_summary.get("advanced_without_review"):
             findings.append("generated labels not intact: advanced without review")
             failed = True
+        biologics_summary = bundle.biologics_summary
+        if biologics_summary.get("generated_antibodies_advanced_without_review"):
+            findings.append("generated antibody advanced without review")
+            failed = True
+        if biologics_summary.get("generated_antibodies_with_direct_evidence", 0):
+            exact_results = biologics_summary.get("exact_imported_experimental_result_ids")
+            if not exact_results:
+                findings.append(
+                    "generated antibody direct evidence lacks exact imported experimental results"
+                )
+                failed = True
+        if biologics_summary.get("antibody_generation_enabled") is True:
+            required_gates = (
+                "deterministic_validation_required",
+                "novelty_check_required",
+                "developability_triage_required",
+                "review_gate_required",
+                "result_bundle_lineage_required",
+            )
+            missing = [key for key in required_gates if biologics_summary.get(key) is not True]
+            if missing:
+                findings.append(
+                    "antibody generation missing required gates: " + ", ".join(missing)
+                )
+                failed = True
         if bundle.metadata.get("codex_outputs_are_separate") is False:
             findings.append("Codex outputs are not separated from evidence")
             failed = True

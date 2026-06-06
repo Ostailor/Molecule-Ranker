@@ -1,9 +1,9 @@
 # molecule-ranker
 
 `molecule-ranker` is a research-planning tool for transparent existing-molecule
-ranking, campaign workflow management, and governed Codex runtime-agent
+and existing-antibody ranking, campaign workflow management, and governed Codex runtime-agent
 operations. It resolves a disease through public biomedical data sources,
-retrieves evidence-backed targets and existing molecules, ranks candidates as
+retrieves evidence-backed targets and existing small-molecule or biologics candidates, ranks candidates as
 research hypotheses, and keeps autonomous agent actions inside approved policy,
 tool, artifact, budget, certification, and safety boundaries.
 
@@ -22,12 +22,23 @@ artifacts, and approved integration tools. Today it can:
 - Resolve a disease name into a ranked research-planning workflow.
 - Retrieve source-backed targets and existing molecules from public biomedical
   sources.
+- Retrieve and rank existing antibody/biologics candidates when source data
+  supports the records.
+- Capture antibody target and antigen context, antibody sequence schemas,
+  deterministic sequence validation, numbering/CDR annotations, exact-sequence
+  novelty checks, antibody-specific developability heuristics, report cards,
+  review gates, lineage, and biologics result-bundle summaries.
 - Rank existing molecules as auditable research hypotheses, with provenance,
   warnings, and trace artifacts.
 - Retrieve literature metadata and extracted claim records for review-oriented
   evidence summaries.
 - Generate small-molecule analog hypotheses from source-backed seed molecules
   when generation is explicitly enabled.
+- Plan antibody sequence generation only through approved model/tool plugins.
+  Antibody generation is disabled by default; approved plugin outputs must be
+  imported as computational hypotheses and pass deterministic validation,
+  exact-sequence novelty checks, developability triage, review gates, and
+  result-bundle lineage before review.
 - Run deterministic chemical sanity checks, novelty checks, diversity filtering,
   and heuristic developability triage on generated small-molecule hypotheses.
 - Create review queues, review workspaces, campaign/portfolio planning
@@ -46,14 +57,12 @@ evidence of binding, activity, safety, efficacy, novelty, patentability, or
 clinical utility. Exact public-database novelty checks can rule out exact
 matches in checked sources, but they do not prove global novelty.
 
-## What It Cannot Yet Do
+Generated antibodies are computational hypotheses only. The system does not
+claim generated antibodies bind, neutralize, treat, cure, are safe, are
+developable, or are manufacturable. Exact imported experimental results are
+required before any generated antibody has direct evidence.
 
-The project does **not** yet implement a true antibody or biologics discovery
-engine. It does not currently generate antibody sequences, CDR designs, protein
-binders, antibody-antigen complexes, epitope-specific binders, or biologics
-developability packs. Existing antibodies may appear in retrieved/ranked
-candidate lists when public source data supports them, but the system is not
-yet creating novel antibody candidates.
+## What It Cannot Do
 
 The project also does not:
 
@@ -66,28 +75,45 @@ The project also does not:
 - Perform lab execution, campaign activation, clinical interpretation, patient
   treatment selection, dosing, synthesis planning, or experimental protocol
   design.
-
-The intended next scientific capability is a governed biologics/antibody
-discovery track with explicit sequence/structure schemas, source-backed target
-and epitope context, antibody-specific novelty and developability checks,
-approved model/tool integrations, lineage, review gates, and result bundles
-that remain research/operations summaries rather than evidence.
+- Provide wet-lab protocols, immunization protocols, expression or purification
+  protocols, animal or human dosing, synthesis instructions, fabricated antibody
+  sequences, fabricated assay results, fabricated citations, fabricated external
+  records, fabricated epitopes, fabricated structures, or binding claims.
 
 ## Current Version
 
-The current version is **2.7.0**.
+The current version is **2.8.0**.
 
-V2.7.0 adds agentic integration operations and reliable end-to-end workflow
-execution. The system can run governed workflows from a disease or project
-objective to ranked candidates, generated hypotheses, review workspaces,
-portfolio and campaign plans, evaluation artifacts, lineage records, and a
-result bundle. These workflows are auditable, resumable, and constrained by
+V2.8.0 adds a governed biologics and antibody discovery track while preserving
+the V2.7 small-molecule and E2E workflow capabilities. Existing antibodies and
+biologics can be retrieved and ranked when records are source-backed. Antibody
+sequences can be validated, numbered, annotated for CDRs, checked for novelty
+against configured sources, and triaged with antibody-specific heuristic
+developability signals.
+
+Antibody generation is disabled by default. Generated antibody candidates are
+computational hypotheses only. Generation requires approved generators/tools,
+deterministic sequence validation, numbering/CDR annotation where possible,
+novelty checks, developability triage, review gates, and lineage in result
+bundles. No generated antibody is claimed to bind, neutralize, treat, cure, be
+safe, be developable, or be manufacturable. The system does not provide
+expression, purification, immunization, wet-lab, dosing, or clinical protocols.
+Exact imported experimental evidence is required for direct support, and review
+gates plus governance apply before any advancement decision.
+
+The system can run governed workflows from a disease or project objective to
+ranked small-molecule and antibody candidates, generated small-molecule
+hypotheses, optional approved-plugin antibody generation plans, review
+workspaces, portfolio and campaign plans, evaluation artifacts, lineage records,
+and result bundles. These workflows are auditable, resumable, and constrained by
 policy, approval, validation, and artifact-contract checks.
 
 The autonomous campaign co-pilot is a campaign-management assistant, not a lab
 executor or source of scientific truth. Failed QC is never treated as positive or negative evidence.
-Generated molecules remain computational hypotheses until supported by exact
-imported evidence and human review.
+Generated molecules and generated antibodies remain computational hypotheses
+until supported by exact imported evidence and human review.
+Generated molecules remain computational hypotheses throughout deterministic
+triage and review until exact imported evidence is linked.
 
 Agents cannot self-certify, self-approve, self-grant capabilities, or approve
 policy overrides. Higher autonomy requires active certification. External
@@ -97,7 +123,7 @@ policy requires it.
 
 ## End-to-End Workflows
 
-V2.7 workflows run in four modes:
+V2.8 workflows run in four modes:
 
 - `mocked`: deterministic synthetic sources for local testing.
 - `dry_run`: planned actions and simulated integration changes with no external writes.
@@ -121,6 +147,20 @@ uv run molecule-ranker e2e run \
   --enable-generation \
   --enable-codex-summary
 ```
+
+Run a mocked mixed small-molecule and antibody workflow:
+
+```bash
+uv run molecule-ranker e2e run \
+  --workflow full_discovery_loop_with_biologics \
+  --disease "Parkinson disease" \
+  --mode mocked
+```
+
+Antibody generation remains off unless an approved biologics plugin is explicitly
+configured. Any plugin output must enter the system as a computational hypothesis
+with deterministic validation, novelty checks, developability triage, expert
+review gates, and lineage.
 
 Run a dry-run integration workflow:
 
@@ -171,10 +211,121 @@ uv run molecule-ranker e2e lineage \
   --workflow-id e2e-workflow-id
 ```
 
-Run the deterministic V2.7 E2E eval suite:
+Run the deterministic V2.8 E2E eval suite:
 
 ```bash
 uv run molecule-ranker e2e eval --suite default
+```
+
+## Biologics And Antibody Track
+
+The biologics track is governed by source provenance, deterministic validation,
+review gates, and biologics-specific guardrails. It supports existing
+antibody/biologic retrieval and ranking when evidence or registry records are
+available. Sequence-specific analysis only runs when an actual amino-acid
+sequence is retrieved, imported, or user supplied; missing antibody sequences are
+not fabricated.
+
+Use source-backed biologic records for local examples. Records may omit
+sequences; sequence-specific validation, numbering, CDR annotation, novelty, and
+developability triage are only available when an actual source/imported sequence
+is present.
+
+```json
+{
+  "biologic_candidates": [
+    {
+      "biologic_id": "<SOURCE_BACKED_BIOLOGIC_ID>",
+      "name": "<SOURCE_BACKED_BIOLOGIC_NAME>",
+      "biologic_type": "monoclonal_antibody",
+      "origin": "existing",
+      "target_symbols": ["<TARGET_SYMBOL>"],
+      "antigen_names": ["<SOURCE_BACKED_ANTIGEN_NAME>"],
+      "disease_name": "<DISEASE_NAME>",
+      "identifiers": {"registry": "<SOURCE_RECORD_ID>"},
+      "sequence": "<SOURCE_BACKED_AMINO_ACID_SEQUENCE_IF_AVAILABLE>",
+      "chain_type": "heavy",
+      "evidence_item_ids": ["<SOURCE_BACKED_EVIDENCE_ITEM_ID>"],
+      "direct_experimental_evidence": false
+    }
+  ]
+}
+```
+
+Retrieve existing biologics:
+
+```bash
+uv run molecule-ranker biologics retrieve \
+  --target-symbol <TARGET_SYMBOL> \
+  --disease "<DISEASE_NAME>" \
+  --records /path/to/source_backed_biologics.json \
+  --output-dir results/biologics-demo
+```
+
+Validate an antibody sequence:
+
+```bash
+uv run molecule-ranker biologics validate-sequence \
+  --sequence "$SOURCE_BACKED_AMINO_ACID_SEQUENCE" \
+  --sequence-id <SOURCE_BACKED_SEQUENCE_ID> \
+  --chain-type heavy
+```
+
+Assess antibody developability heuristics:
+
+```bash
+uv run molecule-ranker biologics assess-developability \
+  --sequence "$SOURCE_BACKED_AMINO_ACID_SEQUENCE" \
+  --sequence-id <SOURCE_BACKED_SEQUENCE_ID> \
+  --biologic-id <SOURCE_BACKED_BIOLOGIC_ID> \
+  --chain-type heavy
+```
+
+Generate antibody hypotheses in mocked mode through the governed E2E workflow.
+This is still disabled unless generation is explicitly requested, and any
+generated output remains a computational hypothesis:
+
+```bash
+uv run molecule-ranker e2e run \
+  --workflow biologics_discovery_loop \
+  --disease "<DISEASE_NAME>" \
+  --mode mocked \
+  --enable-generation \
+  --output-dir .molecule-ranker/e2e-biologics-demo
+```
+
+Run the biologics E2E workflow with generation disabled, which is the default:
+
+```bash
+uv run molecule-ranker e2e run \
+  --workflow biologics_discovery_loop \
+  --disease "<DISEASE_NAME>" \
+  --mode mocked \
+  --output-dir .molecule-ranker/e2e-biologics-demo
+```
+
+Create a biologics review packet from a review workspace:
+
+```bash
+uv run molecule-ranker review handoff \
+  --workspace results/biologics-demo/review_workspace.json \
+  --item-id <BIOLOGICS_REVIEW_ITEM_ID> \
+  --reviewer-id biologics-reviewer-1 \
+  --output results/biologics-demo/biologics_review_packet.json
+```
+
+Run biologics guardrails:
+
+```bash
+uv run molecule-ranker biologics validate-guardrails \
+  --root .molecule-ranker/validation-demo
+```
+
+Equivalent validation is also available through:
+
+```bash
+uv run molecule-ranker validate biologics-guardrails \
+  --root .molecule-ranker/validation-demo
 ```
 
 ## Install
@@ -279,7 +430,6 @@ uv run molecule-ranker validate release
 
 ## Roadmap
 
-- V2.7: agentic integration operations and end-to-end workflow execution.
-- V2.8: cross-program agentic discovery memory.
+- V2.8: governed biologics and antibody discovery track.
 - V2.9: V3 readiness and autonomy validation.
 - V3.0: autonomous discovery operating system with validated human-governed agentic workflows.

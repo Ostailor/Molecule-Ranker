@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from molecule_ranker.validation.biologics_guardrails import (
+    BiologicsGuardrailCaseResult,
+    BiologicsGuardrailFinding,
+    BiologicsGuardrailValidationReport,
+    check_biologics_guardrails,
+    run_biologics_guardrail_validation,
+)
 from molecule_ranker.validation.campaign import (
     CampaignGuardrailAuditReport,
     CampaignGuardrailFinding,
@@ -84,6 +91,9 @@ __all__ = [
     "CampaignGuardrailAuditReport",
     "CampaignGuardrailFinding",
     "CampaignValidationReport",
+    "BiologicsGuardrailCaseResult",
+    "BiologicsGuardrailFinding",
+    "BiologicsGuardrailValidationReport",
     "GuardrailAuditReport",
     "GuardrailFinding",
     "GraphGuardrailAuditReport",
@@ -112,6 +122,8 @@ __all__ = [
     "get_golden_workflow",
     "list_golden_workflows",
     "run_design_guardrail_audit",
+    "check_biologics_guardrails",
+    "run_biologics_guardrail_validation",
     "run_design_validation",
     "run_campaign_guardrail_audit",
     "run_campaign_validation",

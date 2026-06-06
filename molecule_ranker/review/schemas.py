@@ -25,6 +25,12 @@ ReviewerRole = Literal[
     "reviewer",
 ]
 CandidateOrigin = Literal["existing", "generated"]
+ReviewItemType = Literal[
+    "molecule",
+    "generated_molecule",
+    "biologic",
+    "generated_antibody",
+]
 PriorityBucket = Literal[
     "high_priority",
     "medium_priority",
@@ -110,6 +116,7 @@ class ReviewItem(TimezoneAwareModel):
     disease_name: str
     candidate_id: str
     candidate_name: str
+    item_type: ReviewItemType = "molecule"
     candidate_origin: CandidateOrigin
     target_symbols: list[str] = Field(default_factory=list)
     canonical_smiles: str | None = None

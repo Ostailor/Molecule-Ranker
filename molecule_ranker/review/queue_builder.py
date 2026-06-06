@@ -51,6 +51,7 @@ def build_review_workspace(
         )
         for candidate in ranking_run.generated_candidates
     )
+    items.extend(_items_from_biologics_config(config, run_id, disease_name))
     items = _apply_feedback_prior(
         items,
         config=config,
@@ -94,6 +95,7 @@ def build_review_workspace_from_artifact(
     items = [
         *_items_from_existing(payload, resolved_run_id, disease_name),
         *_items_from_generated(payload, resolved_run_id, disease_name),
+        *_items_from_biologics_payload(payload, resolved_run_id, disease_name),
     ]
     actor = reviewer.reviewer_id if reviewer is not None else "local-reviewer"
     workspace = ReviewWorkspace(
@@ -158,6 +160,7 @@ def _item_from_candidate(
         disease_name=disease_name,
         candidate_id=_candidate_id(candidate),
         candidate_name=candidate.name,
+        item_type="molecule",
         candidate_origin="existing",
         target_symbols=candidate.known_targets,
         canonical_smiles=_candidate_smiles(candidate),
@@ -220,6 +223,7 @@ def _item_from_generated(
         disease_name=disease_name,
         candidate_id=str(candidate.rank or candidate.name),
         candidate_name=candidate.name,
+        item_type="generated_molecule",
         candidate_origin="generated",
         target_symbols=target_symbols,
         canonical_smiles=candidate.canonical_smiles,
@@ -561,6 +565,7 @@ def _items_from_existing(
                     or f"candidate-{index}"
                 ),
                 candidate_name=str(raw.get("name") or f"Candidate {index}"),
+                item_type="molecule",
                 candidate_origin="existing",
                 target_symbols=target_symbols,
                 canonical_smiles=_canonical_smiles(raw),
@@ -621,6 +626,7 @@ def _items_from_generated(
                 disease_name=disease_name,
                 candidate_id=candidate_id,
                 candidate_name=candidate_name,
+                item_type="generated_molecule",
                 candidate_origin="generated",
                 target_symbols=_target_symbols(raw),
                 canonical_smiles=str(smiles) if smiles is not None else None,
@@ -652,6 +658,286 @@ def _items_from_generated(
     return items
 
 
+def _items_from_biologics_config(
+    config: dict[str, Any],
+    run_id: str,
+    disease_name: str,
+) -> list[ReviewItem]:
+    payload = config.get("biologics")
+    if not isinstance(payload, dict):
+        return []
+    return _items_from_biologics_payload(
+        payload,
+        run_id,
+        disease_name,
+        allow_generic_candidate_keys=True,
+    )
+
+
+def _items_from_biologics_payload(
+    payload: dict[str, Any],
+    run_id: str,
+    disease_name: str,
+    *,
+    allow_generic_candidate_keys: bool = False,
+) -> list[ReviewItem]:
+    items = [
+        *_items_from_biologic_candidates(
+            payload,
+            run_id,
+            disease_name,
+            allow_generic_candidate_keys=allow_generic_candidate_keys,
+        ),
+        *_items_from_generated_antibodies(
+            payload,
+            run_id,
+            disease_name,
+            allow_generic_candidate_keys=allow_generic_candidate_keys,
+        ),
+    ]
+    return items
+
+
+def _items_from_biologic_candidates(
+    payload: dict[str, Any],
+    run_id: str,
+    disease_name: str,
+    *,
+    allow_generic_candidate_keys: bool = False,
+) -> list[ReviewItem]:
+    raw_candidates = payload.get("biologic_candidates")
+    if raw_candidates is None and allow_generic_candidate_keys:
+        raw_candidates = payload.get("candidates")
+    raw_candidates = raw_candidates or []
+    raw_sequences = payload.get("antibody_sequences") or payload.get("sequences") or []
+    raw_developability = payload.get("antibody_developability") or payload.get(
+        "developability",
+        [],
+    )
+    raw_novelty = payload.get("antibody_novelty") or payload.get("novelty") or []
+    sequences_by_biologic = _group_by_biologic(raw_sequences)
+    developability_by_biologic = _assessment_by_biologic(raw_developability)
+    novelty_by_biologic = _assessment_by_biologic(raw_novelty)
+    items: list[ReviewItem] = []
+    for index, raw in enumerate(raw_candidates, start=1):
+        if not isinstance(raw, dict):
+            continue
+        candidate_id = str(raw.get("biologic_id") or f"biologic-{index}")
+        biologic_type = str(raw.get("biologic_type") or "other")
+        warnings = _string_list(raw.get("warnings"))
+        developability = developability_by_biologic.get(candidate_id, {})
+        novelty = novelty_by_biologic.get(candidate_id, {})
+        sequence_section = {
+            "sequence_ids": _string_list(raw.get("sequence_ids")),
+            "sequence_count": len(sequences_by_biologic.get(candidate_id, [])),
+            "sequences": sequences_by_biologic.get(candidate_id, []),
+        }
+        score = _float_or_none(
+            _dict_or_empty(raw.get("metadata")).get("biologics_score")
+            or raw.get("score")
+        )
+        items.append(
+            ReviewItem(
+                run_id=run_id,
+                disease_name=str(raw.get("disease_name") or disease_name),
+                candidate_id=candidate_id,
+                candidate_name=str(raw.get("name") or candidate_id),
+                item_type="biologic",
+                candidate_origin="existing",
+                target_symbols=_string_list(raw.get("target_symbols")),
+                canonical_smiles=None,
+                score=score,
+                confidence=_float_or_none(
+                    _dict_or_empty(
+                        _dict_or_empty(raw.get("metadata")).get(
+                            "biologics_score_components"
+                        )
+                    ).get("effective_confidence")
+                ),
+                evidence_summary={
+                    "target_evidence_count": len(_string_list(raw.get("target_symbols"))),
+                    "molecule_evidence_count": len(_string_list(raw.get("evidence_item_ids"))),
+                    "literature_claim_counts": {"supports": 0, "contradicts": 0, "mentions": 0},
+                    "safety_warning_count": sum(
+                        1 for warning in warnings if "safety" in warning.lower()
+                    ),
+                    "developability_risk_level": _biologic_developability_risk(developability),
+                    "generated_score": None,
+                    "direct_experimental_evidence": bool(
+                        raw.get("direct_experimental_evidence")
+                    ),
+                },
+                literature_summary={},
+                developability_summary=developability,
+                generation_summary=None,
+                risk_flags=_biologic_risk_flags(developability, novelty, generated=False),
+                warnings=warnings,
+                priority_bucket=_priority_bucket(score, warnings),
+                review_status="needs_expert_review",
+                metadata={
+                    "source": "biologics",
+                    "biologic_type": biologic_type,
+                    "antibody_sequence": sequence_section,
+                    "antibody_novelty": novelty,
+                    "antibody_developability": developability,
+                    "required_expert_roles": _biologics_required_roles(),
+                    "generated_antibody_warning": None,
+                },
+            )
+        )
+    return items
+
+
+def _items_from_generated_antibodies(
+    payload: dict[str, Any],
+    run_id: str,
+    disease_name: str,
+    *,
+    allow_generic_candidate_keys: bool = False,
+) -> list[ReviewItem]:
+    raw_generated = payload.get("generated_antibody_hypotheses") or payload.get(
+        "generated_antibodies"
+    )
+    if raw_generated is None and allow_generic_candidate_keys:
+        raw_generated = payload.get("generated")
+    raw_generated = raw_generated or []
+    items: list[ReviewItem] = []
+    for index, raw in enumerate(raw_generated if isinstance(raw_generated, list) else [], start=1):
+        if not isinstance(raw, dict):
+            continue
+        candidate_id = str(raw.get("generated_antibody_id") or f"generated-antibody-{index}")
+        metadata = _dict_or_empty(raw.get("metadata"))
+        developability = _dict_or_empty(metadata.get("developability"))
+        novelty = _dict_or_empty(metadata.get("novelty"))
+        validation = _dict_or_empty(metadata.get("validation"))
+        warnings = [
+            *_string_list(raw.get("warnings")),
+            "Generated antibody hypothesis; no direct binding, activity, safety, "
+            "developability, manufacturability, or direct experimental evidence claim.",
+        ]
+        score = _float_or_none(raw.get("score"))
+        items.append(
+            ReviewItem(
+                run_id=run_id,
+                disease_name=disease_name,
+                candidate_id=candidate_id,
+                candidate_name=candidate_id,
+                item_type="generated_antibody",
+                candidate_origin="generated",
+                target_symbols=_string_list(raw.get("target_symbols")),
+                canonical_smiles=None,
+                score=score,
+                confidence=_float_or_none(raw.get("confidence")),
+                evidence_summary={
+                    "target_evidence_count": len(_string_list(raw.get("target_symbols"))),
+                    "molecule_evidence_count": 0,
+                    "literature_claim_counts": {"supports": 0, "contradicts": 0, "mentions": 0},
+                    "safety_warning_count": 0,
+                    "developability_risk_level": _biologic_developability_risk(developability),
+                    "generated_score": score,
+                    "direct_experimental_evidence": False,
+                },
+                literature_summary={},
+                developability_summary=developability,
+                generation_summary=raw,
+                risk_flags=_biologic_risk_flags(developability, novelty, generated=True),
+                warnings=warnings,
+                priority_bucket="needs_review",
+                review_status="needs_expert_review",
+                metadata={
+                    "source": "biologics",
+                    "biologic_type": "generated_antibody",
+                    "antibody_sequence": {
+                        "sequence_ids": _string_list(raw.get("generated_sequence_ids")),
+                        "validation": validation,
+                        "generated_sequences": metadata.get("generated_sequences") or [],
+                    },
+                    "antibody_novelty": novelty,
+                    "antibody_developability": developability,
+                    "required_expert_roles": _biologics_required_roles(),
+                    "generated_antibody_warning": warnings[-1],
+                    "review_gate_required": True,
+                },
+            )
+        )
+    return items
+
+
+def _biologics_required_roles() -> list[str]:
+    return ["biologics scientist", "antibody engineer", "developability expert"]
+
+
+def _group_by_biologic(raw_items: Any) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    items = raw_items if isinstance(raw_items, list) else []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        biologic_id = str(item.get("biologic_id") or "")
+        if not biologic_id:
+            continue
+        grouped.setdefault(biologic_id, []).append(item)
+    return grouped
+
+
+def _assessment_by_biologic(raw_items: Any) -> dict[str, dict[str, Any]]:
+    if isinstance(raw_items, dict):
+        raw_items = raw_items.get("assessments") or raw_items.get("items") or []
+    items = raw_items if isinstance(raw_items, list) else []
+    by_biologic: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        biologic_id = str(item.get("biologic_id") or "")
+        if biologic_id:
+            by_biologic[biologic_id] = item
+    return by_biologic
+
+
+def _biologic_developability_risk(developability: dict[str, Any]) -> str:
+    if not developability:
+        return "unknown"
+    risks = [
+        str(developability.get(key) or "unknown")
+        for key in (
+            "aggregation_risk",
+            "polyreactivity_risk",
+            "immunogenicity_risk",
+            "viscosity_risk",
+            "stability_risk",
+            "expression_risk",
+        )
+    ]
+    if "high" in risks:
+        return "high"
+    if "medium" in risks:
+        return "medium"
+    if all(risk == "low" for risk in risks):
+        return "low"
+    return "unknown"
+
+
+def _biologic_risk_flags(
+    developability: dict[str, Any],
+    novelty: dict[str, Any],
+    *,
+    generated: bool,
+) -> list[str]:
+    flags: list[str] = []
+    if generated:
+        flags.extend(["generated_no_direct_evidence", "generated_antibody_requires_review"])
+    risk = _biologic_developability_risk(developability)
+    if risk == "high":
+        flags.append("high_antibody_developability_risk")
+    sequence_flags = _string_list(developability.get("sequence_liability_flags"))
+    cdr_flags = _string_list(developability.get("cdr_liability_flags"))
+    if sequence_flags or cdr_flags:
+        flags.append("sequence_liability_risk")
+    if str(novelty.get("novelty_class") or "") in {"known", "near_duplicate"}:
+        flags.append("antibody_novelty_review")
+    return flags
+
+
 def _canonical_smiles(raw: dict[str, Any]) -> str | None:
     chemical = raw.get("chemical_metadata")
     if isinstance(chemical, dict):
@@ -669,6 +955,16 @@ def _target_symbols(raw: dict[str, Any]) -> list[str]:
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None]
+    return [str(value)]
 
 
 def _artifact_literature_claim_counts(summary: dict[str, Any]) -> dict[str, int]:

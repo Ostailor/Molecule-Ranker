@@ -446,7 +446,7 @@ def default_platform_policy() -> AgentGovernancePolicy:
         org_id=None,
         project_id=None,
         policy_name="Platform default agent governance",
-        policy_version="2.7.0",
+        policy_version="2.8.0",
         applies_to_roles=[],
         applies_to_agents=[],
         max_autonomy_level="execute_with_approval",

@@ -134,9 +134,7 @@ class CampaignPlanner:
             dependencies=_dependencies(candidate, hypothesis_ids),
             review_gate=ReviewGate(
                 required=self.budget.require_human_approval,
-                required_approvals=["campaign_advancement_approval"]
-                if self.budget.require_human_approval
-                else [],
+                required_approvals=_required_approvals(candidate, self.budget),
             ),
             status=status,
             provenance_ids=provenance_ids,
@@ -305,6 +303,8 @@ def _resource_estimate(candidate: PortfolioCandidate) -> CampaignResourceEstimat
         return CampaignResourceEstimate.model_validate(dict(raw))
     if candidate.origin == "generated" and not candidate.direct_experimental_evidence:
         return CampaignResourceEstimate(review_slots=1)
+    if _is_biologics_candidate(candidate):
+        return CampaignResourceEstimate(review_slots=2)
     if candidate.uncertainty_score is not None and candidate.uncertainty_score > 0.8:
         return CampaignResourceEstimate(computation_slots=1, review_slots=1)
     return CampaignResourceEstimate(review_slots=1)
@@ -331,6 +331,16 @@ def _followup_categories(candidate: PortfolioCandidate, work_type: str) -> list[
         return ["high-level assay category allocation", "decision-gate evidence review"]
     if work_type == "computation_slot_allocation":
         return ["model uncertainty review", "graph consistency review"]
+    if _is_biologics_candidate(candidate):
+        categories = [
+            "biologics expert review",
+            "antibody sequence liability review",
+            "antibody novelty source-limit review",
+            "biologics developability heuristic review",
+        ]
+        if _requires_external_registry_export(candidate):
+            categories.append("external registry export approval review")
+        return categories
     if candidate.origin == "generated":
         return ["generated hypothesis review", "evidence provenance review"]
     return ["expert review", "campaign decision-gate review"]
@@ -426,6 +436,10 @@ def _dependencies(candidate: PortfolioCandidate, hypothesis_ids: Sequence[str]) 
     dependencies = [f"review hypothesis {hypothesis_id}" for hypothesis_id in hypothesis_ids]
     if candidate.origin == "generated" and not candidate.direct_experimental_evidence:
         dependencies.append("confirm generated candidate provenance before advancement")
+    if _is_biologics_candidate(candidate):
+        dependencies.append("complete biologics-specific expert review gate")
+    if _requires_external_registry_export(candidate):
+        dependencies.append("obtain external registry export approval")
     if candidate.review_status and not _review_approved(candidate):
         dependencies.append(f"resolve review status {candidate.review_status}")
     return dependencies
@@ -440,11 +454,63 @@ def _package_warnings(
     ]
     if candidate.origin == "generated" and not candidate.direct_experimental_evidence:
         warnings.append("Generated candidate remains a computational hypothesis.")
+    if _is_biologics_candidate(candidate):
+        warnings.append(
+            "Antibody work package is high-level review planning only; no operational "
+            "biologics execution instructions are provided."
+        )
+    if _requires_external_registry_export(candidate):
+        warnings.append("External biologics registry export requires explicit approval.")
     if resource_estimate.estimated_cost is None:
         warnings.append(
             "No cost value was supplied; budget fit uses available slot constraints only."
         )
     return warnings
+
+
+def _required_approvals(candidate: PortfolioCandidate, budget: CampaignBudget) -> list[str]:
+    if not budget.require_human_approval:
+        return []
+    approvals = ["campaign_advancement_approval"]
+    if _is_biologics_candidate(candidate):
+        approvals.extend(
+            [
+                "biologics_scientist_review",
+                "antibody_engineer_review",
+                "developability_expert_review",
+            ]
+        )
+    if candidate.origin == "generated" and not candidate.direct_experimental_evidence:
+        approvals.append("generated_hypothesis_review_gate")
+    if _requires_external_registry_export(candidate):
+        approvals.append("external_registry_export_approval")
+    return _deduplicate(approvals)
+
+
+def _is_biologics_candidate(candidate: PortfolioCandidate) -> bool:
+    modality = str(
+        candidate.metadata.get("portfolio_modality_label")
+        or candidate.metadata.get("modality")
+        or candidate.diversity_features.get("portfolio_modality_label")
+        or candidate.diversity_features.get("modality")
+        or ""
+    ).lower()
+    return bool(candidate.metadata.get("biologics_candidate")) or "biologic" in modality
+
+
+def _requires_external_registry_export(candidate: PortfolioCandidate) -> bool:
+    return bool(
+        candidate.metadata.get("external_registry_export_requested")
+        or candidate.metadata.get("external_registry_export_required")
+    )
+
+
+def _deduplicate(values: Sequence[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value not in result:
+            result.append(value)
+    return result
 
 
 def _deferred(package: CampaignWorkPackage, reason: str) -> DeferredCampaignWorkPackage:
