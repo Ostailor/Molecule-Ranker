@@ -330,6 +330,10 @@ validate_app = typer.Typer(
     help="Run molecule-ranker validation suites.",
     no_args_is_help=True,
 )
+e2e_app = typer.Typer(
+    help="Run and inspect V2.7 end-to-end governed discovery workflows.",
+    no_args_is_help=True,
+)
 policy_app = typer.Typer(
     help="List, validate, and explain enterprise policy guardrails.",
     no_args_is_help=True,
@@ -562,6 +566,7 @@ app.add_typer(user_app, name="user")
 app.add_typer(auth_cli_app, name="auth")
 app.add_typer(config_app, name="config")
 app.add_typer(validate_app, name="validate")
+app.add_typer(e2e_app, name="e2e")
 app.add_typer(policy_app, name="policy")
 app.add_typer(governance_app, name="governance")
 app.add_typer(eval_app, name="eval")
@@ -5311,6 +5316,333 @@ def validate_golden_command(
         raise typer.Exit(code=1)
 
 
+@validate_app.command("e2e")
+def validate_e2e_command(
+    workflow: Annotated[
+        str,
+        typer.Option("--workflow", help="End-to-end workflow type to validate."),
+    ] = "full_discovery_loop",
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Validation execution mode."),
+    ] = "mocked",
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Project identifier for validation context."),
+    ] = "validation-project",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Validate a deterministic V2.7 end-to-end workflow bundle."""
+    from molecule_ranker.e2e.validation import EndToEndWorkflowValidator
+    from molecule_ranker.e2e.workflow_runner import EndToEndWorkflowRunner, WorkflowRunRequest
+
+    request = WorkflowRunRequest(
+        workflow_type=workflow,  # type: ignore[arg-type]
+        mode=mode,  # type: ignore[arg-type]
+        disease_name="Validation fixture disease"
+        if workflow.startswith("disease_") or workflow == "full_discovery_loop"
+        else None,
+        project_id=project_id,
+        requested_by="cli",
+    )
+    result = EndToEndWorkflowRunner().run(request)
+    validation = EndToEndWorkflowValidator().validate_run_result(result)
+    payload = validation.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"E2E validation: {'pass' if validation.passed else 'fail'}")
+        typer.echo(f"Workflow: {workflow}")
+        for finding in validation.findings:
+            typer.echo(f"- {finding}")
+    if not validation.passed:
+        raise typer.Exit(code=1)
+
+
+@e2e_app.command("run")
+def e2e_run_command(
+    workflow: Annotated[
+        str,
+        typer.Option("--workflow", help="End-to-end workflow type."),
+    ] = "full_discovery_loop",
+    disease: Annotated[
+        str | None,
+        typer.Option("--disease", help="Disease or project disease objective."),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Project identifier."),
+    ] = None,
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="mocked, dry_run, read_only_live, or write_approved_live."),
+    ] = "mocked",
+    enable_generation: Annotated[
+        bool,
+        typer.Option("--enable-generation", help="Enable optional generation planning."),
+    ] = False,
+    enable_structure: Annotated[
+        bool,
+        typer.Option("--enable-structure", help="Enable optional structure/model tools."),
+    ] = False,
+    enable_integrations: Annotated[
+        bool,
+        typer.Option("--enable-integrations", help="Plan integration sync operations."),
+    ] = False,
+    enable_codex_summary: Annotated[
+        bool,
+        typer.Option("--enable-codex-summary", help="Enable governed Codex summary step."),
+    ] = False,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for e2e run records."),
+    ] = Path(".molecule-ranker/e2e"),
+    autonomy: Annotated[
+        str,
+        typer.Option("--autonomy", help="Autonomy level for the workflow."),
+    ] = "governed",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Force dry-run mode without external writes."),
+    ] = False,
+    partial_on_live_data_unavailable: Annotated[
+        bool,
+        typer.Option(
+            "--partial-on-live-data-unavailable",
+            help="Mark live runs partial instead of failing when required data is missing.",
+        ),
+    ] = False,
+    unavailable_data: Annotated[
+        list[str] | None,
+        typer.Option("--unavailable-data", help="Simulate unavailable live step type."),
+    ] = None,
+) -> None:
+    """Run a V2.7 governed end-to-end workflow."""
+    request = _e2e_workflow_request(
+        workflow=workflow,
+        disease=disease,
+        project_id=project_id,
+        mode="dry_run" if dry_run else mode,
+        autonomy=autonomy,
+        enable_generation=enable_generation,
+        enable_structure=enable_structure,
+        enable_integrations=enable_integrations,
+        enable_codex_summary=enable_codex_summary,
+        unavailable_data=unavailable_data or [],
+        partial_on_live_data_unavailable=partial_on_live_data_unavailable,
+        dry_run=dry_run,
+    )
+    result = _run_and_store_e2e(request, output_dir=output_dir)
+    typer.echo(f"E2E workflow {result.workflow.workflow_id}: {result.workflow.status}")
+    typer.echo(f"Run directory: {_e2e_run_dir(output_dir, result.workflow.workflow_id)}")
+    typer.echo(f"External writes performed: {result.external_writes_performed}")
+    if result.planned_external_writes:
+        typer.echo(f"Planned external writes: {result.planned_external_writes}")
+
+
+@e2e_app.command("status")
+def e2e_status_command(
+    workflow_id: Annotated[str, typer.Option("--workflow-id", help="Workflow ID.")],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for e2e run records."),
+    ] = Path(".molecule-ranker/e2e"),
+) -> None:
+    """Show persisted workflow status."""
+    run_dir = _e2e_run_dir(output_dir, workflow_id)
+    workflow = _e2e_load_workflow(run_dir)
+    typer.echo(f"E2E workflow {workflow.workflow_id}: {workflow.status}")
+    typer.echo(f"Workflow type: {workflow.workflow_type}")
+    typer.echo(f"Mode: {workflow.mode}")
+
+
+@e2e_app.command("resume")
+def e2e_resume_command(
+    workflow_id: Annotated[str, typer.Option("--workflow-id", help="Workflow ID.")],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for e2e run records."),
+    ] = Path(".molecule-ranker/e2e"),
+) -> None:
+    """Resume a persisted workflow using its original deterministic request."""
+    run_dir = _e2e_run_dir(output_dir, workflow_id)
+    workflow = _e2e_load_workflow(run_dir)
+    if workflow.status == "cancelled":
+        typer.echo("Error: cancelled workflows must be cloned or restarted.", err=True)
+        raise typer.Exit(code=1)
+    request = _e2e_load_request(run_dir)
+    request = request.model_copy(
+        update={
+            "unavailable_required_data": [],
+            "metadata": {
+                **request.metadata,
+                "workflow_id": workflow.workflow_id,
+                "resumed_from_status": workflow.status,
+            },
+        }
+    )
+    result = _run_and_store_e2e(request, output_dir=output_dir, run_dir=run_dir)
+    typer.echo(f"E2E workflow {workflow_id}: {result.workflow.status}")
+    typer.echo(f"Run directory: {run_dir}")
+
+
+@e2e_app.command("cancel")
+def e2e_cancel_command(
+    workflow_id: Annotated[str, typer.Option("--workflow-id", help="Workflow ID.")],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for e2e run records."),
+    ] = Path(".molecule-ranker/e2e"),
+) -> None:
+    """Cancel a persisted workflow record."""
+    run_dir = _e2e_run_dir(output_dir, workflow_id)
+    workflow = _e2e_load_workflow(run_dir)
+    cancelled = workflow.model_copy(
+        update={"status": "cancelled", "completed_at": datetime.now(UTC)}
+    )
+    _write_cli_json(run_dir / "workflow.json", cancelled.model_dump(mode="json"))
+    typer.echo(f"E2E workflow {workflow_id}: cancelled")
+
+
+@e2e_app.command("validate")
+def e2e_validate_command(
+    workflow_id: Annotated[
+        str | None,
+        typer.Option("--workflow-id", help="Workflow ID."),
+    ] = None,
+    run_dir: Annotated[
+        Path | None,
+        typer.Option("--run-dir", file_okay=False, help="Existing e2e run directory."),
+    ] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for e2e run records."),
+    ] = Path(".molecule-ranker/e2e"),
+) -> None:
+    """Validate a persisted end-to-end run."""
+    resolved_run_dir = _resolve_e2e_run_dir(
+        workflow_id=workflow_id,
+        run_dir=run_dir,
+        output_dir=output_dir,
+    )
+    validation = _e2e_validate_run_dir(resolved_run_dir)
+    _write_cli_json(resolved_run_dir / "validation.json", validation.model_dump(mode="json"))
+    typer.echo(f"E2E validation: {'pass' if validation.passed else 'fail'}")
+    for finding in validation.findings:
+        typer.echo(f"- {finding}")
+    if not validation.passed:
+        raise typer.Exit(code=1)
+
+
+@e2e_app.command("bundle")
+def e2e_bundle_command(
+    workflow_id: Annotated[
+        str | None,
+        typer.Option("--workflow-id", help="Workflow ID."),
+    ] = None,
+    run_dir: Annotated[
+        Path | None,
+        typer.Option("--run-dir", file_okay=False, help="Existing e2e run directory."),
+    ] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for e2e run records."),
+    ] = Path(".molecule-ranker/e2e"),
+) -> None:
+    """Print a persisted result bundle."""
+    resolved_run_dir = _resolve_e2e_run_dir(
+        workflow_id=workflow_id,
+        run_dir=run_dir,
+        output_dir=output_dir,
+    )
+    bundle_path = resolved_run_dir / "bundle.json"
+    if not bundle_path.exists():
+        typer.echo("Error: result bundle is missing.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(bundle_path.read_text(encoding="utf-8").rstrip())
+
+
+@e2e_app.command("lineage")
+def e2e_lineage_command(
+    workflow_id: Annotated[str, typer.Option("--workflow-id", help="Workflow ID.")],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for e2e run records."),
+    ] = Path(".molecule-ranker/e2e"),
+) -> None:
+    """Print persisted workflow lineage records."""
+    lineage_path = _e2e_run_dir(output_dir, workflow_id) / "lineage.json"
+    if not lineage_path.exists():
+        typer.echo("Error: lineage is missing.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(lineage_path.read_text(encoding="utf-8").rstrip())
+
+
+@e2e_app.command("demo")
+def e2e_demo_command(
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for e2e run records."),
+    ] = Path(".molecule-ranker/e2e"),
+) -> None:
+    """Run a mocked full discovery loop with deterministic synthetic data."""
+    request = _e2e_workflow_request(
+        workflow="full_discovery_loop",
+        disease="Synthetic demo disease",
+        project_id="demo-project",
+        mode="mocked",
+        autonomy="governed",
+        enable_generation=True,
+        enable_structure=True,
+        enable_integrations=False,
+        enable_codex_summary=True,
+        unavailable_data=[],
+        partial_on_live_data_unavailable=False,
+        dry_run=False,
+    )
+    result = _run_and_store_e2e(request, output_dir=output_dir)
+    typer.echo(f"E2E demo {result.workflow.workflow_id}: {result.workflow.status}")
+    typer.echo(f"Run directory: {_e2e_run_dir(output_dir, result.workflow.workflow_id)}")
+
+
+@e2e_app.command("eval")
+def e2e_eval_command(
+    suite: Annotated[
+        str,
+        typer.Option("--suite", help="End-to-end eval suite name."),
+    ] = "default",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the deterministic V2.7 end-to-end eval suite."""
+    from molecule_ranker.e2e.evals import run_end_to_end_eval_suite
+
+    try:
+        result = run_end_to_end_eval_suite(suite=suite)
+    except KeyError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = result.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"E2E eval suite: {result.suite}")
+        typer.echo(f"Status: {result.status}")
+        typer.echo(f"Cases: {result.case_count}")
+        typer.echo(f"Acceptance: {'pass' if result.acceptance_passed else 'fail'}")
+        typer.echo(
+            "External write escape rate: "
+            f"{result.metrics.external_write_escape_rate:.3f}"
+        )
+        typer.echo(
+            "Generated overclaim rate: "
+            f"{result.metrics.generated_overclaim_rate:.3f}"
+        )
+        for failure in result.acceptance_failures:
+            typer.echo(f"- {failure}")
+    if not result.acceptance_passed:
+        raise typer.Exit(code=1)
+
+
 @validate_app.command("artifacts")
 def validate_artifacts_command(
     artifact_dir: Annotated[
@@ -6761,6 +7093,74 @@ def v2_release_gate_command(
                 typer.echo(f"- fail: {check['check_id']}: {check['message']}")
     if report["status"] != "pass":
         raise typer.Exit(code=1)
+
+
+@v2_app.command("end-to-end")
+def v2_end_to_end_command(
+    objective: Annotated[str, typer.Option("--objective", help="Disease or project objective.")],
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Workflow mode: mocked, dry_run, or live."),
+    ] = "mocked",
+    project_id: Annotated[str | None, typer.Option("--project-id")] = None,
+    disease: Annotated[str | None, typer.Option("--disease")] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            dir_okay=True,
+            help="Directory for end_to_end_result_bundle artifacts.",
+        ),
+    ] = Path(".molecule-ranker/v2_7/end_to_end"),
+    write_approval_id: Annotated[
+        str | None,
+        typer.Option("--write-approval-id", help="Required for approved live external writes."),
+    ] = None,
+    external_write: Annotated[
+        bool,
+        typer.Option(
+            "--external-write/--no-external-write",
+            help="Request a live external write sync. Requires approval and governance permission.",
+        ),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
+) -> None:
+    """Run the V2.7 governed end-to-end project workflow."""
+    from molecule_ranker.integrations.operations import (
+        EndToEndWorkflowRequest,
+        EndToEndWorkflowRunner,
+    )
+
+    permissions = ["integration:write"] if write_approval_id else []
+    request = EndToEndWorkflowRequest(
+        objective=objective,
+        disease=disease,
+        project_id=project_id,
+        mode=mode,  # type: ignore[arg-type]
+        requested_external_write=external_write,
+        write_approval_id=write_approval_id,
+        governance_permissions=permissions,
+    )
+    try:
+        bundle = EndToEndWorkflowRunner().run(request, output_dir=output_dir)
+    except PermissionError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    payload = {
+        "bundle": bundle.model_dump(mode="json"),
+        "output_dir": str(output_dir),
+        "artifacts": {
+            "json": str(output_dir / "end_to_end_result_bundle.json"),
+            "manifest": str(output_dir / "end_to_end_result_bundle.manifest.json"),
+            "markdown": str(output_dir / "end_to_end_result_bundle.md"),
+        },
+    }
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"V2.7 end-to-end workflow: {bundle.status}")
+        typer.echo(f"Bundle: {payload['artifacts']['json']}")
 
 
 @graph_app.command("export")
@@ -17858,6 +18258,194 @@ def _print_codex_response(response: Any, *, json_output: bool) -> None:
     typer.echo(f"Audit log: {response.audit_log_path}")
     if response.status in {"error", "guardrail_violation"}:
         raise typer.Exit(code=1)
+
+
+def _e2e_workflow_request(
+    *,
+    workflow: str,
+    disease: str | None,
+    project_id: str | None,
+    mode: str,
+    autonomy: str,
+    enable_generation: bool,
+    enable_structure: bool,
+    enable_integrations: bool,
+    enable_codex_summary: bool,
+    unavailable_data: list[str],
+    partial_on_live_data_unavailable: bool,
+    dry_run: bool,
+) -> Any:
+    from molecule_ranker.e2e.workflow_runner import (
+        EndToEndWorkflowRunnerConfig,
+        WorkflowRunRequest,
+    )
+
+    return WorkflowRunRequest(
+        workflow_type=workflow,  # type: ignore[arg-type]
+        mode=mode,  # type: ignore[arg-type]
+        disease_name=disease,
+        project_id=project_id,
+        requested_by="cli",
+        autonomy_level=autonomy,
+        requested_external_write=enable_integrations,
+        unavailable_required_data=unavailable_data,
+        config=EndToEndWorkflowRunnerConfig(
+            partial_on_live_data_unavailable=partial_on_live_data_unavailable
+        ),
+        metadata={
+            "cli_command": "e2e run",
+            "enable_generation": enable_generation,
+            "enable_structure": enable_structure,
+            "enable_integrations": enable_integrations,
+            "enable_codex_summary": enable_codex_summary,
+            "dry_run_option": dry_run,
+        },
+    )
+
+
+def _run_and_store_e2e(
+    request: Any,
+    *,
+    output_dir: Path,
+    run_dir: Path | None = None,
+) -> Any:
+    from molecule_ranker.e2e.validation import EndToEndWorkflowValidator
+    from molecule_ranker.e2e.workflow_runner import EndToEndWorkflowRunner
+
+    result = EndToEndWorkflowRunner().run(request)
+    if request.metadata.get("enable_integrations") and request.mode == "dry_run":
+        result.planned_external_writes = max(result.planned_external_writes, 1)
+        if result.bundle is not None:
+            result.bundle.integration_summary["planned_external_writes"] = (
+                result.planned_external_writes
+            )
+            result.bundle.integration_summary["external_writes_performed"] = 0
+    validation = EndToEndWorkflowValidator().validate_run_result(result)
+    target_dir = run_dir or _e2e_run_dir(output_dir, result.workflow.workflow_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_cli_json(target_dir / "request.json", request.model_dump(mode="json"))
+    _write_cli_json(target_dir / "workflow.json", result.workflow.model_dump(mode="json"))
+    _write_cli_json(
+        target_dir / "steps.json",
+        [step.model_dump(mode="json") for step in result.steps],
+    )
+    if result.bundle is not None:
+        _write_cli_json(target_dir / "bundle.json", result.bundle.model_dump(mode="json"))
+    _write_cli_json(
+        target_dir / "lineage.json",
+        [record.model_dump(mode="json") for record in result.lineage_records],
+    )
+    _write_cli_json(target_dir / "validation.json", validation.model_dump(mode="json"))
+    _write_cli_json(
+        target_dir / "result.json",
+        {
+            "workflow_id": result.workflow.workflow_id,
+            "workflow_type": result.workflow.workflow_type,
+            "mode": result.workflow.mode,
+            "status": result.workflow.status,
+            "bundle_id": result.bundle.bundle_id if result.bundle is not None else None,
+            "external_writes_performed": result.external_writes_performed,
+            "planned_external_writes": result.planned_external_writes,
+            "warnings": result.warnings,
+            "validation_passed": validation.passed,
+        },
+    )
+    _e2e_update_index(output_dir, result, target_dir)
+    return result
+
+
+def _e2e_validate_run_dir(run_dir: Path) -> Any:
+    from molecule_ranker.e2e.schemas import (
+        EndToEndResultBundle,
+        EndToEndWorkflow,
+        EndToEndWorkflowStep,
+        WorkflowLineageRecord,
+    )
+    from molecule_ranker.e2e.validation import EndToEndWorkflowValidator
+
+    workflow = EndToEndWorkflow.model_validate(_read_cli_json(run_dir / "workflow.json"))
+    steps = [
+        EndToEndWorkflowStep.model_validate(item)
+        for item in _read_cli_json(run_dir / "steps.json")
+    ]
+    bundle_path = run_dir / "bundle.json"
+    bundle = (
+        EndToEndResultBundle.model_validate(_read_cli_json(bundle_path))
+        if bundle_path.exists()
+        else None
+    )
+    lineage = [
+        WorkflowLineageRecord.model_validate(item)
+        for item in _read_cli_json(run_dir / "lineage.json")
+    ]
+    return EndToEndWorkflowValidator().validate(
+        workflow=workflow,
+        steps=steps,
+        bundle=bundle,
+        lineage_records=lineage,
+    )
+
+
+def _e2e_load_workflow(run_dir: Path) -> Any:
+    from molecule_ranker.e2e.schemas import EndToEndWorkflow
+
+    return EndToEndWorkflow.model_validate(_read_cli_json(run_dir / "workflow.json"))
+
+
+def _e2e_load_request(run_dir: Path) -> Any:
+    from molecule_ranker.e2e.workflow_runner import WorkflowRunRequest
+
+    return WorkflowRunRequest.model_validate(_read_cli_json(run_dir / "request.json"))
+
+
+def _resolve_e2e_run_dir(
+    *,
+    workflow_id: str | None,
+    run_dir: Path | None,
+    output_dir: Path,
+) -> Path:
+    if run_dir is not None:
+        return run_dir
+    if workflow_id is None:
+        typer.echo("Error: provide --workflow-id or --run-dir.", err=True)
+        raise typer.Exit(code=1)
+    return _e2e_run_dir(output_dir, workflow_id)
+
+
+def _e2e_run_dir(output_dir: Path, workflow_id: str) -> Path:
+    return output_dir / workflow_id
+
+
+def _e2e_update_index(output_dir: Path, result: Any, run_dir: Path) -> None:
+    index_path = output_dir / "index.json"
+    if index_path.exists():
+        index = _read_cli_json(index_path)
+        if not isinstance(index, dict):
+            index = {}
+    else:
+        index = {}
+    workflows = index.get("workflows", [])
+    if not isinstance(workflows, list):
+        workflows = []
+    entry = {
+        "workflow_id": result.workflow.workflow_id,
+        "workflow_type": result.workflow.workflow_type,
+        "mode": result.workflow.mode,
+        "status": result.workflow.status,
+        "run_dir": str(run_dir),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    workflows = [
+        workflow
+        for workflow in workflows
+        if not (
+            isinstance(workflow, dict)
+            and workflow.get("workflow_id") == result.workflow.workflow_id
+        )
+    ]
+    workflows.append(entry)
+    _write_cli_json(index_path, {"workflows": workflows})
 
 
 def _run_engineering_command(command: list[str], *, cwd: Path) -> dict[str, Any]:

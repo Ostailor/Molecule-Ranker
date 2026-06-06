@@ -143,12 +143,15 @@ from molecule_ranker.runtime_agents.schemas import (
     RuntimeToolSpec,
 )
 from molecule_ranker.runtime_agents.skills import (
+    FullEndToEndDiscoverySkillRequest,
+    FullEndToEndDiscoverySkillResult,
     RuntimeSkillSpec,
     RuntimeSkillStepTemplate,
     RuntimeSkillValidationError,
     default_runtime_skills,
     expand_skill_to_plan,
     get_runtime_skill,
+    run_full_end_to_end_discovery_skill,
 )
 from molecule_ranker.runtime_agents.state import (
     RuntimeMemoryPolicyError,
@@ -266,6 +269,8 @@ __all__ = [
     "RepairReportStatus",
     "SelfEvaluationAgent",
     "MultiAgentScientificOrchestrator",
+    "FullEndToEndDiscoverySkillRequest",
+    "FullEndToEndDiscoverySkillResult",
     "RuntimeSkillSpec",
     "RuntimeSkillStepTemplate",
     "RuntimeSkillValidationError",
@@ -311,6 +316,7 @@ __all__ = [
     "export_memory",
     "expand_skill_to_plan",
     "get_runtime_skill",
+    "run_full_end_to_end_discovery_skill",
     "generate_codex_permission_profile",
     "manifest_hash",
     "memory_audit_events",

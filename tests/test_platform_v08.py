@@ -45,7 +45,7 @@ class FakeCodexProvider:
 
 
 def test_version_is_v22() -> None:
-    assert __version__ == "2.6.0"
+    assert __version__ == "2.7.0"
 
 
 def test_hosted_auth_rbac_project_sharing_and_codex_queue(tmp_path: Path) -> None:

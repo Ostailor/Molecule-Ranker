@@ -210,6 +210,92 @@ def project_list_alias(
     return project_list_page(request, user, database, store)
 
 
+@router.get("/dashboard/e2e", response_class=HTMLResponse)
+def e2e_workflow_list_dashboard_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    """Render hosted V2.7 end-to-end workflow list."""
+    _require_e2e_dashboard_permission(database, user, "e2e:read")
+    rows = [
+        [
+            _link(f"/dashboard/e2e/{record.workflow_id}", record.workflow_id),
+            record.result.workflow.workflow_type,
+            _mode_badge(record.result.workflow.mode),
+            record.result.workflow.status,
+            record.result.workflow.disease_name or "",
+            record.result.external_writes_performed,
+            "pass" if record.validation.passed else "fail",
+        ]
+        for record in _e2e_dashboard_store(request).list()
+    ]
+    body = (
+        _e2e_nav()
+        + "<h2>E2E workflow list</h2>"
+        + "<p>Hosted V2.7 governed discovery workflows are dry-run/read-only by default. "
+        + "External writes and generated advancement require explicit approval.</p>"
+        + _table(
+            [
+                "Workflow",
+                "Type",
+                "Mode",
+                "Status",
+                "Disease",
+                "External writes",
+                "Validation",
+            ],
+            rows,
+            empty_message="No end-to-end workflows have been run yet.",
+        )
+    )
+    return _e2e_html("E2E workflows", body)
+
+
+@router.get("/dashboard/e2e/{workflow_id}", response_class=HTMLResponse)
+def e2e_workflow_detail_dashboard_page(
+    workflow_id: str,
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    """Render hosted V2.7 end-to-end workflow detail."""
+    _require_e2e_dashboard_permission(database, user, "e2e:read")
+    record = _e2e_dashboard_record_or_404(request, workflow_id)
+    workflow = record.result.workflow
+    body = (
+        _e2e_nav()
+        + f"<h2>E2E workflow detail: {_h(workflow.workflow_id)}</h2>"
+        + _definition_list(
+            {
+                "Workflow type": workflow.workflow_type,
+                "Status": workflow.status,
+                "Mode": workflow.mode,
+                "Project": workflow.project_id or "",
+                "Disease": workflow.disease_name or "",
+                "Autonomy": workflow.autonomy_level,
+                "External writes performed": record.result.external_writes_performed,
+                "Planned external writes": record.result.planned_external_writes,
+            }
+        )
+        + "<h2>Step timeline</h2>"
+        + _e2e_step_timeline(record)
+        + "<h2>Approvals</h2>"
+        + _e2e_approval_summary(record)
+        + "<h2>Lineage</h2>"
+        + _e2e_lineage_table(record)
+        + "<h2>Result bundle</h2>"
+        + _e2e_bundle_summary(record)
+        + "<h2>Validation report</h2>"
+        + _e2e_validation_summary(record)
+        + "<h2>External sync summary</h2>"
+        + _e2e_external_sync_summary(record)
+        + "<h2>Partial success/failure remediation</h2>"
+        + _e2e_remediation_summary(record)
+    )
+    return _e2e_html("E2E workflow detail", body)
+
+
 @router.get("/dashboard/tools", response_class=HTMLResponse)
 def tool_marketplace_dashboard_page(
     request: Request,
@@ -2037,6 +2123,23 @@ def integration_data_contracts_page(
                 for contract in contracts
             ],
         ),
+    )
+
+
+@router.get("/dashboard/integrations/operations", response_class=HTMLResponse)
+def integration_operations_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    from molecule_ranker.integrations.operations import (
+        build_integration_operations_dashboard,
+        render_integration_operations_dashboard,
+    )
+
+    _require_integration_dashboard_permission(database, user, "integration:read")
+    return HTMLResponse(
+        render_integration_operations_dashboard(build_integration_operations_dashboard())
     )
 
 
@@ -6671,6 +6774,223 @@ def _tool_dashboard_snapshot(request: Request) -> ToolDashboardSnapshot:
     return snapshot
 
 
+def _e2e_dashboard_store(request: Request) -> Any:
+    from molecule_ranker.e2e.hosted import HostedE2EWorkflowStore
+
+    store = getattr(request.app.state, "e2e_workflow_store", None)
+    if store is None:
+        store = HostedE2EWorkflowStore()
+        request.app.state.e2e_workflow_store = store
+    return store
+
+
+def _e2e_dashboard_record_or_404(request: Request, workflow_id: str) -> Any:
+    try:
+        return _e2e_dashboard_store(request).require(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="E2E workflow not found.") from exc
+
+
+def _require_e2e_dashboard_permission(
+    database: PlatformDatabase,
+    user: UserAccount,
+    permission: str,
+) -> None:
+    permissions = {str(item) for item in user.metadata.get("permissions", [])}
+    if (
+        user.is_admin
+        or "*" in permissions
+        or "e2e:admin" in permissions
+        or permission in permissions
+        or has_permission(user, permission, database=database)
+    ):
+        return
+    raise HTTPException(status_code=403, detail=f"E2E permission denied: {permission}")
+
+
+def _e2e_html(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)}</title>"
+        "<link rel=\"stylesheet\" href=\"/static/dashboard/integrations.css\">"
+        "</head><body>"
+        f"<header class=\"integration-header\"><h1>{_h(title)}</h1></header>"
+        "<main class=\"integration-content\">"
+        "<p class=\"notice\"><strong>Governed workflow operations.</strong> "
+        "Bundles summarize research operations only; they are not scientific evidence. "
+        "No external writes occur without approval and permission.</p>"
+        f"{body}</main></body></html>\n"
+    )
+
+
+def _e2e_nav() -> str:
+    return "<nav>" + _link("/dashboard/e2e", "E2E workflows") + "</nav>"
+
+
+def _e2e_step_timeline(record: Any) -> str:
+    rows = [
+        [
+            step.step_index,
+            step.step_name,
+            step.step_type,
+            step.status,
+            "required" if step.required else "optional",
+            ", ".join(step.warnings),
+        ]
+        for step in record.result.steps
+    ]
+    return _table(
+        ["Index", "Step", "Type", "Status", "Requirement", "Warnings"],
+        rows,
+        empty_message="No workflow steps recorded.",
+    )
+
+
+def _e2e_approval_summary(record: Any) -> str:
+    approval_records = [
+        lineage
+        for lineage in record.result.lineage_records
+        if lineage.relation_type in {"approved_for", "approved_mapping"}
+        or lineage.metadata.get("approval_id")
+    ]
+    pending_steps = [
+        step
+        for step in record.result.steps
+        if step.status == "awaiting_approval"
+        or step.metadata.get("external_write")
+        or step.step_type == "approval_gate"
+    ]
+    rows = [
+        [
+            lineage.lineage_id,
+            lineage.relation_type,
+            lineage.metadata.get("approval_id", ""),
+            lineage.source_object_type,
+            lineage.target_object_type,
+        ]
+        for lineage in approval_records
+    ]
+    if pending_steps:
+        rows.extend(
+            [
+                [
+                    step.step_id,
+                    "awaiting_approval",
+                    "external_write" if step.metadata.get("external_write") else "",
+                    step.step_type,
+                    step.step_name,
+                ]
+                for step in pending_steps
+            ]
+        )
+    return _table(
+        ["ID", "Approval state", "Approval", "Source", "Target"],
+        rows,
+        empty_message="No approvals recorded or pending.",
+    )
+
+
+def _e2e_lineage_table(record: Any) -> str:
+    rows = [
+        [
+            lineage.lineage_id,
+            lineage.relation_type,
+            lineage.source_object_type,
+            lineage.source_object_id,
+            lineage.target_object_type,
+            lineage.target_object_id,
+            ", ".join(lineage.artifact_ids),
+        ]
+        for lineage in record.result.lineage_records
+    ]
+    return _table(
+        ["Lineage", "Relation", "Source type", "Source", "Target type", "Target", "Artifacts"],
+        rows,
+        empty_message="No lineage records available.",
+    )
+
+
+def _e2e_bundle_summary(record: Any) -> str:
+    bundle = record.result.bundle
+    if bundle is None:
+        return "<p>No result bundle available.</p>"
+    return (
+        _definition_list(
+            {
+                "Bundle": bundle.bundle_id,
+                "Summary": bundle.result_summary,
+                "Key artifacts": len(bundle.key_artifact_ids),
+                "Limitations": "; ".join(bundle.limitations),
+            }
+        )
+        + _safe_json(bundle.model_dump(mode="json"))
+    )
+
+
+def _e2e_validation_summary(record: Any) -> str:
+    validation = record.validation
+    return (
+        _definition_list(
+            {
+                "Validation": "pass" if validation.passed else "fail",
+                "Required artifacts present": validation.required_artifacts_present,
+                "Artifact contracts valid": validation.artifact_contracts_valid,
+                "Lineage complete": validation.lineage_complete,
+                "Guardrails passed": validation.guardrails_passed,
+                "External sync validated": validation.external_sync_validated,
+                "Approvals satisfied": validation.approvals_satisfied,
+            }
+        )
+        + _table(
+            ["Findings"],
+            [[finding] for finding in validation.findings],
+            empty_message="No validation findings.",
+        )
+    )
+
+
+def _e2e_external_sync_summary(record: Any) -> str:
+    bundle = record.result.bundle
+    integration_summary = bundle.integration_summary if bundle is not None else {}
+    return _definition_list(
+        {
+            "Mode": integration_summary.get("mode", record.result.workflow.mode),
+            "Planned external writes": record.result.planned_external_writes,
+            "External writes performed": record.result.external_writes_performed,
+            "Deterministic validation required": integration_summary.get(
+                "deterministic_validation_required",
+                True,
+            ),
+            "Dry-run": integration_summary.get("dry_run", record.result.workflow.mode == "dry_run"),
+        }
+    )
+
+
+def _e2e_remediation_summary(record: Any) -> str:
+    failed_steps = [step for step in record.result.steps if step.status == "failed"]
+    if record.result.workflow.status == "succeeded" and not failed_steps:
+        return "<p>No remediation required.</p>"
+    rows = [
+        [
+            step.step_name,
+            step.step_type,
+            "retry or repair before downstream required execution"
+            if step.required
+            else "optional step can be resumed after data/config is available",
+            "; ".join(step.warnings),
+        ]
+        for step in failed_steps
+    ]
+    if not rows:
+        rows = [[record.result.workflow.status, "workflow", "review approvals and resume", ""]]
+    return _table(
+        ["Item", "Type", "Recommended remediation", "Warnings"],
+        rows,
+        empty_message="No remediation items.",
+    )
+
+
 def _require_tool_dashboard_permission(
     database: PlatformDatabase,
     user: UserAccount,
@@ -7046,6 +7366,7 @@ def _nav() -> str:
         "Mappings": "/dashboard/integrations/mappings",
         "Webhooks": "/dashboard/integrations/webhooks",
         "Data contracts": "/dashboard/integrations/data-contracts",
+        "Operations": "/dashboard/integrations/operations",
     }
     return "<nav>" + " ".join(_link(href, label) for label, href in links.items()) + "</nav>"
 

@@ -8,6 +8,8 @@ from molecule_ranker.agents.experiment_readiness import ExperimentReadinessAgent
 from molecule_ranker.agents.experimental_evidence import ExperimentalEvidenceAgent
 from molecule_ranker.agents.failure_diagnosis import FailureDiagnosisAgent
 from molecule_ranker.agents.hypothesis_generation import HypothesisGenerationAgent
+from molecule_ranker.agents.integration_ops import IntegrationOpsAgent
+from molecule_ranker.agents.integration_repair import IntegrationRepairAgent
 from molecule_ranker.agents.literature_evidence import LiteratureEvidenceAgent
 from molecule_ranker.agents.medicinal_chemistry_critic import MedicinalChemistryCriticAgent
 from molecule_ranker.agents.molecule_retrieval import MoleculeRetrievalAgent
@@ -39,6 +41,8 @@ __all__ = [
     "ExperimentalEvidenceAgent",
     "FailureDiagnosisAgent",
     "HypothesisGenerationAgent",
+    "IntegrationOpsAgent",
+    "IntegrationRepairAgent",
     "LiteratureEvidenceAgent",
     "MoleculeRetrievalAgent",
     "NovelMoleculeAgent",

@@ -99,6 +99,30 @@ def test_validation_filter_rejects_descriptor_bounds_and_alerts_by_config():
     assert "basic_alerts_present" in rejected[0].validation.rejection_reasons
 
 
+def test_validation_filter_rejects_radical_generated_molecules():
+    retained, rejected = ValidationFilter().filter(
+        [_generated("radical", "CC[CH]C")],
+        config=GenerationConfig(),
+    )
+
+    assert retained == []
+    assert rejected[0].validation is not None
+    assert "radical_atom_present" in rejected[0].validation.rejection_reasons
+    assert "structural_sanity_alerts_present" in rejected[0].warnings
+
+
+def test_validation_filter_rejects_heteroatom_halogen_bonds():
+    retained, rejected = ValidationFilter().filter(
+        [_generated("n_f_bond", "FNc1ccccc1")],
+        config=GenerationConfig(),
+    )
+
+    assert retained == []
+    assert rejected[0].validation is not None
+    assert "heteroatom_halogen_bond" in rejected[0].validation.rejection_reasons
+    assert "heteroatom_halogen_bond" in rejected[0].validation.pains_or_alerts
+
+
 def test_novelty_filter_rejects_duplicates_by_inchikey_or_smiles():
     generated = _generated("duplicate", "CCOc1ccccc1")
 

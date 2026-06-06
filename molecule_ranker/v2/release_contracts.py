@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-V2_SCHEMA_VERSION = "2.0"
-V2_CONTRACT_VERSION = "v2.0.0"
+V2_SCHEMA_VERSION = "2.7"
+V2_CONTRACT_VERSION = "v2.7.0"
 V2_API_CONTRACT_VERSION = "api.v2"
 
 ContractKind = Literal[
@@ -114,7 +114,15 @@ V2_API_ROUTES: tuple[str, ...] = (
     "/api/v2/projects/{project_id}/artifacts",
     "/api/v2/review/health",
     "/api/v2/experiments/health",
+    "/api/v2/e2e/workflows",
+    "/api/v2/e2e/workflows/{id}",
+    "/api/v2/e2e/workflows/{id}/resume",
+    "/api/v2/e2e/workflows/{id}/cancel",
+    "/api/v2/e2e/workflows/{id}/lineage",
+    "/api/v2/e2e/workflows/{id}/bundle",
+    "/api/v2/e2e/workflows/{id}/validate",
     "/api/v2/integrations/catalog",
+    "/api/v2/integrations/operations/dashboard",
     "/api/v2/jobs/{job_id}",
     "/api/v2/projects/{project_id}/codex/summarize",
     "/api/v2/admin/health",
@@ -132,6 +140,7 @@ V2_CLI_COMMAND_GROUPS: tuple[str, ...] = (
     "experiment",
     "campaign",
     "eval",
+    "e2e",
     "integration",
     "codex",
     "admin",
@@ -191,6 +200,24 @@ V2_ARTIFACT_SCHEMAS: dict[str, V2ArtifactSchemaContract] = {
         ("graph_id", "entities", "relations", "provenance"),
         ("queries", "contradictions", "staleness_report"),
     ),
+    "end_to_end_result_bundle": _artifact_schema(
+        "end_to_end_result_bundle",
+        (
+            "workflow_id",
+            "mode",
+            "status",
+            "workflow_state",
+            "runtime_plan",
+            "sync_plan",
+            "integration_result",
+            "artifacts",
+            "lineage_links",
+            "safety_constraints",
+        ),
+        ("repair_plan", "audit_events", "warnings"),
+        "V2.7 bundles must preserve workflow state, lineage, validation gates, "
+        "and safety constraints.",
+    ),
 }
 
 V2_RELEASE_CONTRACTS: tuple[V2ReleaseContract, ...] = (
@@ -245,6 +272,15 @@ V2_RELEASE_CONTRACTS: tuple[V2ReleaseContract, ...] = (
         "knowledge_graph_schema",
         "schema",
         V2_ARTIFACT_SCHEMAS["knowledge_graph"].required_fields,
+    ),
+    _release_contract(
+        "end_to_end_result_bundle_schema",
+        "schema",
+        V2_ARTIFACT_SCHEMAS["end_to_end_result_bundle"].required_fields,
+        compatibility_notes=(
+            "No breaking changes from the V2 contract; V2.7 adds additive end-to-end "
+            "workflow bundles without removing existing V2 API routes."
+        ),
     ),
 )
 

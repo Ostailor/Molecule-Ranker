@@ -96,6 +96,25 @@ if TYPE_CHECKING:
         CodexIntegrationAssistant,
         detect_prohibited_integration_actions,
     )
+    from molecule_ranker.integrations.operations import (
+        EndToEndResultBundle,
+        EndToEndWorkflowRequest,
+        EndToEndWorkflowRunner,
+        ExternalLineageTracker,
+        ExternalSyncPlan,
+        ExternalSyncPlanner,
+        ExternalWorkflowOrchestrator,
+        IntegrationDryRunSimulator,
+        IntegrationOperationResult,
+        IntegrationOpsAgent,
+        IntegrationRepairAgent,
+        IntegrationRepairPlan,
+        LineageLink,
+        WorkflowArtifact,
+        WorkflowStateMachine,
+        build_integration_operations_dashboard,
+        render_integration_operations_dashboard,
+    )
     from molecule_ranker.integrations.store import IntegrationStore
     from molecule_ranker.integrations.sync import SyncEngine, SyncRequest, run_sync
     from molecule_ranker.integrations.worker import (
@@ -137,8 +156,14 @@ __all__ = [
     "IntegrationCredential",
     "IntegrationCredentialCreate",
     "IntegrationCredentialRef",
+    "IntegrationDryRunSimulator",
     "IntegrationStore",
+    "IntegrationOperationResult",
+    "IntegrationOpsAgent",
+    "IntegrationRepairAgent",
+    "IntegrationRepairPlan",
     "IntegrationWorker",
+    "LineageLink",
     "MappingSuggestionReport",
     "MappingSuggestionRequest",
     "PostgreSQLWarehouseConnector",
@@ -157,8 +182,18 @@ __all__ = [
     "SyncJobRecord",
     "SyncRecord",
     "SyncEngine",
+    "ExternalSyncPlan",
+    "ExternalSyncPlanner",
+    "ExternalWorkflowOrchestrator",
+    "ExternalLineageTracker",
+    "EndToEndResultBundle",
+    "EndToEndWorkflowRequest",
+    "EndToEndWorkflowRunner",
     "SyncRequest",
     "WebhookIngestRequest",
+    "WorkflowArtifact",
+    "WorkflowStateMachine",
+    "build_integration_operations_dashboard",
     "connector_catalog",
     "build_export_package",
     "codex_suggest_mapping",
@@ -188,6 +223,7 @@ __all__ = [
     "package_manifest",
     "recommend_safe_connector_task",
     "render_package_markdown",
+    "render_integration_operations_dashboard",
     "run_sync",
     "validate_data_contract",
     "validate_mapping_suggestions",
@@ -212,6 +248,28 @@ def __getattr__(name: str) -> object:
         from molecule_ranker.integrations import sync
 
         return getattr(sync, name)
+    if name in {
+        "EndToEndResultBundle",
+        "EndToEndWorkflowRequest",
+        "EndToEndWorkflowRunner",
+        "ExternalLineageTracker",
+        "ExternalSyncPlan",
+        "ExternalSyncPlanner",
+        "ExternalWorkflowOrchestrator",
+        "IntegrationDryRunSimulator",
+        "IntegrationOperationResult",
+        "IntegrationOpsAgent",
+        "IntegrationRepairAgent",
+        "IntegrationRepairPlan",
+        "LineageLink",
+        "WorkflowArtifact",
+        "WorkflowStateMachine",
+        "build_integration_operations_dashboard",
+        "render_integration_operations_dashboard",
+    }:
+        from molecule_ranker.integrations import operations
+
+        return getattr(operations, name)
     if name in {
         "IntegrationWorker",
         "enqueue_connector_health_check_job",

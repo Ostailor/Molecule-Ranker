@@ -543,7 +543,7 @@ def _policy(
             "policy_id": policy_id,
             "org_id": "org-1",
             "policy_name": policy_id,
-            "policy_version": "2.6.0",
+            "policy_version": "2.7.0",
             "approval_required_actions": approval_required_actions or [],
             "created_at": NOW,
             "updated_at": NOW,

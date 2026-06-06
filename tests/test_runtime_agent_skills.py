@@ -22,6 +22,7 @@ EXPECTED_SKILLS = {
     "diagnose_failed_job",
     "generate_support_bundle",
     "integration_dry_run_sync",
+    "full_end_to_end_discovery",
 }
 
 

@@ -8,6 +8,12 @@ from molecule_ranker.runtime_agents.skills.base import (
 )
 from molecule_ranker.runtime_agents.skills.evaluate_and_report import RUN_EVALUATION_SUITE
 from molecule_ranker.runtime_agents.skills.experiment_feedback import IMPORT_RESULTS_AND_REPLAN
+from molecule_ranker.runtime_agents.skills.full_end_to_end_discovery import (
+    FULL_END_TO_END_DISCOVERY,
+    FullEndToEndDiscoverySkillRequest,
+    FullEndToEndDiscoverySkillResult,
+    run_full_end_to_end_discovery_skill,
+)
 from molecule_ranker.runtime_agents.skills.generate_and_triage import SKILL as GENERATE_AND_TRIAGE
 from molecule_ranker.runtime_agents.skills.graph_hypothesis_campaign import (
     BUILD_GRAPH_AND_HYPOTHESES,
@@ -32,6 +38,7 @@ def default_runtime_skills() -> dict[str, RuntimeSkillSpec]:
         DIAGNOSE_FAILED_JOB,
         GENERATE_SUPPORT_BUNDLE,
         INTEGRATION_DRY_RUN_SYNC,
+        FULL_END_TO_END_DISCOVERY,
     ]
     return {skill.skill_name: skill for skill in skills}
 
@@ -47,7 +54,10 @@ __all__ = [
     "RuntimeSkillSpec",
     "RuntimeSkillStepTemplate",
     "RuntimeSkillValidationError",
+    "FullEndToEndDiscoverySkillRequest",
+    "FullEndToEndDiscoverySkillResult",
     "default_runtime_skills",
     "expand_skill_to_plan",
     "get_runtime_skill",
+    "run_full_end_to_end_discovery_skill",
 ]

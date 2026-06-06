@@ -5,8 +5,8 @@
   "dependency_lock_hash": "0b1dd598445548ad512d594d81f8d244148a19d11b40d3a70d5c65204f3936dc",
   "git_commit": "7e5b2fdc882b2c31a6eb636c32116c8704d74ac7",
   "known_limitations": [
-    "V2.6 is for internal research use only and is not a clinical product.",
-    "V2.6 keeps runtime-agent, co-pilot, repair-loop, and governed tool controls intact and adds enterprise governance for Codex runtime agents, subagents, tools, campaigns, and autonomous actions.",
+    "V2.7 is for internal research use only and is not a clinical product.",
+    "V2.7 adds agentic integration operations and reliable end-to-end workflow execution while keeping runtime-agent, co-pilot, repair-loop, and governed tool controls intact.",
     "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
     "Generated molecules are computational hypotheses and require independent validation.",
     "Portfolio recommendations are research prioritization aids, not clinical or experimental instructions.",
@@ -43,5 +43,5 @@
     "report": "/Users/omtailor/MolCreate/.molecule-ranker/validation/release/golden_validation_report.json",
     "status": "not_recorded"
   },
-  "version": "2.6.0"
+  "version": "2.7.0"
 }

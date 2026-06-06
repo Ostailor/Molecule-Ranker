@@ -7,6 +7,7 @@ from molecule_ranker.generation.chemistry import (
     canonicalize_smiles,
     descriptors_from_mol,
     detect_basic_alerts,
+    detect_structural_sanity_alerts,
     inchi_key_from_mol,
     mol_from_smiles,
 )
@@ -66,6 +67,7 @@ class ValidationFilter:
             BASIC_PROPERTY_BOUNDS,
         )
         alerts = detect_basic_alerts(mol)
+        structural_sanity_alerts = detect_structural_sanity_alerts(mol)
         rejection_reasons: list[str] = []
         warnings = list(candidate.warnings)
         if not canonicalization_ok:
@@ -81,6 +83,9 @@ class ValidationFilter:
             warnings.append("basic_alerts_present")
             if config.reject_basic_alerts or not config.basic_alerts_warning_only:
                 rejection_reasons.append("basic_alerts_present")
+        if structural_sanity_alerts:
+            warnings.append("structural_sanity_alerts_present")
+            rejection_reasons.extend(structural_sanity_alerts)
 
         validation = ChemicalValidationResult(
             valid_rdkit_mol=True,
@@ -88,11 +93,12 @@ class ValidationFilter:
             canonicalization_ok=canonicalization_ok,
             allowed_elements_ok=allowed_elements_ok,
             descriptor_bounds_ok=not descriptor_reasons,
-            pains_or_alerts=alerts,
+            pains_or_alerts=alerts + structural_sanity_alerts,
             rejection_reasons=rejection_reasons,
             metadata={
                 "descriptor_bounds": BASIC_PROPERTY_BOUNDS,
                 "allowed_elements": sorted(allowed_elements),
+                "structural_sanity_alerts": structural_sanity_alerts,
             },
         )
         return candidate.model_copy(

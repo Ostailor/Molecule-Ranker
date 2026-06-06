@@ -25,6 +25,9 @@ _BASIC_ALERT_SMARTS: dict[str, str] = {
     "isocyanate": "N=C=O",
 }
 
+_HALOGENS = {"F", "Cl", "Br", "I"}
+_HETEROATOMS_WITH_UNSTABLE_HALOGEN_BONDS = {"N", "O", "S", "P"}
+
 
 def mol_from_smiles(smiles: str) -> Chem.Mol | None:
     """Parse and sanitize a SMILES string with RDKit."""
@@ -134,4 +137,20 @@ def detect_basic_alerts(mol: Chem.Mol) -> list[str]:
         pattern = Chem.MolFromSmarts(smarts)
         if pattern is not None and mol.HasSubstructMatch(pattern):
             alerts.append(name)
+    return alerts
+
+
+def detect_structural_sanity_alerts(mol: Chem.Mol) -> list[str]:
+    """Detect generated structures that should not be retained for review."""
+
+    alerts: list[str] = []
+    if any(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms()):
+        alerts.append("radical_atom_present")
+
+    for bond in mol.GetBonds():
+        symbols = {bond.GetBeginAtom().GetSymbol(), bond.GetEndAtom().GetSymbol()}
+        if symbols & _HALOGENS and symbols & _HETEROATOMS_WITH_UNSTABLE_HALOGEN_BONDS:
+            alerts.append("heteroatom_halogen_bond")
+            break
+
     return alerts

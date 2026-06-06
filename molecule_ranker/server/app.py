@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from molecule_ranker import __version__
 from molecule_ranker.codex_backbone.schemas import CodexBackboneConfig
+from molecule_ranker.e2e.hosted import HostedE2EWorkflowStore
 from molecule_ranker.platform.auth import AuthError, SessionTokenManager
 from molecule_ranker.platform.db import PlatformDatabase
 from molecule_ranker.platform.observability import ObservabilityMiddleware, metrics
@@ -28,6 +29,7 @@ from molecule_ranker.server.routes import (
     artifacts,
     auth,
     codex,
+    e2e,
     experiments,
     governance,
     integrations,
@@ -213,6 +215,7 @@ def create_app(
     )
     app.state.root_dir = resolved_root
     app.state.workspace_store = ProjectWorkspaceStore(resolved_root)
+    app.state.e2e_workflow_store = HostedE2EWorkflowStore()
     app.state.enable_codex_backbone = bool(config.enable_codex_backbone)
     app.state.codex_config = config
     app.state.codex_provider = codex_provider
@@ -368,6 +371,7 @@ def create_app(
     app.include_router(review.router, prefix="/api/v2", dependencies=v2_dependencies)
     app.include_router(experiments.router, prefix="/api/v2", dependencies=v2_dependencies)
     app.include_router(integrations.router, prefix="/api/v2", dependencies=v2_dependencies)
+    app.include_router(e2e.router, prefix="/api/v2", dependencies=v2_dependencies)
     app.include_router(governance.router, prefix="/api/v2")
     app.include_router(agent.router, prefix="/api/v2")
     app.include_router(repair.router, prefix="/api/v2", dependencies=v2_dependencies)

@@ -19,6 +19,7 @@ from molecule_ranker.integrations import (
     validate_mapping_suggestions,
 )
 from molecule_ranker.integrations.dashboard import render_integration_dashboard
+from molecule_ranker.integrations.operations import build_integration_operations_dashboard
 from molecule_ranker.integrations.store import IntegrationStore
 from molecule_ranker.integrations.sync import SyncRequest
 from molecule_ranker.integrations.worker import enqueue_integration_sync_job
@@ -513,6 +514,15 @@ def integration_dashboard(
 ) -> Response:
     _require_integration_read(user, database)
     return Response(content=render_integration_dashboard(database.integration_dashboard_summary()))
+
+
+@router.get("/integrations/operations/dashboard")
+def integration_operations_dashboard(
+    user: Annotated[UserAccount, Depends(current_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> dict[str, Any]:
+    _require_integration_read(user, database)
+    return {"dashboard": build_integration_operations_dashboard()}
 
 
 def _connector_or_404(database: PlatformDatabase, connector_id: str) -> ConnectorConfig:
