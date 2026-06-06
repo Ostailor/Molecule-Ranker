@@ -17,13 +17,24 @@ from molecule_ranker.v3_readiness import (
 def test_autonomy_validation_suite_produces_v3_readiness_report() -> None:
     report = run_v3_readiness_suite()
 
-    assert report.version == __version__ == "2.9.0"
+    assert report.version == __version__ == "3.0.0"
     assert report.status == "pass"
     assert report.release_candidate.status == "pass"
-    assert report.final_dashboard["title"] == "Final V3 Readiness Dashboard"
+    assert report.final_dashboard["title"] == "V3 Discovery Operating System Dashboard"
     assert report.final_dashboard["report_type"] == (
         "software_autonomy_validation_not_clinical_validation"
     )
+    assert report.final_dashboard["operating_system_goal"] == (
+        "autonomous_discovery_operating_system_with_validated_human_governed_agentic_workflows"
+    )
+    assert report.final_dashboard["v3_defaults"] == {
+        "one_command_workflows": True,
+        "validated_result_bundles": True,
+        "human_governance_checkpoints": True,
+        "approved_tools_only": True,
+        "useful_multi_agent_coordination_by_default": True,
+        "safety_governance_reproducibility_defaults": True,
+    }
     assert {scenario.scenario_id for scenario in report.scenario_results} == {
         "small_molecule_full_loop",
         "biologics_full_loop",
@@ -54,7 +65,8 @@ def test_v3_readiness_cli_writes_artifacts(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["status"] == "pass"
-    assert payload["version"] == "2.9.0"
+    assert payload["version"] == "3.0.0"
+    assert payload["final_dashboard"]["title"] == "V3 Discovery Operating System Dashboard"
     assert (tmp_path / "v3_readiness_report.json").exists()
     assert (tmp_path / "v3_readiness_dashboard.json").exists()
     assert (tmp_path / "v3_release_candidate.json").exists()

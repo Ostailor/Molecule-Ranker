@@ -1,0 +1,24 @@
+{
+  "command": "molecule-ranker discover --disease \"Synthetic V3 planning condition\" --mode dry_run --output-dir \"$OUTPUT_DIR\" --json",
+  "demo_id": "dry_run_full_discovery_loop",
+  "expected_artifacts": [
+    "discover_result.json",
+    "trace.json",
+    "v3_result_bundle.json",
+    "v3_result_certification.json",
+    "v3_human_governance_matrix.json"
+  ],
+  "external_writes_expected": false,
+  "mode": "dry_run",
+  "no_clinical_claims": true,
+  "no_protocols_synthesis_or_dosing": true,
+  "synthetic_or_mocked": true,
+  "what_output_does_not_prove": [
+    "No clinical validity or biomedical outcome is proven.",
+    "No protocol, synthesis instruction, or dosing guidance is provided."
+  ],
+  "what_output_means": [
+    "The full discovery loop can run with dry-run defaults.",
+    "External writes remain disabled."
+  ]
+}

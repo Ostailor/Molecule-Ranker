@@ -134,6 +134,7 @@ def test_dashboard_pages_require_auth(tmp_path: Path) -> None:
         "/dashboard/projects/workspace-a/campaigns/audit",
         "/dashboard/projects/workspace-a/candidates/Rasagiline",
         "/dashboard/projects/workspace-a/codex",
+        "/dashboard/v3",
         "/dashboard/v3-readiness",
         "/dashboard/v3-readiness/runs",
         "/dashboard/v3-readiness/boundaries",
@@ -1078,6 +1079,97 @@ def test_v3_readiness_dashboard_pages_render_release_evidence(tmp_path: Path) ->
         assert response.status_code == 200, response.text
         for fragment in fragments:
             assert fragment in response.text
+
+
+def test_v3_dashboard_home_renders_operating_system_panels(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/v3")
+
+    assert response.status_code == 200, response.text
+    for fragment in [
+        "V3 discovery operating system",
+        "Start new discovery workflow",
+        "Recent discovery workflows",
+        "Workflow status",
+        "Result bundles",
+        "Approval queue",
+        "Human review required",
+        "Agent activity",
+        "Guardrail status",
+        "Integration status",
+        "Campaign co-pilot status",
+        "Evaluation status",
+        "V3 readiness status",
+        "Run Discovery Workflow",
+        "Step 1: Disease/project goal",
+        "Step 2: Workflow mode",
+        "Step 3: Optional features",
+        "Step 4: Governance/approval settings",
+        "Step 5: Review plan",
+        "Step 6: Run",
+    ]:
+        assert fragment in response.text
+
+
+def test_v3_dashboard_workflow_wizard_defaults_safe(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/v3")
+
+    assert response.status_code == 200, response.text
+    assert '<option value="dry_run" selected>dry_run</option>' in response.text
+    assert '<option value="execute_with_approval" selected>' in response.text
+    assert 'id="enable_generation" name="enable_generation"' in response.text
+    assert 'id="enable_generation" name="enable_generation" checked' not in response.text
+    assert 'id="enable_antibody_generation" name="enable_antibody_generation"' in response.text
+    assert (
+        'id="enable_antibody_generation" name="enable_antibody_generation" checked'
+        not in response.text
+    )
+    assert 'id="external_writes_enabled" name="external_writes_enabled"' in response.text
+    assert (
+        'id="external_writes_enabled" name="external_writes_enabled" checked'
+        not in response.text
+    )
+    assert (
+        'id="human_review_generated_hypotheses" '
+        'name="human_review_generated_hypotheses" checked'
+    ) in response.text
+    assert "Human review required for generated hypotheses" in response.text
+
+
+def test_v3_dashboard_unsafe_options_require_acknowledgment(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/v3")
+
+    assert response.status_code == 200, response.text
+    assert "Unsafe options require explicit approval before execution" in response.text
+    assert 'name="unsafe_option_acknowledgment"' in response.text
+    assert 'name="approval_id"' in response.text
+    assert 'data-requires-approval="true"' in response.text
+    assert "write_approved_live requires approval" in response.text
+    assert "External writes remain disabled unless explicitly approved" in response.text
+
+
+def test_v3_dashboard_result_bundle_visible(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _web_login(client, "admin@example.com", "Admin-password-1")
+
+    response = client.get("/dashboard/v3")
+
+    assert response.status_code == 200, response.text
+    for artifact in [
+        "v3_result_bundle.json",
+        "v3_result_bundle.md",
+        "v3_result_bundle.zip",
+        "v3_result_certification.json",
+    ]:
+        assert artifact in response.text
 
 
 def test_v3_readiness_dashboard_makes_boundary_failures_prominent(

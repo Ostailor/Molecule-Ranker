@@ -92,7 +92,7 @@ def render_residual_risk_register_markdown(register: ResidualRiskRegister) -> st
         f"- Scope: {register.scope}",
         f"- Created at: {register.created_at.isoformat()}",
         "",
-        "This register records residual software/autonomy risks for V2.9/V3 readiness. "
+        "This register records residual software/autonomy risks for V3.0 readiness. "
         "It is not clinical validation or regulatory safety certification.",
         "",
         "## Risks",
@@ -249,7 +249,7 @@ def _default_residual_risks() -> list[ResidualRisk]:
             "risk_user_misunderstanding",
             "user_misunderstanding",
             (
-                "Users may misunderstand V2.9 validation artifacts as clinical or "
+                "Users may misunderstand V3.0 validation artifacts as clinical or "
                 "scientific validation."
             ),
             "medium",

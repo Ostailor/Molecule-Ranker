@@ -39,6 +39,5 @@
   ],
   "external_writes_allowed": false,
   "synthetic": true,
-  "version": "2.9.0"
+  "version": "3.0.0"
 }
-

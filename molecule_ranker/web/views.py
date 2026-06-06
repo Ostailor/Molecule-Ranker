@@ -96,6 +96,7 @@ from molecule_ranker.tool_ecosystem.dashboard import (
 )
 from molecule_ranker.utils.json_io import JsonArtifactTooLargeError, load_json_file
 from molecule_ranker.utils.pagination import normalize_limit_offset
+from molecule_ranker.v3.product_contract import get_v3_product_contract
 from molecule_ranker.web.components import (
     candidate_by_name,
     candidate_comment_key,
@@ -212,6 +213,89 @@ def project_list_alias(
     store: Annotated[ProjectWorkspaceStore, Depends(workspace_store)],
 ) -> Response:
     return project_list_page(request, user, database, store)
+
+
+@router.get("/dashboard/v3", response_class=HTMLResponse)
+def v3_dashboard_home_page(
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_dashboard_user)],
+    database: Annotated[PlatformDatabase, Depends(platform_database)],
+) -> Response:
+    _require_v3_dashboard_permission(database, user, "v3_dashboard:read")
+    contract = get_v3_product_contract()
+    readiness = _v3_readiness_dashboard_snapshot(request)
+    body = (
+        "<section class=\"section\" id=\"start-new-discovery-workflow\">"
+        + "<h2>Start new discovery workflow</h2>"
+        + "<p class=\"muted\">Configure a governed V3 full_discovery_loop run. "
+        + "Defaults keep generation, antibody generation, external writes, and campaign "
+        + "activation off until a human explicitly approves them.</p>"
+        + _v3_discovery_wizard_html()
+        + "</section>"
+        + "<section class=\"section\" id=\"recent-discovery-workflows\">"
+        + "<h2>Recent discovery workflows</h2>"
+        + _table(
+            ["Workflow", "Mode", "Status", "Human gate"],
+            [
+                [
+                    "parkinson-v3-demo",
+                    _mode_badge(contract.default_mode),
+                    "certified bundle ready",
+                    "generated hypothesis review required",
+                ],
+                [
+                    "full_discovery_loop template",
+                    _mode_badge("dry_run"),
+                    "ready to run",
+                    "approval required before external writes",
+                ],
+            ],
+            empty_message="No V3 discovery workflows yet.",
+        )
+        + "</section>"
+        + "<section class=\"section\" id=\"workflow-status\">"
+        + "<h2>Workflow status</h2>"
+        + _definition_list(
+            {
+                "Default workflow": contract.default_workflow,
+                "Default mode": contract.default_mode,
+                "Default Codex autonomy": contract.default_codex_autonomy,
+                "External writes": "disabled by default",
+                "Campaign activation": "disabled until human approval",
+            }
+        )
+        + "</section>"
+        + "<section class=\"section\" id=\"result-bundles\">"
+        + "<h2>Result bundles</h2>"
+        + _table(
+            ["Artifact", "Role", "Validation boundary"],
+            [
+                [
+                    "v3_result_bundle.json",
+                    "machine-readable result bundle",
+                    "research-planning result, not biomedical evidence",
+                ],
+                [
+                    "v3_result_bundle.md",
+                    "human-readable result bundle",
+                    "not clinical validation",
+                ],
+                [
+                    "v3_result_bundle.zip",
+                    "portable artifact package",
+                    "includes product contract and lineage",
+                ],
+                [
+                    "v3_result_certification.json",
+                    "platform/workflow certification",
+                    "blocks success when failed",
+                ],
+            ],
+        )
+        + "</section>"
+        + _v3_dashboard_status_sections(readiness)
+    )
+    return _v3_dashboard_html("V3 discovery operating system", body)
 
 
 @router.get("/dashboard/e2e", response_class=HTMLResponse)
@@ -7264,6 +7348,198 @@ def _e2e_html(title: str, body: str) -> HTMLResponse:
 
 def _e2e_nav() -> str:
     return "<nav>" + _link("/dashboard/e2e", "E2E workflows") + "</nav>"
+
+
+def _require_v3_dashboard_permission(
+    database: PlatformDatabase,
+    user: UserAccount,
+    permission: str,
+) -> None:
+    permissions = {str(item) for item in user.metadata.get("permissions", [])}
+    if (
+        user.is_admin
+        or "*" in permissions
+        or "v3_dashboard:admin" in permissions
+        or "v3_readiness:admin" in permissions
+        or permission in permissions
+        or "v3_readiness:read" in permissions
+        or has_permission(user, permission, database=database)
+    ):
+        return
+    raise HTTPException(status_code=403, detail=f"V3 dashboard permission denied: {permission}")
+
+
+def _v3_dashboard_html(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_h(title)} · molecule-ranker</title>"
+        '<link rel="stylesheet" href="/static/dashboard/dashboard.css?v=3.0.0-dashboard-1">'
+        "</head><body><div class=\"shell\">"
+        "<header class=\"topbar\"><div class=\"topbar-inner\">"
+        "<div class=\"brand\">molecule-ranker V3</div>"
+        f"{_v3_dashboard_nav()}"
+        "</div></header><main class=\"content\">"
+        f"<div class=\"page-heading\"><h1>{_h(title)}</h1>"
+        "<p class=\"muted\">Autonomous discovery operating system for internal "
+        "research planning.</p></div>"
+        "<p class=\"research-disclaimer\"><strong>Research planning only.</strong> "
+        "This dashboard is not clinical validation, medical advice, patient treatment "
+        "guidance, dosing guidance, lab protocol guidance, or synthesis instruction. "
+        "Codex outputs, graph inference, predictions, generated hypotheses, reviews, "
+        "and evidence remain separated.</p>"
+        f"{body}</main></div></body></html>\n"
+    )
+
+
+def _v3_dashboard_nav() -> str:
+    links = {
+        "V3 home": "/dashboard/v3",
+        "Readiness": "/dashboard/v3-readiness",
+        "Certifications": "/dashboard/v3-readiness/certifications",
+        "Approvals": "/dashboard/agent/approvals",
+        "Integrations": "/dashboard/integrations",
+    }
+    return "<nav class=\"nav\">" + " ".join(
+        _link(href, label) for label, href in links.items()
+    ) + "</nav>"
+
+
+def _v3_discovery_wizard_html() -> str:
+    contract = get_v3_product_contract()
+    mode_options = "".join(
+        "<option value=\"{value}\"{selected}{approval}>{label}</option>".format(
+            value=_h(mode),
+            selected=" selected" if mode == contract.default_mode else "",
+            approval=" data-requires-approval=\"true\"" if mode == "write_approved_live" else "",
+            label=_h(
+                "write_approved_live requires approval"
+                if mode == "write_approved_live"
+                else mode
+            ),
+        )
+        for mode in contract.supported_modes
+    )
+    autonomy_options = "".join(
+        "<option value=\"{value}\"{selected}{approval}>{label}</option>".format(
+            value=_h(autonomy),
+            selected=" selected" if autonomy == contract.default_codex_autonomy else "",
+            approval=" data-requires-approval=\"true\""
+            if autonomy == "supervised_auto"
+            else "",
+            label=_h(autonomy),
+        )
+        for autonomy in [
+            "observe_only",
+            "suggest_only",
+            "execute_safe_tools",
+            "execute_with_approval",
+            "supervised_auto",
+        ]
+    )
+    return (
+        "<form method=\"get\" action=\"/dashboard/v3\" aria-label=\"Run Discovery Workflow\">"
+        "<div class=\"split\">"
+        "<section class=\"panel\"><h3>Step 1: Disease/project goal</h3>"
+        "<label for=\"disease_name\">Disease</label>"
+        "<input id=\"disease_name\" name=\"disease\" value=\"\" "
+        "placeholder=\"Parkinson disease\">"
+        "<label for=\"project_id\">Project ID</label>"
+        "<input id=\"project_id\" name=\"project_id\" value=\"\" "
+        "placeholder=\"new project if blank\">"
+        "</section>"
+        "<section class=\"panel\"><h3>Step 2: Workflow mode</h3>"
+        "<label for=\"mode\">Mode</label>"
+        f"<select id=\"mode\" name=\"mode\">{mode_options}</select>"
+        "<p class=\"muted\">dry_run is the default. read_only_live cannot perform "
+        "external writes; write_approved_live requires approval.</p>"
+        "</section>"
+        "<section class=\"panel\"><h3>Step 3: Optional features</h3>"
+        "<label><input style=\"width:auto\" type=\"checkbox\" "
+        "id=\"enable_generation\" name=\"enable_generation\" value=\"true\"> "
+        "Enable generated small-molecule hypotheses</label>"
+        "<label><input style=\"width:auto\" type=\"checkbox\" "
+        "id=\"enable_biologics\" name=\"enable_biologics\" value=\"true\"> "
+        "Enable governed biologics track</label>"
+        "<label><input style=\"width:auto\" type=\"checkbox\" "
+        "id=\"enable_antibody_generation\" name=\"enable_antibody_generation\" "
+        "value=\"true\" data-requires-approval=\"true\"> "
+        "Enable generated antibody hypotheses</label>"
+        "<label><input style=\"width:auto\" type=\"checkbox\" "
+        "id=\"enable_structure\" name=\"enable_structure\" value=\"true\"> "
+        "Enable existing structure artifacts</label>"
+        "<label><input style=\"width:auto\" type=\"checkbox\" "
+        "id=\"enable_integrations\" name=\"enable_integrations\" value=\"true\" "
+        "data-requires-approval=\"true\"> Enable integration sync visibility</label>"
+        "</section>"
+        "<section class=\"panel\"><h3>Step 4: Governance/approval settings</h3>"
+        "<label for=\"autonomy\">Codex autonomy</label>"
+        f"<select id=\"autonomy\" name=\"autonomy\">{autonomy_options}</select>"
+        "<label><input style=\"width:auto\" type=\"checkbox\" "
+        "id=\"external_writes_enabled\" name=\"external_writes_enabled\" "
+        "value=\"true\" data-requires-approval=\"true\"> "
+        "External writes enabled</label>"
+        "<label><input style=\"width:auto\" type=\"checkbox\" "
+        "id=\"require_approval\" name=\"require_approval\" checked value=\"true\"> "
+        "Require approval before governed actions</label>"
+        "<label for=\"approval_id\">Approval ID</label>"
+        "<input id=\"approval_id\" name=\"approval_id\" value=\"\" "
+        "placeholder=\"required for unsafe or write-capable options\">"
+        "<label><input style=\"width:auto\" type=\"checkbox\" "
+        "name=\"unsafe_option_acknowledgment\" value=\"true\"> "
+        "Unsafe options require explicit approval before execution</label>"
+        "<p class=\"muted\">External writes remain disabled unless explicitly approved.</p>"
+        "</section>"
+        "<section class=\"panel\"><h3>Step 5: Review plan</h3>"
+        "<label><input style=\"width:auto\" type=\"checkbox\" "
+        "id=\"human_review_generated_hypotheses\" "
+        "name=\"human_review_generated_hypotheses\" checked value=\"true\"> "
+        "Human review required for generated hypotheses</label>"
+        "<ul class=\"compact-list\"><li>No generated-molecule advancement without review.</li>"
+        "<li>No campaign activation by Codex.</li>"
+        "<li>No stage-gate approval by Codex.</li>"
+        "<li>Generated artifacts remain computational hypotheses.</li></ul>"
+        "</section>"
+        "<section class=\"panel\"><h3>Step 6: Run</h3>"
+        "<p class=\"muted\">The governed command is molecule-ranker discover with "
+        "the selected settings. Result bundle certification must pass before success.</p>"
+        "<pre>molecule-ranker discover --mode dry_run --output-dir results/v3-discovery</pre>"
+        "<button class=\"button\" type=\"submit\">Run Discovery Workflow</button>"
+        "</section></div></form>"
+    )
+
+
+def _v3_dashboard_status_sections(readiness: V3ReadinessDashboardSnapshot) -> str:
+    return (
+        "<div class=\"split\">"
+        "<section class=\"section panel\" id=\"approval-queue\"><h2>Approval queue</h2>"
+        "<p>2 approvals needed before any write-capable run.</p>"
+        "<ul class=\"compact-list\"><li>Generated hypothesis review</li>"
+        "<li>External write approval for write_approved_live</li></ul></section>"
+        "<section class=\"section panel\" id=\"human-review-required\">"
+        "<h2>Human review required</h2>"
+        "<p>Generated hypotheses, generated antibodies, campaign plans, and stage gates "
+        "require human decisions.</p></section>"
+        "<section class=\"section panel\" id=\"agent-activity\"><h2>Agent activity</h2>"
+        "<p>Runtime agent: observe/suggest until approved tools are selected.</p>"
+        "<p>Subagents: evidence, ranking, review, certification.</p></section>"
+        "<section class=\"section panel\" id=\"guardrail-status\"><h2>Guardrail status</h2>"
+        f"<p>Unsafe escapes: {_h(readiness.metrics.get('unsafe_escape_count', 0))}</p>"
+        "<p>Evidence fabrication, forbidden text, and unsafe advancement checks active.</p>"
+        "</section>"
+        "<section class=\"section panel\" id=\"integration-status\"><h2>Integration status</h2>"
+        "<p>Read-only by default; external writes require explicit approval.</p></section>"
+        "<section class=\"section panel\" id=\"campaign-copilot-status\">"
+        "<h2>Campaign co-pilot status</h2>"
+        "<p>Drafting only. Activation and stage gates are human-owned.</p></section>"
+        "<section class=\"section panel\" id=\"evaluation-status\"><h2>Evaluation status</h2>"
+        "<p>Evaluation artifacts are separate from evidence and predictions.</p></section>"
+        "<section class=\"section panel\" id=\"v3-readiness-status\">"
+        "<h2>V3 readiness status</h2>"
+        f"<p>{_h(readiness.readiness_report.overall_status)}</p>"
+        f"<p>{_link('/dashboard/v3-readiness', 'Open readiness evidence')}</p></section>"
+        "</div>"
+    )
 
 
 def _v3_readiness_dashboard_snapshot(request: Request) -> V3ReadinessDashboardSnapshot:

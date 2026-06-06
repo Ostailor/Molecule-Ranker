@@ -23,10 +23,30 @@ NOW = datetime(2026, 6, 6, tzinfo=UTC)
 def test_v3_readiness_ready_scenario() -> None:
     report = build_v3_readiness_report(now=lambda: NOW)
 
+    assert report.version == "3.0.0"
     assert report.overall_status == "ready"
     assert report.blocking_issues == []
     assert report.failed_scenarios == 0
     assert len(report.metadata["sections"]) >= 17
+    assert report.metadata["v3_goal"] == (
+        "autonomous_discovery_operating_system_with_validated_human_governed_agentic_workflows"
+    )
+    assert report.metadata["v3_operating_defaults"] == {
+        "one_command_end_to_end_workflows": True,
+        "stable_autonomous_runtime_experience": True,
+        "validated_result_bundles": True,
+        "human_governance_checkpoints": True,
+        "codex_approved_tools_only": True,
+        "multi_agent_coordination_useful_by_default": True,
+        "safety_governance_reproducibility_defaults": True,
+        "production_ready_dashboard": True,
+        "enterprise_documentation_and_training": True,
+        "release_certification_validation_package": True,
+    }
+    assert report.metadata["science_scope"] == "no_major_new_scientific_capabilities"
+    assert "generated_binding_activity_safety_efficacy_manufacturability_claims" in (
+        report.metadata["forbidden_claims"]
+    )
 
 
 def test_v3_readiness_not_ready_due_to_boundary_failure() -> None:
@@ -78,5 +98,10 @@ def test_write_v3_readiness_report_outputs_json_and_markdown(tmp_path: Path) -> 
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["report_id"] == report.report_id
     assert payload["overall_status"] == "ready"
+    assert payload["metadata"]["validation_artifact"] == (
+        "software_autonomy_validation_not_clinical_validation"
+    )
     markdown = render_v3_readiness_report_markdown(report)
-    assert markdown.startswith("# V3 Readiness Report")
+    assert markdown.startswith("# V3.0 Validation Package")
+    assert "one-command end-to-end workflows" in markdown
+    assert "approved tools only" in markdown

@@ -31,6 +31,38 @@ from molecule_ranker.autonomy_validation.schemas import (
 
 V3_READINESS_JSON = "v3_readiness_report.json"
 V3_READINESS_MARKDOWN = "v3_readiness_report.md"
+V3_OPERATING_SYSTEM_GOAL = (
+    "autonomous_discovery_operating_system_with_validated_human_governed_agentic_workflows"
+)
+V3_OPERATING_DEFAULTS = {
+    "one_command_end_to_end_workflows": True,
+    "stable_autonomous_runtime_experience": True,
+    "validated_result_bundles": True,
+    "human_governance_checkpoints": True,
+    "codex_approved_tools_only": True,
+    "multi_agent_coordination_useful_by_default": True,
+    "safety_governance_reproducibility_defaults": True,
+    "production_ready_dashboard": True,
+    "enterprise_documentation_and_training": True,
+    "release_certification_validation_package": True,
+}
+V3_FORBIDDEN_CLAIMS = [
+    "medical_advice",
+    "patient_treatment_guidance",
+    "dosing_guidance",
+    "lab_protocols",
+    "synthesis_instructions",
+    "expression_purification_immunization_or_wet_lab_protocols",
+    "fabricated_evidence",
+    "fabricated_assay_results",
+    "fabricated_citations",
+    "fabricated_molecules_or_antibody_sequences",
+    "fabricated_graph_facts",
+    "fabricated_external_records",
+    "fabricated_approvals",
+    "codex_generated_scientific_truth",
+    "generated_binding_activity_safety_efficacy_manufacturability_claims",
+]
 
 CRITICAL_BOUNDARY_TYPES = {
     "evidence_fabrication",
@@ -128,7 +160,11 @@ def build_v3_readiness_report(
             "unsafe_escapes": unsafe_escapes,
             "read_only_live_required": read_only_live_required,
             "biologics_enabled_by_default": biologics_enabled_by_default,
-            "validation_artifact": "software_autonomy_readiness_not_clinical_validation",
+            "v3_goal": V3_OPERATING_SYSTEM_GOAL,
+            "v3_operating_defaults": dict(V3_OPERATING_DEFAULTS),
+            "science_scope": "no_major_new_scientific_capabilities",
+            "forbidden_claims": list(V3_FORBIDDEN_CLAIMS),
+            "validation_artifact": "software_autonomy_validation_not_clinical_validation",
         },
     )
 
@@ -155,15 +191,30 @@ def write_v3_readiness_report(
 def render_v3_readiness_report_markdown(report: V3ReadinessReport) -> str:
     sections = list(report.metadata.get("sections", []))
     lines = [
-        "# V3 Readiness Report",
+        "# V3.0 Validation Package",
         "",
         f"- Report ID: {report.report_id}",
         f"- Version: {report.version}",
         f"- Recommendation: {report.overall_status}",
         f"- Created at: {report.created_at.isoformat()}",
+        "- Goal: autonomous discovery operating system with validated human-governed "
+        "agentic workflows.",
         "",
         "This is a software/autonomy readiness report, not clinical validation or "
         "scientific validation.",
+        "",
+        "## V3.0 Operating Defaults",
+        "",
+        "- one-command end-to-end workflows",
+        "- stable autonomous runtime experience",
+        "- validated result bundles",
+        "- human governance checkpoints",
+        "- Codex operation through approved tools only",
+        "- useful multi-agent coordination by default",
+        "- strong safety, governance, and reproducibility defaults",
+        "- production-ready V3 dashboard experience",
+        "- enterprise-ready documentation and training",
+        "- release certification and validation package",
         "",
         "## Sections",
         "",
@@ -445,6 +496,9 @@ def _required_before_v3(sections: list[dict[str, Any]]) -> list[str]:
 __all__ = [
     "V3_READINESS_JSON",
     "V3_READINESS_MARKDOWN",
+    "V3_FORBIDDEN_CLAIMS",
+    "V3_OPERATING_DEFAULTS",
+    "V3_OPERATING_SYSTEM_GOAL",
     "V3ReadinessReport",
     "build_v3_readiness_report",
     "render_v3_readiness_report_markdown",

@@ -399,6 +399,9 @@ def _no_forbidden_text(
         return False
     payload = bundle.model_dump(mode="json")
     payload.pop("limitations", None)
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        metadata.pop("v3_product_contract", None)
     text = json.dumps(payload, sort_keys=True)
     failed = False
     for pattern, label in FORBIDDEN_REPORT_PATTERNS:

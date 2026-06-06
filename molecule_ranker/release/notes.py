@@ -15,23 +15,27 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "",
             "## Release Scope",
             "",
-            "V2.9 prepares molecule-ranker for V3.0 with software/autonomy "
-            "validation across end-to-end workflows, result certification, "
-            "governance boundaries, safety guardrails, residual risks, operational "
-            "readiness, and the final V3 readiness dashboard. It inherits the "
-            "validated enterprise discovery operating system, the V2.8 governed "
-            "biologics and antibody discovery track, plus the "
-            "small-molecule, runtime-agent, co-pilot, repair-loop, governed-tool, "
-            "MCP gateway, multi-agent, review, graph, hypothesis, portfolio, "
-            "campaign, evaluation, integration, result-bundle, stable APIs and SDK "
-            "systems. V2.9 "
-            "does not add major new science capabilities and does not expand "
-            "molecule generation, docking, ADMET, graph reasoning, model training, "
-            "external integrations, or lab execution. The research boundary "
-            "remains intact: campaign plans, hypotheses, research questions, graph "
-            "paths, portfolio recommendations, structure workflows, docking scores, "
-            "model predictions, generated molecules, and generated antibodies are "
-            "planning or prioritization signals, not biomedical claims.",
+            "V3.0 ships molecule-ranker as an autonomous discovery operating system "
+            "with validated human-governed agentic workflows. The release focuses "
+            "on one-command end-to-end workflows, a stable autonomous runtime "
+            "experience, validated result bundles, human governance checkpoints, "
+            "Codex operation through approved tools only, useful multi-agent "
+            "coordination by default, strong safety/governance/reproducibility "
+            "defaults, a production-ready V3 dashboard experience, enterprise-ready "
+            "documentation and training, and a release certification plus V3 "
+            "validation package. It inherits the V2.9 source-backed molecule and "
+            "biologics ranking, governed generation, developability triage, feedback, "
+            "expert review, runtime-agent, tool-governance, MCP gateway, co-pilot, "
+            "multi-agent, certification, safety-case, residual-risk, demo, and "
+            "release-candidate foundations. V3.0 does not add major new science "
+            "capabilities and does not expand modality support, molecule generation, "
+            "docking, ADMET, graph reasoning, model training, external integrations, "
+            "or lab execution except for stability, validation, usability, and "
+            "end-to-end coherence. The research boundary remains intact: campaign "
+            "plans, hypotheses, research questions, graph paths, portfolio "
+            "recommendations, structure workflows, docking scores, model predictions, "
+            "generated molecules, and generated antibodies are planning or "
+            "prioritization signals, not biomedical claims.",
             "",
             "## Included",
             "",
@@ -116,6 +120,22 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "AgentRunControl, AgentIncident, AgentPolicyViolation, "
             "AgentGovernanceReport, AgentChangeRequest, AgentApprovalPolicy, "
             "AgentKillSwitch, and AgentGovernanceBoard controls.",
+            "- V3.0 one-command workflows for readiness, release certification, demo, "
+            "dashboard, and result-bundle generation.",
+            "- V3.0 validated result bundles that package manifest, safety case, "
+            "residual-risk register, readiness report, autonomy summary, and JSON "
+            "sidecars as software/autonomy validation artifacts.",
+            "- V3.0 human governance checkpoints for external writes, generated-output "
+            "advancement, autonomy increases, policy overrides, capability grants, "
+            "budgets, certifications, and high-risk actions.",
+            "- V3.0 approved-tools-only Codex operation through registry, RBAC, policy, "
+            "approval, artifact validation, guardrail, and audit checks.",
+            "- V3.0 multi-agent coordination defaults that favor bounded, useful "
+            "diagnosis, governance, repair, and workflow execution lanes.",
+            "- V3.0 production dashboard readiness for release status, validation "
+            "evidence, governance posture, reliability, and residual risk.",
+            "- V3.0 enterprise documentation and training for operators, admins, "
+            "reviewers, and governed Codex users.",
             "- V2.9 AutonomyValidationSuite, V3ReadinessReport, "
             "EndToEndResultCertification, HumanGovernanceMatrix, "
             "AutonomyBoundaryTest, AgentReliabilityScorecard, SafetyCaseReport, "
@@ -174,9 +194,9 @@ def render_release_notes(manifest: dict[str, Any]) -> str:
             "governance policy changes, budgets, capability grants, or certifications",
             "- Agent incidents, policy violations, guardrail failures, policy drift, "
             "prompt drift, and tool drift must remain visible in governance reports",
-            "- V2.9 validation evidence packages are software/process validation artifacts",
-            "- V2.9 enterprise and readiness validation is not clinical validation",
-            "- V2.9 support bundles are diagnostics manifests, not biomedical evidence",
+            "- V3.0 validation packages are software/autonomy validation artifacts",
+            "- V3.0 release certification is not clinical validation",
+            "- V3.0 support bundles are diagnostics manifests, not biomedical evidence",
             "",
             "## Contracts",
             "",

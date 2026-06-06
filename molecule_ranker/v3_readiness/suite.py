@@ -22,6 +22,18 @@ ReadinessStatus = Literal["pass", "fail"]
 ScenarioStatus = Literal["passed", "failed"]
 RiskSeverity = Literal["low", "medium", "high"]
 
+V3_OPERATING_SYSTEM_GOAL = (
+    "autonomous_discovery_operating_system_with_validated_human_governed_agentic_workflows"
+)
+V3_DASHBOARD_DEFAULTS = {
+    "one_command_workflows": True,
+    "validated_result_bundles": True,
+    "human_governance_checkpoints": True,
+    "approved_tools_only": True,
+    "useful_multi_agent_coordination_by_default": True,
+    "safety_governance_reproducibility_defaults": True,
+}
+
 V29_CONSTRAINTS: tuple[str, ...] = (
     "no_medical_advice",
     "no_patient_treatment_guidance",
@@ -167,7 +179,7 @@ class V3ReadinessReport(V3ReadinessModel):
 
 
 class AutonomyValidationSuite:
-    """V2.9 software/autonomy validation suite for V3.0 readiness."""
+    """V3.0 software/autonomy validation suite for governed discovery workflows."""
 
     def __init__(self, now: Callable[[], datetime] | None = None) -> None:
         self._now = now or (lambda: datetime.now(UTC))
@@ -255,9 +267,10 @@ class AutonomyValidationSuite:
             final_dashboard=dashboard,
             created_at=self._now(),
             limitations=[
-                "V2.9 readiness reports are software and autonomy validation artifacts.",
+                "V3.0 validation reports are software and autonomy validation artifacts.",
                 "They are not clinical validation, biomedical evidence, or medical advice.",
                 "Generated molecule and antibody outputs remain computational hypotheses only.",
+                "V3.0 does not add major new scientific capabilities.",
             ],
         )
 
@@ -296,7 +309,7 @@ class AutonomyValidationSuite:
             (
                 "biologics_full_loop",
                 WorkflowRunRequest(
-                    workflow_type="full_discovery_loop_with_biologics",
+                    workflow_type="biologics_discovery_loop",
                     mode="mocked",
                     disease_name="V3 readiness fixture disease",
                     project_id="v3-readiness-biologics-fixture",
@@ -551,7 +564,7 @@ class AutonomyValidationSuite:
                 "medium",
                 (
                     "Live external connector behavior remains environment-dependent; "
-                    "V2.9 defaults to dry-run/read-only."
+                    "V3.0 defaults to dry-run/read-only."
                 ),
                 (
                     "Require environment-specific connector validation and explicit approvals "
@@ -631,9 +644,11 @@ def render_v3_readiness_dashboard(
     risk_register: ResidualRiskRegister,
 ) -> dict[str, Any]:
     return {
-        "title": "Final V3 Readiness Dashboard",
+        "title": "V3 Discovery Operating System Dashboard",
         "version": __version__,
         "status": status,
+        "operating_system_goal": V3_OPERATING_SYSTEM_GOAL,
+        "v3_defaults": dict(V3_DASHBOARD_DEFAULTS),
         "summary": {
             "scenario_count": len(scenario_results),
             "scenarios_passed": sum(
@@ -699,7 +714,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _dashboard_markdown(report: V3ReadinessReport) -> str:
     lines = [
-        "# Final V3 Readiness Dashboard",
+        "# V3 Discovery Operating System Dashboard",
         "",
         f"- Version: {report.version}",
         f"- Status: {report.status}",
@@ -708,6 +723,8 @@ def _dashboard_markdown(report: V3ReadinessReport) -> str:
         f"- Residual risks: {len(report.residual_risk_register.risks)}",
         "",
         "This dashboard is a software/autonomy validation artifact, not clinical validation.",
+        "It summarizes one-command workflows, validated bundles, human checkpoints, "
+        "approved-tools-only operation, and governed multi-agent defaults.",
         "",
         "## Scenarios",
         "",

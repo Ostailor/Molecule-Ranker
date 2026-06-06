@@ -16,6 +16,7 @@ from molecule_ranker.e2e.schemas import (
     EndToEndWorkflow,
     WorkflowLineageRecord,
 )
+from molecule_ranker.v3 import v3_product_contract_payload
 
 REQUIRED_LIMITATIONS = [
     "This bundle is a research and operations summary, not scientific evidence.",
@@ -168,6 +169,7 @@ class EndToEndResultBundleGenerator:
             "guardrail_summary": bundle_input.guardrail_summary,
             "next_recommended_actions": bundle_input.next_recommended_actions,
             "bundle_is_scientific_evidence": False,
+            "v3_product_contract": v3_product_contract_payload(),
         }
         return EndToEndResultBundle(
             bundle_id=f"e2e-bundle-{workflow.workflow_id}",

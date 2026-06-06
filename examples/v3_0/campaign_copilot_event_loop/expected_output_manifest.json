@@ -1,0 +1,21 @@
+{
+  "command": "molecule-ranker validate autonomy --scenario campaign_copilot_monitoring --json",
+  "demo_id": "campaign_copilot_event_loop",
+  "expected_artifacts": [
+    "campaign_copilot_event_workflow.json",
+    "demo_run_manifest.json"
+  ],
+  "external_writes_expected": false,
+  "mode": "mocked",
+  "no_clinical_claims": true,
+  "no_protocols_synthesis_or_dosing": true,
+  "synthetic_or_mocked": true,
+  "what_output_does_not_prove": [
+    "No campaign activation, stage-gate approval, clinical validity, or biomedical outcome is proven.",
+    "No protocol, synthesis instruction, or dosing guidance is provided."
+  ],
+  "what_output_means": [
+    "A synthetic co-pilot event can be validated under V3 autonomy controls.",
+    "Human approval remains required for campaign activation."
+  ]
+}

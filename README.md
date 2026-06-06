@@ -1,17 +1,55 @@
 # molecule-ranker
 
-`molecule-ranker` is a research-planning tool for transparent existing-molecule
-and existing-antibody ranking, campaign workflow management, and governed Codex runtime-agent
-operations. It resolves a disease through public biomedical data sources,
-retrieves evidence-backed targets and existing small-molecule or biologics candidates, ranks candidates as
-research hypotheses, and keeps autonomous agent actions inside approved policy,
-tool, artifact, budget, certification, and safety boundaries.
+`molecule-ranker` is an autonomous discovery operating system for internal
+research planning with validated human-governed agentic workflows. V3.0 can run
+governed end-to-end workflows from disease or project objective to auditable
+result bundle. Codex agents operate approved tools through policy, approval,
+validation, and artifact contracts.
 
-The project is for research planning and operational oversight only. It does not provide medical advice.
-It does not provide lab protocols, synthesis
-instructions, dosing guidance, patient guidance, clinical claims, fabricated
-evidence, fabricated assay results, fabricated citations, fabricated molecules,
-fabricated graph facts, fabricated metrics, or fabricated approvals.
+The platform supports small molecules, generated small-molecule hypotheses,
+existing biologics/antibodies, and governed antibody-generation planning when
+explicitly enabled. Result bundles include candidate rankings, generated
+hypotheses, evidence, review workspace, portfolio/campaign plan, evaluation,
+lineage, guardrails, and certification.
+
+V3.0 is not a clinical product. It does not provide medical advice. It does not
+provide lab protocols. It does not provide synthesis instructions. It does not
+provide dosing. It does not claim generated molecules or antibodies are active,
+safe, effective, binding, developable, or manufacturable.
+
+Exact imported experimental evidence and human review are required for direct
+support. V3 validation artifacts are software/autonomy validation artifacts, not
+clinical validation. The project also does not provide patient guidance,
+clinical claims, fabricated evidence, fabricated assay results, fabricated
+citations, fabricated molecules, fabricated graph facts, fabricated metrics, or
+fabricated approvals.
+
+## Quickstart
+
+Run one-command V3 discovery with safe dry-run defaults:
+
+```bash
+molecule-ranker discover --disease "Parkinson disease" --mode dry_run
+```
+
+Run live read-only discovery and write a demo result bundle:
+
+```bash
+molecule-ranker discover \
+  --disease "Parkinson disease" \
+  --mode read_only_live \
+  --output-dir results/parkinson-v3-demo
+```
+
+Run V3 validation and the final release gate:
+
+```bash
+molecule-ranker validate v3
+molecule-ranker v3 release-gate
+```
+
+When running from a local checkout, prefix commands with `uv run` if the console
+script is not installed in the active environment.
 
 ## What It Can Do Today
 
@@ -82,19 +120,27 @@ The project also does not:
 
 ## Current Version
 
-The current version is **2.9.0**.
+The current version is **3.0.0**.
 
-V2.9.0 prepares the platform for V3.0 by adding software/autonomy validation
-for end-to-end workflows, result quality, governance boundaries, safety
-guardrails, and operational readiness. It preserves the V2.8 governed biologics
-and antibody discovery track, plus the existing small-molecule, runtime-agent,
-co-pilot, repair-loop, tool governance, review, graph, hypothesis, portfolio,
-campaign, evaluation, integration, and result-bundle systems.
+V3.0.0 ships molecule-ranker as an autonomous discovery operating system with
+validated human-governed agentic workflows. It focuses on one-command
+end-to-end workflows, a stable autonomous runtime experience, validated result
+bundles, human governance checkpoints, Codex operation through approved tools
+only, useful multi-agent coordination by default, strong safety/governance/
+reproducibility defaults, a production-ready V3 dashboard experience,
+enterprise-ready documentation and training, and a release certification plus
+V3 validation package.
 
-V2.9 does not add a new science modality. It is the V3 readiness and autonomy
-validation release: it proves the platform can run governed workflows from a
-user goal to an auditable result bundle while preserving policy boundaries,
-human governance, traceability, and reproducibility.
+V3.0 can run governed end-to-end workflows from disease/project objective to an
+auditable result bundle. Codex agents operate approved tools through policy,
+approval, validation, and artifact contracts. Result bundles include candidate
+rankings, generated hypotheses, evidence, review workspace, portfolio/campaign
+plan, evaluation, lineage, guardrails, and certification.
+
+V3.0 does not add a new science modality or major new scientific capabilities.
+It does not expand docking, generation, biologics, model training,
+integrations, or graph reasoning except for stability, validation, usability,
+and end-to-end coherence.
 
 Antibody generation is disabled by default. Generated antibody candidates are
 computational hypotheses only. Generation requires approved generators/tools,
@@ -106,13 +152,13 @@ expression, purification, immunization, wet-lab, dosing, or clinical protocols.
 Exact imported experimental evidence is required for direct support, and review
 gates plus governance apply before any advancement decision.
 
-V2.9 includes the `AutonomyValidationSuite`, `V3ReadinessReport`,
+V3.0 includes the `AutonomyValidationSuite`, `V3ReadinessReport`,
 `EndToEndResultCertification`, `HumanGovernanceMatrix`,
 `AgentReliabilityScorecard`, `SafetyCaseReport`, `ResidualRiskRegister`,
 `V3DemoProject`, `V3ReleaseCandidate` workflow, end-to-end autonomy red-team
-suite, V3 performance/reliability gate, and final V3 readiness dashboard. These
-reports are software/autonomy validation artifacts, not clinical validation or
-biomedical evidence.
+suite, V3 performance/reliability gate, release certification package, and V3
+discovery operating-system dashboard. These reports are software/autonomy
+validation artifacts, not clinical validation or biomedical evidence.
 
 The system can run governed workflows from a disease or project objective to
 ranked small-molecule and antibody candidates, generated small-molecule
@@ -142,7 +188,7 @@ remains required for high-risk actions.
 
 ## End-to-End Workflows
 
-V2.9 workflows run in four modes:
+V3.0 workflows run in four modes:
 
 - `mocked`: deterministic synthetic sources for local testing.
 - `dry_run`: planned actions and simulated integration changes with no external writes.
@@ -230,15 +276,28 @@ uv run molecule-ranker e2e lineage \
   --workflow-id e2e-workflow-id
 ```
 
-Run the deterministic V2.9 E2E eval suite:
+Run the deterministic V3.0 E2E eval suite:
 
 ```bash
 uv run molecule-ranker e2e eval --suite default
 ```
 
+For the primary V3 one-command workflow, prefer:
+
+```bash
+uv run molecule-ranker discover \
+  --disease "Parkinson disease" \
+  --mode dry_run
+```
+
+The `discover` command produces a V3 result bundle with candidates,
+generated-hypothesis artifacts when enabled, evidence summaries, review queues,
+portfolio and campaign drafts, evaluation reports, lineage, guardrail
+validation, trace data, and result certification.
+
 ## V3 Readiness And Autonomy Validation
 
-V2.9 validates end-to-end workflows, autonomy boundaries, agent reliability,
+V3.0 validates end-to-end workflows, autonomy boundaries, agent reliability,
 result certification, safety cases, residual risk, V3 demo workflows, and V3
 release-candidate readiness. The validation artifacts are platform and autonomy
 evidence only. They are not clinical validation, biomedical evidence, medical
@@ -535,5 +594,7 @@ uv run molecule-ranker validate release
 
 ## Roadmap
 
-- V2.9: V3 readiness and autonomy validation.
-- V3.0: autonomous discovery operating system with validated human-governed agentic workflows.
+- V3.1: pilot feedback and usability refinement.
+- V3.2: deeper enterprise integrations and deployment feedback.
+- V3.3: scaled agent operations and cross-org governance.
+- V4.0: production-grade autonomous discovery operations at scale.

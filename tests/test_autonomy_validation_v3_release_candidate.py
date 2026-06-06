@@ -42,7 +42,13 @@ def test_v3_rc_workflow_passes_in_synthetic_mocked_mode(tmp_path: Path) -> None:
         assert (tmp_path / artifact).exists()
 
     manifest = json.loads((tmp_path / V3_RC_MANIFEST_JSON).read_text(encoding="utf-8"))
+    assert manifest["version"] == "3.0.0"
     assert manifest["status"] == "passed"
+    assert manifest["metadata"]["release_certification"] == "v3_validation_package"
+    assert manifest["metadata"]["one_command_workflow"] == "molecule-ranker v3 rc"
+    assert manifest["metadata"]["approved_tools_only"] is True
+    assert manifest["metadata"]["human_governance_checkpoints"] is True
+    assert manifest["metadata"]["science_scope"] == "no_major_new_scientific_capabilities"
     assert [step["step_id"] for step in manifest["steps"]] == [
         "01_release_check",
         "02_validate_release",
@@ -108,6 +114,10 @@ def test_v3_rc_cli_passes_in_synthetic_mocked_mode(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
+    assert payload["version"] == "3.0.0"
     assert payload["status"] == "passed"
     assert payload["readiness_status"] == "ready"
+    assert payload["metadata"]["validation_artifact"] == (
+        "software_autonomy_release_certification_not_clinical_validation"
+    )
     assert (tmp_path / V3_RC_RESULT_BUNDLE_ZIP).exists()

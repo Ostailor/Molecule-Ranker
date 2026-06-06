@@ -1,0 +1,27 @@
+{
+  "command": "molecule-ranker discover --disease \"Synthetic V3 planning condition\" --mode mocked --output-dir \"$OUTPUT_DIR\" --json",
+  "demo_id": "mocked_full_discovery_loop",
+  "expected_artifacts": [
+    "discover_result.json",
+    "trace.json",
+    "v3_result_bundle.json",
+    "v3_result_bundle.md",
+    "v3_result_bundle.zip",
+    "v3_result_certification.json",
+    "v3_human_governance_matrix.json",
+    "v3_human_governance_matrix.md"
+  ],
+  "external_writes_expected": false,
+  "mode": "mocked",
+  "no_clinical_claims": true,
+  "no_protocols_synthesis_or_dosing": true,
+  "synthetic_or_mocked": true,
+  "what_output_does_not_prove": [
+    "No binding, activity, safety, efficacy, manufacturability, therapeutic value, or clinical validity is proven.",
+    "No assay result, protocol, synthesis instruction, or dosing guidance is provided."
+  ],
+  "what_output_means": [
+    "The mocked V3 full discovery loop can produce a governed planning bundle.",
+    "The result bundle includes software/autonomy certification and human governance artifacts."
+  ]
+}

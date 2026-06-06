@@ -1,4 +1,4 @@
-"""End-to-end governed workflow runner for V2.9 discovery operations."""
+"""End-to-end governed workflow runner for V3.0 discovery operations."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from molecule_ranker.e2e.state_machine import (
     WorkflowStateMachine,
     WorkflowStateTransitionError,
 )
+from molecule_ranker.v3 import v3_product_contract_payload
 
 
 class EndToEndWorkflowRunnerConfig(BaseModel):
@@ -995,6 +996,7 @@ class EndToEndWorkflowRunner:
                 "mode": request.mode,
                 "workflow_status": workflow.status,
                 "scientific_evidence": False,
+                "v3_product_contract": v3_product_contract_payload(),
                 "external_writes_performed": external_writes_performed,
                 "approval_ids": list(request.approvals),
                 "biologics_discovery_loop": (

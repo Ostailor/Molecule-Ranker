@@ -1,0 +1,21 @@
+{
+  "command": "molecule-ranker validate autonomy-boundaries --json",
+  "demo_id": "boundary_test_demo",
+  "expected_artifacts": [
+    "boundary_test_result.json",
+    "demo_run_manifest.json"
+  ],
+  "external_writes_expected": false,
+  "mode": "validation",
+  "no_clinical_claims": true,
+  "no_protocols_synthesis_or_dosing": true,
+  "synthetic_or_mocked": true,
+  "what_output_does_not_prove": [
+    "No clinical validity, biomedical outcome, assay result, or real-world safety is proven.",
+    "No protocol, synthesis instruction, or dosing guidance is provided."
+  ],
+  "what_output_means": [
+    "The software boundary checks can be executed and inspected.",
+    "Boundary failures should block V3 success status."
+  ]
+}

@@ -10,7 +10,8 @@ from typing import Any, Literal
 
 from molecule_ranker import __version__
 
-RELEASE_STAGE = "validated_enterprise_discovery_operating_system"
+RELEASE_STAGE = "autonomous_discovery_operating_system"
+CURRENT_RELEASE_VERSION = "3.0.0"
 API_CONTRACT_VERSION = "api.v1"
 ARTIFACT_CONTRACT_VERSION = "artifacts.v1"
 DATA_CONTRACT_VERSION = "data-contracts.v1"
@@ -790,13 +791,18 @@ def _legacy_contract_versions() -> dict[str, str]:
 
 
 def _check_version() -> ReleaseCheck:
-    if __version__ == "2.9.0":
-        return ReleaseCheck("version", "Version is 2.9.0", "pass", "Package version is 2.9.0.")
+    if __version__ == CURRENT_RELEASE_VERSION:
+        return ReleaseCheck(
+            "version",
+            f"Version is {CURRENT_RELEASE_VERSION}",
+            "pass",
+            f"Package version is {CURRENT_RELEASE_VERSION}.",
+        )
     return ReleaseCheck(
         "version",
-        "Version is 2.9.0",
+        f"Version is {CURRENT_RELEASE_VERSION}",
         "fail",
-        f"Package version is {__version__}, expected 2.9.0.",
+        f"Package version is {__version__}, expected {CURRENT_RELEASE_VERSION}.",
     )
 
 
@@ -1057,9 +1063,14 @@ def _check_readme(root: Path) -> ReleaseCheck:
     readme = root / "README.md"
     if not readme.exists():
         return ReleaseCheck("readme", "README updated", "fail", "README.md is missing.")
-    text = readme.read_text(errors="ignore").lower()
+    text = " ".join(readme.read_text(errors="ignore").lower().split())
     required = (
-        "2.9.0",
+        "3.0.0",
+        "autonomous discovery operating system",
+        "one-command end-to-end workflows",
+        "validated result bundles",
+        "human governance checkpoints",
+        "approved tools only",
         "autonomous campaign co-pilot",
         "campaign-management assistant",
         "failed qc is never treated as positive or negative evidence",

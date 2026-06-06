@@ -1,4 +1,4 @@
-"""Deterministic V2.9 end-to-end workflow eval suite."""
+"""Deterministic V3.0 end-to-end workflow eval suite."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from molecule_ranker import __version__
 from molecule_ranker.agents.integration_ops import (
     IntegrationOpsAgent,
     IntegrationOpsRequest,
@@ -59,7 +60,7 @@ class EndToEndEvalCaseResult(BaseModel):
 
 
 class EndToEndEvalMetrics(BaseModel):
-    """Aggregate metrics for V2.9 end-to-end evals."""
+    """Aggregate metrics for V3.0 end-to-end evals."""
 
     workflow_success_rate: float
     partial_recovery_rate: float
@@ -73,7 +74,7 @@ class EndToEndEvalMetrics(BaseModel):
 
 
 class EndToEndEvalSuiteResult(BaseModel):
-    """Report returned by the default V2.9 E2E eval suite."""
+    """Report returned by the default V3.0 E2E eval suite."""
 
     suite: str
     status: Literal["pass", "fail"]
@@ -88,7 +89,7 @@ class EndToEndEvalSuiteResult(BaseModel):
 
 
 class EndToEndEvalSuite:
-    """Runs deterministic workflow and guardrail eval cases for V2.9."""
+    """Runs deterministic workflow and guardrail eval cases for V3.0."""
 
     def __init__(self, now: Callable[[], datetime] | None = None) -> None:
         self._now = now or (lambda: datetime.now(UTC))
@@ -115,7 +116,7 @@ class EndToEndEvalSuite:
             started_at=started_at,
             completed_at=completed_at,
             metadata={
-                "version": "2.9.0",
+                "version": __version__,
                 "deterministic": True,
                 "external_writes_allowed": False,
             },
@@ -644,7 +645,7 @@ class EndToEndEvalSuite:
 
 
 def run_end_to_end_eval_suite(suite: str = "default") -> EndToEndEvalSuiteResult:
-    """Run the deterministic V2.9 end-to-end eval suite."""
+    """Run the deterministic V3.0 end-to-end eval suite."""
 
     return EndToEndEvalSuite().run(suite=suite)
 

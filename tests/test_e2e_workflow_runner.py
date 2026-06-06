@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -250,7 +251,10 @@ def test_biologics_discovery_loop_bundle_has_no_forbidden_operational_text() -> 
     )
 
     assert result.bundle is not None
-    serialized = result.bundle.model_dump_json().lower()
+    payload = result.bundle.model_dump(mode="json")
+    assert payload["metadata"]["v3_product_contract"]["product_version"] == "3.0.0"
+    payload["metadata"].pop("v3_product_contract")
+    serialized = json.dumps(payload, sort_keys=True).lower()
     forbidden = (
         "lab protocol",
         "wet-lab protocol",

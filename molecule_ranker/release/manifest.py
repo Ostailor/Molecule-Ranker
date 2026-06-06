@@ -36,7 +36,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
         {
             "name": "molecule-ranker",
             "stage": RELEASE_STAGE,
-            "scope": "validated_enterprise_discovery_operating_system",
+            "scope": "autonomous_discovery_operating_system",
             "non_goals": [
                 "unvalidated model-provider execution",
                 "new external integration families",
@@ -56,7 +56,7 @@ def release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
                 "Codex-generated campaign priorities, budgets, costs, metrics, outcomes, "
                 "or advancement decisions",
                 "campaign plans promoted to lab protocols or synthesis routes",
-                "major new science modules in the V2.9 readiness release",
+                "major new science modules in the V3.0 operating-system release",
                 "expanded generation, docking, ADMET, graph reasoning, model training, "
                 "integrations, or campaign planning except for controlled runtime "
                 "orchestration, stability, validation, security, and enterprise readiness",
@@ -82,6 +82,8 @@ def build_release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
     return {
         "name": "molecule-ranker",
         "version": __version__,
+        "stage": RELEASE_STAGE,
+        "scope": "autonomous_discovery_operating_system",
         "git_commit": _git_commit(root),
         "build_timestamp": _utc_timestamp(),
         "artifact_contract_version": ARTIFACT_CONTRACT_REGISTRY_VERSION,
@@ -90,6 +92,25 @@ def build_release_manifest(root_dir: str | Path = ".") -> dict[str, Any]:
         "test_summary": _test_summary(root),
         "validation_summary": _validation_summary(root),
         "known_limitations": _known_limitations(),
+        "v3_validation_package": {
+            "goal": (
+                "autonomous_discovery_operating_system_with_validated_human_governed_"
+                "agentic_workflows"
+            ),
+            "one_command_end_to_end_workflows": True,
+            "stable_autonomous_runtime_experience": True,
+            "validated_result_bundles": True,
+            "human_governance_checkpoints": True,
+            "approved_tools_only": True,
+            "useful_multi_agent_coordination_by_default": True,
+            "safety_governance_reproducibility_defaults": True,
+            "production_ready_dashboard": True,
+            "enterprise_documentation_and_training": True,
+            "release_certification_validation_package": True,
+            "validated_human_governed_agentic_workflows": True,
+            "science_scope": "no_major_new_scientific_capabilities",
+            "validation_artifact": "software_autonomy_validation_not_clinical_validation",
+        },
         "readiness": {
             "status": "pass" if readiness["ready"] else "fail",
             "gate_count": len(readiness["gates"]),
@@ -167,10 +188,18 @@ def _validation_summary(root: Path) -> dict[str, Any]:
 
 def _known_limitations() -> list[str]:
     return [
-        "V2.9 is for internal research use only and is not a clinical product.",
-        "V2.9 adds software/autonomy validation for V3 readiness while keeping "
-        "governed biologics, small-molecule, runtime-agent, co-pilot, repair-loop, "
-        "and governed tool controls intact.",
+        "V3.0 is for internal research use only and is not a clinical product.",
+        "V3.0 ships molecule-ranker as an autonomous discovery operating system "
+        "with validated human-governed agentic workflows.",
+        "V3.0 focuses on one-command workflows, stable autonomous runtime, "
+        "validated result bundles, human governance checkpoints, approved-tools-only "
+        "Codex operation, useful multi-agent coordination, strong safety/governance/"
+        "reproducibility defaults, production dashboard readiness, enterprise "
+        "documentation/training, and release certification.",
+        "V3.0 does not add major new scientific capabilities or expand modality "
+        "support, docking, generation, biologics, model training, integrations, or "
+        "graph reasoning except for stability, validation, usability, and "
+        "end-to-end coherence.",
         "Agents may repair workflows but may not repair scientific truth by inventing "
         "missing data.",
         "No medical advice, clinical claims, dosing, synthesis instructions, or lab protocols.",
@@ -189,8 +218,8 @@ def _known_limitations() -> list[str]:
         "Benchmark results are evaluation artifacts, not biomedical evidence.",
         "Prospective validation analytics are not clinical validation.",
         "Codex must not invent benchmark results, labels, metrics, or conclusions.",
-        "Enterprise and V3 readiness validation artifacts are software/process "
-        "validation artifacts, not clinical validation.",
+        "V3 validation artifacts are software/autonomy validation artifacts, not "
+        "clinical validation.",
         "Graph paths do not prove causality, efficacy, safety, binding, or activity.",
         "Surrogate model predictions are endpoint-specific prioritization artifacts, not evidence.",
         "Docking scores, poses, and structure-derived interactions are computational "

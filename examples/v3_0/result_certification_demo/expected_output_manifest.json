@@ -1,0 +1,24 @@
+{
+  "command": "molecule-ranker discover --disease \"Synthetic V3 certification condition\" --mode mocked --output-dir \"$OUTPUT_DIR\" --json",
+  "demo_id": "result_certification_demo",
+  "expected_artifacts": [
+    "discover_result.json",
+    "v3_result_bundle.json",
+    "v3_result_certification.json",
+    "v3_result_certification.md",
+    "v3_human_governance_matrix.json"
+  ],
+  "external_writes_expected": false,
+  "mode": "mocked",
+  "no_clinical_claims": true,
+  "no_protocols_synthesis_or_dosing": true,
+  "synthetic_or_mocked": true,
+  "what_output_does_not_prove": [
+    "No clinical validity, binding, activity, safety, efficacy, or biomedical outcome is proven.",
+    "No protocol, synthesis instruction, or dosing guidance is provided."
+  ],
+  "what_output_means": [
+    "The V3 result bundle can be certified as a platform/workflow artifact.",
+    "Certification failure would block V3 success status."
+  ]
+}

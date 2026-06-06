@@ -15,6 +15,10 @@ from molecule_ranker.e2e.schemas import (
     WorkflowLineageRecord,
 )
 from molecule_ranker.e2e.workflow_runner import WorkflowRunResult
+from molecule_ranker.v3 import (
+    V3ProductContract,
+    validate_v3_workflow,
+)
 
 FORBIDDEN_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\blab\s+protocols?\b", re.I), "lab protocol"),
@@ -52,7 +56,7 @@ ANTIBODY_FORBIDDEN_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 
 class EndToEndWorkflowValidator:
-    """Deterministic validation for V2.9 end-to-end workflow bundles."""
+    """Deterministic validation for V3.0 end-to-end workflow bundles."""
 
     def __init__(self, now: Callable[[], datetime] | None = None) -> None:
         self._now = now or (lambda: datetime.now(UTC))
@@ -103,6 +107,11 @@ class EndToEndWorkflowValidator:
             findings=findings,
         )
         result_bundle_complete = self._result_bundle_complete(bundle, findings)
+        v3_product_contract_valid = self._v3_product_contract_valid(
+            workflow=workflow,
+            bundle=bundle,
+            findings=findings,
+        )
 
         passed = all(
             [
@@ -113,6 +122,7 @@ class EndToEndWorkflowValidator:
                 approvals_satisfied,
                 guardrails_passed,
                 result_bundle_complete,
+                v3_product_contract_valid,
             ]
         )
         if not passed and not findings:
@@ -148,6 +158,7 @@ class EndToEndWorkflowValidator:
                     "no_forbidden_text": guardrails_passed,
                     "antibody_generation_default_off": guardrails_passed,
                     "generated_antibody_evidence_boundary": guardrails_passed,
+                    "v3_product_contract_valid": v3_product_contract_valid,
                 },
             },
         )
@@ -280,6 +291,9 @@ class EndToEndWorkflowValidator:
             return False
         payload = bundle.model_dump(mode="json")
         payload.pop("limitations", None)
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            metadata.pop("v3_product_contract", None)
         text = json.dumps(payload, sort_keys=True)
         failed = False
         for pattern, label in FORBIDDEN_TEXT_PATTERNS:
@@ -362,6 +376,33 @@ class EndToEndWorkflowValidator:
         limitation_text = " ".join(bundle.limitations).lower()
         if "not scientific evidence" not in limitation_text:
             findings.append("result bundle missing non-evidence limitation")
+            return False
+        return True
+
+    def _v3_product_contract_valid(
+        self,
+        *,
+        workflow: EndToEndWorkflow,
+        bundle: EndToEndResultBundle | None,
+        findings: list[str],
+    ) -> bool:
+        if bundle is None:
+            return False
+        raw_contract = bundle.metadata.get("v3_product_contract")
+        if raw_contract is None:
+            findings.append("V3 product contract missing from result bundle")
+            return False
+        try:
+            contract = V3ProductContract.model_validate(raw_contract)
+        except ValueError as exc:
+            findings.append(f"V3 product contract invalid: {exc}")
+            return False
+        workflow_validation = validate_v3_workflow(workflow, contract=contract)
+        if not workflow_validation.valid:
+            findings.extend(
+                f"V3 product contract workflow violation: {issue}"
+                for issue in workflow_validation.issues
+            )
             return False
         return True
 

@@ -438,7 +438,7 @@ BUILT_IN_AUTONOMY_SCENARIOS: dict[str, dict[str, Any]] = {
             "all_lineage_records_present",
         ],
         metadata={
-            "workflow_type": "full_discovery_loop_with_biologics",
+            "workflow_type": "full_discovery_loop",
             "demo_project": "v3_demo_project",
             "live_access_level": "none",
         },

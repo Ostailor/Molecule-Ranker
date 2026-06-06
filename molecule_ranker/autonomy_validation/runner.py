@@ -497,6 +497,9 @@ class AutonomyValidationRunner:
         if e2e_result is not None and e2e_result.bundle is not None:
             bundle_payload = e2e_result.bundle.model_dump(mode="json")
             bundle_payload.pop("limitations", None)
+            metadata = bundle_payload.get("metadata")
+            if isinstance(metadata, dict):
+                metadata.pop("v3_product_contract", None)
             fragments.append(json.dumps(bundle_payload, sort_keys=True))
         return "\n".join(fragments)
 

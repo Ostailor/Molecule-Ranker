@@ -35,6 +35,7 @@ def test_mocked_full_loop_validates() -> None:
     assert validation.guardrails_passed is True
     assert validation.external_sync_validated is True
     assert validation.approvals_satisfied is True
+    assert validation.metadata["checks"]["v3_product_contract_valid"] is True
 
 
 def test_missing_artifact_fails() -> None:
@@ -52,6 +53,31 @@ def test_missing_artifact_fails() -> None:
     assert validation.passed is False
     assert validation.required_artifacts_present is False
     assert any("required artifacts" in finding for finding in validation.findings)
+
+
+def test_missing_v3_product_contract_fails() -> None:
+    run_result = _mocked_full_loop_result()
+    assert run_result.bundle is not None
+    broken_bundle = run_result.bundle.model_copy(
+        update={
+            "metadata": {
+                key: value
+                for key, value in run_result.bundle.metadata.items()
+                if key != "v3_product_contract"
+            }
+        }
+    )
+
+    validation = EndToEndWorkflowValidator(now=lambda: NOW).validate(
+        workflow=run_result.workflow,
+        steps=run_result.steps,
+        bundle=broken_bundle,
+        lineage_records=run_result.lineage_records,
+    )
+
+    assert validation.passed is False
+    assert validation.metadata["checks"]["v3_product_contract_valid"] is False
+    assert any("V3 product contract" in finding for finding in validation.findings)
 
 
 def test_missing_lineage_fails() -> None:

@@ -255,10 +255,17 @@ def run_v3_release_candidate_workflow(
         metadata={
             "mode": "synthetic_mocked",
             "required_artifacts": V3_RC_REQUIRED_ARTIFACTS,
+            "release_certification": "v3_validation_package",
+            "one_command_workflow": "molecule-ranker v3 rc",
+            "approved_tools_only": True,
+            "human_governance_checkpoints": True,
+            "science_scope": "no_major_new_scientific_capabilities",
             "readiness_report_id": readiness_report.report_id,
             "safety_case_id": safety_case.safety_case_id,
             "residual_risk_register_id": residual_risk_register.register_id,
-            "validation_artifact": "software_autonomy_release_candidate_not_clinical_validation",
+            "validation_artifact": (
+                "software_autonomy_release_certification_not_clinical_validation"
+            ),
             "no_live_external_writes": True,
         },
     )
@@ -450,6 +457,7 @@ def _autonomy_validation_summary(
             "V3 RC validation is software/autonomy validation, not clinical validation.",
             "Generated molecules and antibodies remain computational hypotheses.",
             "No live external writes are required by the synthetic/mocked RC workflow.",
+            "V3.0 does not add major new scientific capabilities.",
         ],
     }
 

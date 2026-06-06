@@ -19,7 +19,7 @@ SAFETY_CASE_MARKDOWN = "v3_safety_case.md"
 GLOBAL_LIMITATIONS = [
     "This is not a regulatory safety case.",
     "This is not clinical validation.",
-    "This is autonomy and platform safety evidence for V2.9/V3.0 readiness.",
+    "This is autonomy and platform safety evidence for V3.0 readiness.",
     "No claim establishes binding, activity, safety, efficacy, manufacturability, "
     "therapeutic value, dosing, patient treatment, or laboratory readiness.",
 ]
@@ -58,7 +58,7 @@ def build_v3_safety_case_report(
         residual_risks=residual_risk_ids,
         unresolved_findings=[],
         conclusion=(
-            "V2.9 autonomy/platform safety claims are supported by deterministic "
+            "V3.0 autonomy/platform safety claims are supported by deterministic "
             "software validation artifacts and boundary fixtures. This report is not "
             "regulatory, clinical, or scientific validation."
         ),

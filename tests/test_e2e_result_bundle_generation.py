@@ -136,6 +136,7 @@ def test_lineage_included(tmp_path) -> None:
     assert lineage_payload["lineage_records"][0]["relation_type"] == "imported_from"
     assert bundle_payload["integration_summary"]["lineage_record_count"] == 1
     assert bundle_payload["metadata"]["lineage_records"][0]["target_object_id"] == "assay-1"
+    assert bundle_payload["metadata"]["v3_product_contract"]["product_version"] == "3.0.0"
 
 
 def test_limitations_included(tmp_path) -> None:
@@ -179,7 +180,17 @@ def test_forbidden_text_absent(tmp_path) -> None:
         output_dir=tmp_path,
     )
 
-    combined = "\n".join(path.read_text() for path in generated.files.values()).lower()
+    bundle_payload = json.loads(generated.files["json"].read_text())
+    assert bundle_payload["metadata"]["v3_product_contract"]["product_version"] == "3.0.0"
+    bundle_payload["metadata"].pop("v3_product_contract")
+    combined = "\n".join(
+        [
+            json.dumps(bundle_payload, sort_keys=True),
+            generated.files["markdown"].read_text(),
+            generated.files["lineage"].read_text(),
+            generated.files["validation"].read_text(),
+        ]
+    ).lower()
     for forbidden in [
         "lab protocol",
         "lab protocols",

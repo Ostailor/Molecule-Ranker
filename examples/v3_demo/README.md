@@ -1,7 +1,8 @@
 # molecule-ranker V3 Demo
 
-This demo exercises the V2.9 autonomy validation surfaces that prepare
-molecule-ranker for V3.0. It is a software and autonomy readiness demo only.
+This demo exercises the V3.0 autonomy validation surfaces for molecule-ranker
+as an autonomous discovery operating system. It is a software and autonomy
+readiness demo only.
 It is not clinical validation, scientific validation, medical advice, or lab
 guidance.
 
@@ -66,4 +67,3 @@ If the `molecule-ranker` console script is not on `PATH`, set:
 ```bash
 MOLECULE_RANKER_CMD="uv run molecule-ranker" examples/v3_demo/run_validation.sh
 ```
-

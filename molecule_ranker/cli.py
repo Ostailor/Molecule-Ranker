@@ -331,7 +331,7 @@ validate_app = typer.Typer(
     no_args_is_help=True,
 )
 autonomy_app = typer.Typer(
-    help="Run V2.9/V3 autonomy evaluation suites.",
+    help="Run V3.0 autonomy evaluation suites.",
     no_args_is_help=True,
 )
 biologics_app = typer.Typer(
@@ -339,7 +339,7 @@ biologics_app = typer.Typer(
     no_args_is_help=True,
 )
 e2e_app = typer.Typer(
-    help="Run and inspect V2.9 end-to-end governed discovery workflows.",
+    help="Run and inspect V3.0 end-to-end governed discovery workflows.",
     no_args_is_help=True,
 )
 policy_app = typer.Typer(
@@ -399,7 +399,7 @@ v2_app = typer.Typer(
     no_args_is_help=True,
 )
 v3_app = typer.Typer(
-    help="Run V2.9 autonomy validation and V3.0 readiness workflows.",
+    help="Run V3.0 autonomy validation and release certification workflows.",
     no_args_is_help=True,
 )
 worker_app = typer.Typer(
@@ -655,6 +655,98 @@ def main() -> None:
 def version() -> None:
     """Print the package version."""
     typer.echo(__version__)
+
+
+@app.command("discover")
+def discover_command(
+    disease: Annotated[
+        str,
+        typer.Option("--disease", help="Disease or research objective for V3 discovery."),
+    ],
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Existing project ID to select."),
+    ] = None,
+    mode: Annotated[
+        Literal["mocked", "dry_run", "read_only_live", "write_approved_live"],
+        typer.Option("--mode", help="V3 workflow execution mode."),
+    ] = "dry_run",
+    enable_generation: Annotated[
+        bool,
+        typer.Option("--enable-generation", help="Emit generated small-molecule hypotheses."),
+    ] = False,
+    enable_biologics: Annotated[
+        bool,
+        typer.Option("--enable-biologics", help="Emit biologics candidate artifact."),
+    ] = False,
+    enable_antibody_generation: Annotated[
+        bool,
+        typer.Option(
+            "--enable-antibody-generation",
+            help="Emit governed generated-antibody hypothesis artifact.",
+        ),
+    ] = False,
+    enable_structure: Annotated[
+        bool,
+        typer.Option("--enable-structure", help="Include structure-assessment intent."),
+    ] = False,
+    enable_integrations: Annotated[
+        bool,
+        typer.Option("--enable-integrations", help="Include governed integration sync intent."),
+    ] = False,
+    enable_codex_summary: Annotated[
+        bool,
+        typer.Option("--enable-codex-summary", help="Include Codex summary intent."),
+    ] = False,
+    autonomy: Annotated[
+        Literal[
+            "observe_only",
+            "suggest_only",
+            "execute_safe_tools",
+            "execute_with_approval",
+            "supervised_auto",
+        ],
+        typer.Option("--autonomy", help="Codex autonomy boundary."),
+    ] = "execute_with_approval",
+    require_approval: Annotated[
+        bool,
+        typer.Option("--require-approval", help="Require explicit governance approval gates."),
+    ] = False,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", file_okay=False, help="Directory for V3 artifacts."),
+    ] = Path("results/v3-discover"),
+    json_output: Annotated[bool, typer.Option("--json", help="Print JSON result.")] = False,
+) -> None:
+    """Run the primary V3 one-command full discovery workflow."""
+    from molecule_ranker.v3.discover import (
+        V3DiscoverRequest,
+        render_v3_discover_cli_output,
+        run_v3_discover,
+    )
+
+    request = V3DiscoverRequest(
+        disease=disease,
+        project_id=project_id,
+        mode=mode,
+        enable_generation=enable_generation,
+        enable_biologics=enable_biologics,
+        enable_antibody_generation=enable_antibody_generation,
+        enable_structure=enable_structure,
+        enable_integrations=enable_integrations,
+        enable_codex_summary=enable_codex_summary,
+        autonomy=autonomy,
+        require_approval=require_approval,
+        output_dir=output_dir,
+    )
+    result = run_v3_discover(request)
+    payload = result.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(render_v3_discover_cli_output(result), nl=False)
+    if result.status != "succeeded" or not result.validation_passed:
+        raise typer.Exit(code=1)
 
 
 @governance_policy_app.command("list")
@@ -5336,7 +5428,7 @@ def validate_e2e_command(
     ] = "validation-project",
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Validate a deterministic V2.9 end-to-end workflow bundle."""
+    """Validate a deterministic V3.0 end-to-end workflow bundle."""
     from molecule_ranker.e2e.validation import EndToEndWorkflowValidator
     from molecule_ranker.e2e.workflow_runner import EndToEndWorkflowRunner, WorkflowRunRequest
 
@@ -5371,7 +5463,7 @@ def validate_v3_readiness_command(
     ] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run V2.9 software/autonomy validation for V3.0 readiness."""
+    """Run V3.0 software/autonomy validation."""
     from molecule_ranker.v3_readiness import AutonomyValidationSuite
 
     suite = AutonomyValidationSuite()
@@ -5550,6 +5642,43 @@ def validate_v3_performance_command(
         raise typer.Exit(code=1)
 
 
+@validate_app.command("v3")
+def validate_v3_command(
+    mode: Annotated[
+        Literal["mocked"],
+        typer.Option("--mode", help="V3 validation mode."),
+    ] = "mocked",
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            help="Directory for V3 validation report artifacts.",
+        ),
+    ] = Path(".molecule-ranker") / "validation" / "v3",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the composite V3 release validation command."""
+    from molecule_ranker.v3.validation import run_v3_validation
+
+    report = run_v3_validation(output_dir=output_dir, mode=mode)
+    payload = report.model_dump(mode="json")
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"V3 validation: {report.status}")
+        typer.echo(f"Checks: {report.checks_passed}/{report.checks_total} passed")
+        typer.echo(f"Report JSON: {output_dir / 'v3_validation_report.json'}")
+        typer.echo(f"Report Markdown: {output_dir / 'v3_validation_report.md'}")
+        for check in report.checks:
+            status = "pass" if check.passed else "fail"
+            typer.echo(f"- {check.check_id}: {status}")
+            for failure in check.hard_failures:
+                typer.echo(f"  - hard failure: {failure}")
+    if report.status != "pass":
+        raise typer.Exit(code=1)
+
+
 @autonomy_app.command("eval")
 def autonomy_eval_command(
     suite: Annotated[
@@ -5715,6 +5844,61 @@ def v3_dashboard_command(
         raise typer.Exit(code=1)
 
 
+@v3_app.command("release-gate")
+def v3_release_gate_command(
+    root_dir: Annotated[
+        Path,
+        typer.Option("--root", file_okay=False, help="Repository root to validate."),
+    ] = Path("."),
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            file_okay=False,
+            help="Directory for V3 release-gate artifacts.",
+        ),
+    ] = Path(".molecule-ranker") / "v3_release_gate",
+    evidence_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--evidence-dir",
+            file_okay=False,
+            help="Directory containing V3 release-gate evidence markers.",
+        ),
+    ] = None,
+    run_expensive_checks: Annotated[
+        bool,
+        typer.Option(
+            "--run-expensive-checks/--no-run-expensive-checks",
+            help="Run expensive checks when explicit evidence markers are missing.",
+        ),
+    ] = True,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run the final V3 release gate."""
+    from molecule_ranker.v3.release_gate import V3ReleaseGateConfig, run_v3_release_gate
+
+    report = run_v3_release_gate(
+        V3ReleaseGateConfig(
+            root_dir=root_dir,
+            output_dir=output_dir,
+            evidence_dir=evidence_dir,
+            run_expensive_checks=run_expensive_checks,
+        )
+    )
+    if json_output:
+        _echo_json(report)
+    else:
+        typer.echo(f"V3 release gate: {report['status']}")
+        typer.echo(f"Checks: {report['summary']['pass']}/{len(report['checks'])} passed")
+        typer.echo(f"Report JSON: {output_dir / 'v3_release_gate.json'}")
+        typer.echo(f"Report Markdown: {output_dir / 'v3_release_gate.md'}")
+        for check in report["checks"]:
+            typer.echo(f"- {check['check_id']}: {check['status']}")
+    if report["status"] != "pass":
+        raise typer.Exit(code=1)
+
+
 @e2e_app.command("run")
 def e2e_run_command(
     workflow: Annotated[
@@ -5773,7 +5957,7 @@ def e2e_run_command(
         typer.Option("--unavailable-data", help="Simulate unavailable live step type."),
     ] = None,
 ) -> None:
-    """Run a V2.9 governed end-to-end workflow."""
+    """Run a V3.0 governed end-to-end workflow."""
     request = _e2e_workflow_request(
         workflow=workflow,
         disease=disease,
@@ -5969,7 +6153,7 @@ def e2e_eval_command(
     ] = "default",
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run the deterministic V2.9 end-to-end eval suite."""
+    """Run the deterministic V3.0 end-to-end eval suite."""
     from molecule_ranker.e2e.evals import run_end_to_end_eval_suite
 
     try:
@@ -6129,7 +6313,7 @@ def validate_biologics_guardrails_command(
     ] = Path("."),
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run V2.9 biologics and generated-antibody guardrail validation."""
+    """Run V3.0 biologics and generated-antibody guardrail validation."""
     from molecule_ranker.validation import run_biologics_guardrail_validation
 
     output_dir = root_dir / ".molecule-ranker" / "validation" / "biologics_guardrails"
@@ -7907,7 +8091,7 @@ def v2_end_to_end_command(
     ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print JSON output.")] = False,
 ) -> None:
-    """Run the V2.9 governed end-to-end project workflow."""
+    """Run the V3.0 governed end-to-end project workflow."""
     from molecule_ranker.integrations.operations import (
         EndToEndWorkflowRequest,
         EndToEndWorkflowRunner,
@@ -7940,7 +8124,7 @@ def v2_end_to_end_command(
     if json_output:
         _echo_json(payload)
     else:
-        typer.echo(f"V2.9 end-to-end workflow: {bundle.status}")
+        typer.echo(f"V3.0 end-to-end workflow: {bundle.status}")
         typer.echo(f"Bundle: {payload['artifacts']['json']}")
 
 
