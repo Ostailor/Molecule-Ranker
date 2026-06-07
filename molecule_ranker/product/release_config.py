@@ -10,10 +10,10 @@ from molecule_ranker.product.schemas import ProductRelease
 from molecule_ranker.v3.governance_contract import REQUIRED_GUARDRAILS
 
 DEFAULT_RELEASE_TRACK = "pilot_release"
-DEFAULT_RELEASE_VERSION = "0.0.0"
+DEFAULT_RELEASE_VERSION = "0.1.0"
 DEFAULT_ENGINE_VERSION = "3.0.0"
-DEFAULT_RELEASE_NAME = "Release V0.0 Productization Foundation"
-DEFAULT_RELEASE_STAGE = "local_productization"
+DEFAULT_RELEASE_NAME = "Release V0.1 Hosted App Shell"
+DEFAULT_RELEASE_STAGE = "hosted_alpha"
 
 
 def build_default_product_release(metadata: dict[str, Any] | None = None) -> ProductRelease:

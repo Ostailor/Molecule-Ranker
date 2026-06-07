@@ -45,13 +45,13 @@ from molecule_ranker.product.schemas import PilotOrganization, PilotUser, UsageL
 from molecule_ranker.v3.governance_contract import REQUIRED_GUARDRAILS
 
 
-def test_product_release_schema_accepts_release_v0_foundation() -> None:
+def test_product_release_schema_accepts_release_v0_1_app_shell() -> None:
     release = ProductRelease(
         release_track="pilot_release",
-        release_version="0.0.0",
+        release_version="0.1.0",
         engine_version="3.0.0",
-        release_name="Release V0.0 Productization Foundation",
-        release_stage="local_productization",
+        release_name="Release V0.1 Hosted App Shell",
+        release_stage="hosted_alpha",
         enabled_user_features=["view_ranked_candidates"],
         hidden_internal_features=["external_write_integrations"],
         required_guardrails=["no_medical_advice"],
@@ -59,7 +59,7 @@ def test_product_release_schema_accepts_release_v0_foundation() -> None:
     )
 
     assert release.release_track == "pilot_release"
-    assert release.release_stage == "local_productization"
+    assert release.release_stage == "hosted_alpha"
     assert release.metadata["payments_implemented"] is False
 
 
@@ -154,9 +154,10 @@ def test_default_release_preserves_dev_engine_guardrails_and_hides_internal_feat
     release = build_default_product_release()
 
     assert release.release_track == "pilot_release"
-    assert release.release_version == "0.0.0"
+    assert release.release_version == "0.1.0"
     assert release.engine_version == "3.0.0"
-    assert release.release_stage == "local_productization"
+    assert release.release_name == "Release V0.1 Hosted App Shell"
+    assert release.release_stage == "hosted_alpha"
     assert set(REQUIRED_GUARDRAILS).issubset(release.required_guardrails)
     assert "view_ranked_candidates" in release.enabled_user_features
     assert "external_write_integrations" in release.hidden_internal_features

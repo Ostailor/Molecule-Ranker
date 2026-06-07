@@ -51,6 +51,48 @@ molecule-ranker v3 release-gate
 When running from a local checkout, prefix commands with `uv run` if the console
 script is not installed in the active environment.
 
+## Frontend Web App
+
+The mock MolCreate frontend lives in `apps/web` and is intentionally isolated
+from the Python package. It uses npm, Next.js App Router, TypeScript, Tailwind
+CSS, and ESLint. See `docs/product/v0_1_hosted_app_shell.md` for the full V0.1
+scope, mock-data locations, feature flags, disclaimers, and Release V1.0 pilot
+mapping.
+
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000` for the landing page or
+`http://localhost:3000/dashboard` for the mock dashboard.
+
+Frontend checks:
+
+```bash
+cd apps/web
+npm test
+npm run lint
+npm run typecheck
+npm run build
+```
+
+Run the product shell test directly:
+
+```bash
+cd apps/web
+node --test tests/shell.test.mjs
+```
+
+Python package checks remain rooted at the repository top level:
+
+```bash
+uv run pytest
+uv run ruff check .
+uv run pyright
+```
+
 ## What It Can Do Today
 
 `molecule-ranker` currently supports governed computational discovery
