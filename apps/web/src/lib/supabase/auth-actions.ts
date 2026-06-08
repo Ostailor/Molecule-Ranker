@@ -270,18 +270,18 @@ export async function finishOnboardingAction(
     return authError("Could not load your profile. Try again.");
   }
 
-  const profilePayload = {
-    email,
+  const profileUpdatePayload = {
     display_name: displayName,
     onboarding_completed: true,
     research_use_acknowledged_at: now,
   };
 
   const profileResult = existingProfile
-    ? await supabase.from("product_profiles").update(profilePayload).eq("id", user.id)
+    ? await supabase.from("product_profiles").update(profileUpdatePayload).eq("id", user.id)
     : await supabase.from("product_profiles").insert({
         id: user.id,
-        ...profilePayload,
+        email,
+        ...profileUpdatePayload,
         avatar_url: null,
       });
 

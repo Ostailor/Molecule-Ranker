@@ -37,7 +37,9 @@ describe("authenticated onboarding", () => {
     assert.match(actions, /display_name: displayName/);
     assert.match(actions, /onboarding_completed: true/);
     assert.match(actions, /research_use_acknowledged_at: now/);
-    assert.match(actions, /\.update\(profilePayload\)\.eq\("id", user\.id\)/);
+    assert.match(actions, /const profileUpdatePayload = \{/);
+    assert.match(actions, /\.update\(profileUpdatePayload\)\.eq\("id", user\.id\)/);
+    assert.match(actions, /email,\n\s+\.\.\.profileUpdatePayload/);
     assert.match(actions, /recordUsageEvent\("onboarding_complete", 1, \{ use_case: useCase \}/);
   });
 
