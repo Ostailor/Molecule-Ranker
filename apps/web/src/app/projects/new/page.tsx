@@ -1,9 +1,17 @@
-import { ArrowRight, ShieldAlert } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
+
+import { ForbiddenPage } from "@/components/auth/forbidden-page";
+import { ResearchUseBanner } from "@/components/disclaimers/research-use-banner";
 import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader } from "@/components/layout/page-header";
+import { CreateProjectForm } from "@/components/projects/create-project-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { ResearchUseBanner } from "@/components/disclaimers/research-use-banner";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { canCreateProject } from "@/lib/product/permissions";
+import { requireUser } from "@/lib/supabase/auth";
+import { createClient } from "@/lib/supabase/server";
+import type { Membership, ProductRole } from "@/lib/supabase/types";
 
 function UnsafeRequestWarning() {
   return (
@@ -22,80 +30,67 @@ function UnsafeRequestWarning() {
   );
 }
 
-export default function NewProjectPage() {
+function SetupIssuePage() {
   return (
     <AppShell>
+      <PageHeader title="Create project" description="Finish workspace setup before creating projects." />
+      <Card>
+        <CardBody className="grid gap-5 p-6 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div>
+            <h2 className="text-lg font-semibold text-ink-950">Workspace membership required</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-600">
+              Project creation requires an active organization membership. Finish onboarding or contact a workspace owner.
+            </p>
+          </div>
+          <Button href="/onboarding">Finish onboarding</Button>
+        </CardBody>
+      </Card>
+    </AppShell>
+  );
+}
+
+export default async function NewProjectPage() {
+  const user = await requireUser("/login?next=/projects/new");
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("product_memberships")
+    .select("id, organization_id, user_id, role, status, created_at, updated_at")
+    .eq("user_id", user.id)
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+  const membership = data as Membership | null;
+
+  if (!membership) return <SetupIssuePage />;
+
+  const role = membership.role as ProductRole;
+
+  if (!canCreateProject(role)) {
+    return <ForbiddenPage />;
+  }
+
+  return (
+    <AppShell userRole={role}>
       <PageHeader
         title="Create project"
-        description="Set up a synthetic research-planning workspace. This V0.1 form does not submit data or call a backend."
+        description="Create a tenant-scoped research planning project for your active organization."
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_0.72fr]">
         <Card>
-          <CardHeader title="Project details" eyebrow="Mock form" />
+          <CardHeader title="Project details" eyebrow="Product data" action={<StatusBadge tone="teal">{role}</StatusBadge>} />
           <CardBody>
-            <form className="grid gap-4" aria-label="Mock create project form">
-              <label>
-                <span className="text-sm font-semibold text-ink-800">Project name</span>
-                <input
-                  className="mt-2 w-full rounded-product border-slatewash-200 text-sm focus:border-teal-550 focus:ring-teal-550"
-                  defaultValue="ExampleDiseaseA hypothesis review"
-                  name="project-name"
-                />
-              </label>
-              <label>
-                <span className="text-sm font-semibold text-ink-800">Research goal</span>
-                <textarea
-                  className="mt-2 min-h-28 w-full rounded-product border-slatewash-200 text-sm focus:border-teal-550 focus:ring-teal-550"
-                  defaultValue="Prioritize synthetic research hypotheses for expert review and result bundle planning."
-                  name="research-goal"
-                />
-              </label>
-              <div className="grid gap-4 md:grid-cols-2">
-                <label>
-                  <span className="text-sm font-semibold text-ink-800">Disease or area</span>
-                  <input
-                    className="mt-2 w-full rounded-product border-slatewash-200 text-sm focus:border-teal-550 focus:ring-teal-550"
-                    defaultValue="ExampleDiseaseA"
-                    name="disease-or-area"
-                  />
-                </label>
-                <label>
-                  <span className="text-sm font-semibold text-ink-800">Optional target focus</span>
-                  <input
-                    className="mt-2 w-full rounded-product border-slatewash-200 text-sm focus:border-teal-550 focus:ring-teal-550"
-                    defaultValue="ExampleTargetA"
-                    name="target-focus"
-                  />
-                </label>
-              </div>
-              <label>
-                <span className="text-sm font-semibold text-ink-800">Notes</span>
-                <textarea
-                  className="mt-2 min-h-24 w-full rounded-product border-slatewash-200 text-sm focus:border-teal-550 focus:ring-teal-550"
-                  defaultValue="Use demo-only evidence rows and flag all outputs as requiring expert review."
-                  name="notes"
-                />
-              </label>
-              <div className="flex flex-wrap gap-3 pt-2">
-                <Button href="/dashboard?projectCreated=1" icon={ArrowRight}>
-                  Create mock project
-                </Button>
-                <Button href="/dashboard" variant="secondary">
-                  Cancel
-                </Button>
-              </div>
-            </form>
+            <CreateProjectForm />
           </CardBody>
         </Card>
         <div className="space-y-6">
           <UnsafeRequestWarning />
           <ResearchUseBanner />
           <Card>
-            <CardHeader title="Mock behavior" eyebrow="Release V0.1" />
+            <CardHeader title="Project creation" eyebrow="Release V0.2" />
             <CardBody>
               <p className="text-sm leading-6 text-ink-600">
-                The create action routes to the dashboard with a query parameter. No project record is saved and no
-                backend request is made.
+                This form writes to product_projects using your active organization membership. Viewers can read projects
+                but cannot create them.
               </p>
             </CardBody>
           </Card>
@@ -104,4 +99,3 @@ export default function NewProjectPage() {
     </AppShell>
   );
 }
-

@@ -10,12 +10,14 @@ import {
   PackageCheck,
   UserRound,
 } from "lucide-react";
+import type { ClientSafeProductFeatureFlags } from "@/lib/product/feature-flags";
 
 export type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
   adminOnly?: boolean;
+  feature?: keyof ClientSafeProductFeatureFlags;
 };
 
 export const projectId = "project-example-a";
@@ -25,8 +27,8 @@ export const candidateId = "candidate-example-a";
 export const productNav: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Projects", href: `/projects/${projectId}`, icon: FolderKanban },
-  { label: "New Discovery Run", href: `/projects/${projectId}/runs/new`, icon: FlaskConical },
-  { label: "Result Bundles", href: `/projects/${projectId}/runs/${runId}/result`, icon: PackageCheck },
+  { label: "New Discovery Run", href: `/projects/${projectId}/runs/new`, icon: FlaskConical, feature: "discoveryRunsPlaceholder" },
+  { label: "Result Bundles", href: `/projects/${projectId}/runs/${runId}/result`, icon: PackageCheck, feature: "exportsPlaceholder" },
   { label: "Saved Candidates", href: `/projects/${projectId}/runs/${runId}/candidates`, icon: Boxes },
   { label: "Usage", href: "/usage", icon: CircleDollarSign },
 ];

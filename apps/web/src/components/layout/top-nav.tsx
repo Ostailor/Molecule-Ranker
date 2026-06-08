@@ -3,15 +3,16 @@ import { projects } from "@/lib/mock-data";
 import { Logo } from "@/components/layout/logo";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { AccountMenuPlaceholder } from "@/components/layout/account-menu-placeholder";
+import type { ProductRole } from "@/lib/product/types";
 
-export function TopNav() {
+export function TopNav({ userRole }: { userRole?: ProductRole | null }) {
   const activeProject = projects[0];
 
   return (
     <header className="sticky top-0 z-20 border-b border-slatewash-200 bg-white/92 backdrop-blur">
       <div className="flex h-16 items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-3">
-          <MobileNav />
+          <MobileNav userRole={userRole} />
           <div className="lg:hidden">
             <Logo />
           </div>

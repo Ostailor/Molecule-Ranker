@@ -10,6 +10,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
@@ -248,6 +249,26 @@ PIPELINE_ERRORS = (
     GenerationError,
     AgentExecutionError,
 )
+
+
+class V3DiscoverModeOption(str, Enum):
+    mocked = "mocked"
+    dry_run = "dry_run"
+    read_only_live = "read_only_live"
+    write_approved_live = "write_approved_live"
+
+
+class V3AutonomyOption(str, Enum):
+    observe_only = "observe_only"
+    suggest_only = "suggest_only"
+    execute_safe_tools = "execute_safe_tools"
+    execute_with_approval = "execute_with_approval"
+    supervised_auto = "supervised_auto"
+
+
+class V3ValidationModeOption(str, Enum):
+    mocked = "mocked"
+
 
 app = typer.Typer(
     help="Rank existing molecules for disease research hypotheses using transparent evidence.",
@@ -668,9 +689,9 @@ def discover_command(
         typer.Option("--project-id", help="Existing project ID to select."),
     ] = None,
     mode: Annotated[
-        Literal["mocked", "dry_run", "read_only_live", "write_approved_live"],
+        V3DiscoverModeOption,
         typer.Option("--mode", help="V3 workflow execution mode."),
-    ] = "dry_run",
+    ] = V3DiscoverModeOption.dry_run,
     enable_generation: Annotated[
         bool,
         typer.Option("--enable-generation", help="Emit generated small-molecule hypotheses."),
@@ -699,15 +720,9 @@ def discover_command(
         typer.Option("--enable-codex-summary", help="Include Codex summary intent."),
     ] = False,
     autonomy: Annotated[
-        Literal[
-            "observe_only",
-            "suggest_only",
-            "execute_safe_tools",
-            "execute_with_approval",
-            "supervised_auto",
-        ],
+        V3AutonomyOption,
         typer.Option("--autonomy", help="Codex autonomy boundary."),
-    ] = "execute_with_approval",
+    ] = V3AutonomyOption.execute_with_approval,
     require_approval: Annotated[
         bool,
         typer.Option("--require-approval", help="Require explicit governance approval gates."),
@@ -728,14 +743,14 @@ def discover_command(
     request = V3DiscoverRequest(
         disease=disease,
         project_id=project_id,
-        mode=mode,
+        mode=mode.value,
         enable_generation=enable_generation,
         enable_biologics=enable_biologics,
         enable_antibody_generation=enable_antibody_generation,
         enable_structure=enable_structure,
         enable_integrations=enable_integrations,
         enable_codex_summary=enable_codex_summary,
-        autonomy=autonomy,
+        autonomy=autonomy.value,
         require_approval=require_approval,
         output_dir=output_dir,
     )
@@ -5645,9 +5660,9 @@ def validate_v3_performance_command(
 @validate_app.command("v3")
 def validate_v3_command(
     mode: Annotated[
-        Literal["mocked"],
+        V3ValidationModeOption,
         typer.Option("--mode", help="V3 validation mode."),
-    ] = "mocked",
+    ] = V3ValidationModeOption.mocked,
     output_dir: Annotated[
         Path,
         typer.Option(
@@ -5661,7 +5676,7 @@ def validate_v3_command(
     """Run the composite V3 release validation command."""
     from molecule_ranker.v3.validation import run_v3_validation
 
-    report = run_v3_validation(output_dir=output_dir, mode=mode)
+    report = run_v3_validation(output_dir=output_dir, mode=mode.value)
     payload = report.model_dump(mode="json")
     if json_output:
         _echo_json(payload)

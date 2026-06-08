@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 ReleaseStage = Literal[
     "local_productization",
     "hosted_alpha",
+    "hosted_alpha_auth",
     "private_beta",
     "paid_pilot",
     "public_pilot",

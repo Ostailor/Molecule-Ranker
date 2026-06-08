@@ -28,8 +28,8 @@ describe("product shell layout", () => {
   it("renders the expected shell regions", () => {
     const shell = read("src/components/layout/app-shell.tsx");
 
-    assert.match(shell, /<SideNav\s*\/>/);
-    assert.match(shell, /<TopNav\s*\/>/);
+    assert.match(shell, /<SideNav userRole=\{userRole\}\s*\/>/);
+    assert.match(shell, /<TopNav userRole=\{userRole\}\s*\/>/);
     assert.match(shell, /<ResearchUseBanner\s*\/>/);
     assert.match(shell, /<main\b/);
     assert.match(shell, /<Footer\s*\/>/);
@@ -59,6 +59,8 @@ describe("product shell layout", () => {
     assert.match(routes, /href: "\/account"/);
     assert.match(routes, /href: "\/admin"/);
     assert.match(routes, /adminOnly: true/);
+    assert.match(routes, /feature: "discoveryRunsPlaceholder"/);
+    assert.match(routes, /feature: "exportsPlaceholder"/);
   });
 
   it("includes the persistent research-use disclaimer", () => {

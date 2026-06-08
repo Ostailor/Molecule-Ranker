@@ -62,6 +62,10 @@ Non-goals:
 
 ## Release V0.2: Auth, Users, Organizations, Permissions
 
+Status: implemented as the Auth, Users, Organizations, Permissions release.
+
+Reference: `docs/product/v0_2_auth_users_orgs.md`
+
 Goals:
 
 - Add user identity, organization membership, and role checks.

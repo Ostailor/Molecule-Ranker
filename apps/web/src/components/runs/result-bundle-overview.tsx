@@ -12,6 +12,7 @@ import {
 import type { DiscoveryRun, Project, ResultBundle } from "@/lib/mock-data";
 import { candidates, evidenceItems, generatedHypotheses } from "@/lib/mock-data";
 import { dateLabel } from "@/lib/formatting";
+import { productFeatureFlags } from "@/lib/product/feature-flags";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Metric } from "@/components/ui/metric";
@@ -62,6 +63,13 @@ export function ResultBundleOverview({
   const candidatesHref = `/projects/${projectId}/runs/${runId}/candidates`;
   const evidenceHref = `/projects/${projectId}/runs/${runId}/evidence`;
   const generatedHref = `/projects/${projectId}/runs/${runId}/generated`;
+  const generatedHypothesesCount = productFeatureFlags.generatedHypothesesViewer ? generatedHypotheses.length : 0;
+  const resultSections = bundle?.sections ?? [
+    "Candidate ranking",
+    "Evidence",
+    ...(productFeatureFlags.generatedHypothesesViewer ? ["Generated hypotheses"] : []),
+    "Limitations",
+  ];
 
   return (
     <div className="space-y-6">
@@ -70,8 +78,8 @@ export function ResultBundleOverview({
         <Metric label="Evidence items" value={String(evidenceItems.length)} detail="Evidence coverage" icon={FileText} />
         <Metric
           label="Generated hypotheses"
-          value={String(generatedHypotheses.length)}
-          detail="No direct evidence"
+          value={String(generatedHypothesesCount)}
+          detail={productFeatureFlags.generatedHypothesesViewer ? "No direct evidence" : "Feature hidden"}
           icon={Lightbulb}
         />
         <Metric label="Warnings" value={String(warningsCount)} detail="Require review" icon={AlertTriangle} />
@@ -93,13 +101,11 @@ export function ResultBundleOverview({
                 research notes.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
-                {(bundle?.sections ?? ["Candidate ranking", "Evidence", "Generated hypotheses", "Limitations"]).map(
-                  (section) => (
-                    <StatusBadge key={section} tone="gray">
-                      {section}
-                    </StatusBadge>
-                  ),
-                )}
+                {resultSections.map((section) => (
+                  <StatusBadge key={section} tone="gray">
+                    {section}
+                  </StatusBadge>
+                ))}
               </div>
             </div>
             <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-4">
@@ -142,14 +148,16 @@ export function ResultBundleOverview({
           cta="Open evidence"
           body="Evidence items summarize source type, title, confidence, and provenance notes for UI review only."
         />
-        <SummaryCard
-          title="Generated hypotheses summary"
-          eyebrow="No direct evidence"
-          icon={FlaskConical}
-          href={generatedHref}
-          cta="Open generated hypotheses"
-          body="Generated hypotheses are separated from evidence-backed sections and require explicit human review."
-        />
+        {productFeatureFlags.generatedHypothesesViewer ? (
+          <SummaryCard
+            title="Generated hypotheses summary"
+            eyebrow="No direct evidence"
+            icon={FlaskConical}
+            href={generatedHref}
+            cta="Open generated hypotheses"
+            body="Generated hypotheses are separated from evidence-backed sections and require explicit human review."
+          />
+        ) : null}
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
@@ -158,23 +166,34 @@ export function ResultBundleOverview({
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-        <Card id="export-actions">
-          <CardHeader title="Export actions placeholder" eyebrow="PLACEHOLDER_V0_1_EXPORT" />
-          <CardBody>
-            <p className="text-sm leading-6 text-ink-600">
-              Export actions are disabled in V0.1. This area reserves the future download, share, and archive controls
-              without creating files or calling a backend.
-            </p>
-            <div className="mt-4 flex flex-wrap gap-3">
-              <Button href="#export-actions" icon={FileArchive} variant="secondary">
-                Export placeholder
-              </Button>
-              <Button href={candidatesHref} variant="ghost">
-                Review before export
-              </Button>
-            </div>
-          </CardBody>
-        </Card>
+        {productFeatureFlags.exportsPlaceholder ? (
+          <Card id="export-actions">
+            <CardHeader title="Export actions placeholder" eyebrow="PLACEHOLDER_V0_1_EXPORT" />
+            <CardBody>
+              <p className="text-sm leading-6 text-ink-600">
+                Export actions are disabled in V0.2. This area reserves the future download, share, and archive controls
+                without creating files or calling a backend.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Button href="#export-actions" icon={FileArchive} variant="secondary">
+                  Export placeholder
+                </Button>
+                <Button href={candidatesHref} variant="ghost">
+                  Review before export
+                </Button>
+              </div>
+            </CardBody>
+          </Card>
+        ) : (
+          <Card id="export-actions">
+            <CardHeader title="Export actions hidden" eyebrow="Feature disabled" />
+            <CardBody>
+              <p className="text-sm leading-6 text-ink-600">
+                Export placeholders are hidden by the current product feature flag. No export files are created in V0.2.
+              </p>
+            </CardBody>
+          </Card>
+        )}
 
         <ListCard
           title="Human review checklist"

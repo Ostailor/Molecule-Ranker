@@ -7,11 +7,13 @@ from molecule_ranker.product.schemas import PilotUser, UsageLimit
 
 UsageAction = Literal[
     "create_project",
+    "feedback_create",
+    "login",
+    "onboarding_complete",
     "run_discovery",
     "generate_hypotheses",
     "export_result",
     "codex_task",
-    "storage_write",
 ]
 
 HIGH_INTERNAL_LIMIT = 1_000_000
@@ -56,11 +58,13 @@ DEFAULT_USAGE_LIMITS: tuple[UsageLimit, ...] = (
 
 ACTION_LIMIT_FIELDS: dict[UsageAction, str] = {
     "create_project": "max_projects",
+    "feedback_create": "max_storage_mb",
+    "login": "max_storage_mb",
+    "onboarding_complete": "max_storage_mb",
     "run_discovery": "max_runs_per_month",
     "generate_hypotheses": "max_generated_hypotheses_per_run",
     "export_result": "max_result_bundle_exports_per_month",
     "codex_task": "max_codex_tasks_per_month",
-    "storage_write": "max_storage_mb",
 }
 
 
@@ -199,8 +203,6 @@ def _current_usage(user: PilotUser, action: UsageAction) -> int:
 
 
 def _usage_amount(action: UsageAction, metadata: dict[str, Any]) -> int:
-    if action == "storage_write":
-        return int(metadata.get("storage_mb", metadata.get("amount", 1)))
     return int(metadata.get("amount", 1))
 
 

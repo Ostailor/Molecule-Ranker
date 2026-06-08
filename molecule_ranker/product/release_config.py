@@ -10,10 +10,10 @@ from molecule_ranker.product.schemas import ProductRelease
 from molecule_ranker.v3.governance_contract import REQUIRED_GUARDRAILS
 
 DEFAULT_RELEASE_TRACK = "pilot_release"
-DEFAULT_RELEASE_VERSION = "0.1.0"
+DEFAULT_RELEASE_VERSION = "0.2.0"
 DEFAULT_ENGINE_VERSION = "3.0.0"
-DEFAULT_RELEASE_NAME = "Release V0.1 Hosted App Shell"
-DEFAULT_RELEASE_STAGE = "hosted_alpha"
+DEFAULT_RELEASE_NAME = "Release V0.2 Auth, Users, Organizations, Permissions"
+DEFAULT_RELEASE_STAGE = "hosted_alpha_auth"
 
 
 def build_default_product_release(metadata: dict[str, Any] | None = None) -> ProductRelease:
@@ -29,8 +29,15 @@ def build_default_product_release(metadata: dict[str, Any] | None = None) -> Pro
         metadata={
             "dev_track": "Dev V3.0 internal engine",
             "release_track_goal": "Release V1.0 paid pilot app",
-            "payments_implemented": False,
+            "auth_implemented": True,
+            "organizations_implemented": True,
+            "role_checks_implemented": True,
+            "billing_implemented": False,
+            "stripe_implemented": False,
+            "live_engine_execution_enabled": False,
             "production_deployment_enabled": False,
+            "external_writes_enabled": False,
+            "payments_implemented": False,
             **(metadata or {}),
         },
     )

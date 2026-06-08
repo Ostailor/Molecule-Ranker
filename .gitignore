@@ -4,6 +4,10 @@
 .pytest_cache/
 .ruff_cache/
 .molecule-ranker/
+.env
+.env.*
+!.env.example
+!apps/web/.env.example
 __pycache__/
 *.py[cod]
 results/*

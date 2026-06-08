@@ -1,5 +1,5 @@
 import {
-  ArrowRight,
+  Building2,
   FileArchive,
   FlaskConical,
   MessageSquareText,
@@ -9,7 +9,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import Link from "next/link";
-import { candidates, organization, pilotUser, projects, resultBundles, runs, usageSummary } from "@/lib/mock-data";
+import { candidates, resultBundles, runs } from "@/lib/mock-data";
 import { quickLinks } from "@/lib/routes";
 import { compactNumber, dateLabel, percent } from "@/lib/formatting";
 import { ResearchUseBanner } from "@/components/disclaimers/research-use-banner";
@@ -18,11 +18,36 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
 import { Metric } from "@/components/ui/metric";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { productFeatureFlags } from "@/lib/product/feature-flags";
+import type { ProductRole } from "@/lib/supabase/types";
 
 export type DashboardViewState = "normal" | "empty" | "loading" | "error";
 
+export type DashboardProject = {
+  id: string;
+  name: string;
+  researchGoal: string | null;
+  diseaseFocus: string | null;
+  targetFocus: string | null;
+  status: string;
+  updatedAt: string;
+};
+
+export type DashboardUsageSummary = {
+  eventsThisMonth: number;
+  totalQuantityThisMonth: number;
+  projectEventsThisMonth: number;
+  feedbackEventsThisMonth: number;
+};
+
 type DashboardOverviewProps = {
   state?: DashboardViewState;
+  displayName: string;
+  organizationName: string;
+  role: ProductRole;
+  plan: string;
+  projects: DashboardProject[];
+  usage: DashboardUsageSummary;
 };
 
 function SkeletonBlock({ className = "" }: { className?: string }) {
@@ -50,7 +75,7 @@ function DashboardLoadingSkeleton() {
   );
 }
 
-function DashboardErrorCard() {
+export function DashboardSetupIssuePage({ email }: { email: string }) {
   return (
     <div className="space-y-6">
       <Card>
@@ -59,15 +84,13 @@ function DashboardErrorCard() {
             <ShieldAlert className="h-5 w-5" aria-hidden="true" />
           </span>
           <div className="max-w-2xl">
-            <h2 className="text-lg font-semibold text-ink-950">Dashboard data unavailable</h2>
+            <h2 className="text-lg font-semibold text-ink-950">Workspace setup needs attention</h2>
             <p className="mt-2 text-sm leading-6 text-ink-600">
-              The mock dashboard could not load its research hypotheses, projects, or result bundle summaries. No user
-              data was submitted.
+              This signed-in account does not have an active organization membership yet. Use onboarding to finish setup
+              or contact the pilot workspace owner. Signed in as {email}.
             </p>
             <div className="mt-4 flex flex-wrap gap-3">
-              <Button href="/dashboard" variant="secondary">
-                Reload dashboard
-              </Button>
+              <Button href="/onboarding" variant="secondary">Finish onboarding</Button>
               <Button href="/feedback" icon={MessageSquareText}>
                 Share feedback
               </Button>
@@ -80,10 +103,37 @@ function DashboardErrorCard() {
   );
 }
 
-function EmptyProjectsState() {
+export function DashboardAccountStatusPage({ organizationName, status }: { organizationName: string; status: string }) {
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardBody className="flex flex-col gap-4 p-6 sm:flex-row sm:items-start">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-product bg-amber-50 text-amber-700">
+            <Building2 className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <div className="max-w-2xl">
+            <h2 className="text-lg font-semibold text-ink-950">Account status limits dashboard access</h2>
+            <p className="mt-2 text-sm leading-6 text-ink-600">
+              {organizationName} is currently marked {status}. Project and usage data stay hidden until the workspace is active.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Button href="/account" variant="secondary">Review account</Button>
+              <Button href="/feedback" icon={MessageSquareText}>
+                Share feedback
+              </Button>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+      <ResearchUseBanner />
+    </div>
+  );
+}
+
+function EmptyProjectsState({ displayName, organizationName, role, plan, usage }: Omit<DashboardOverviewProps, "projects" | "state">) {
   return (
     <div className="space-y-6" aria-label="Empty projects dashboard state">
-      <WelcomeCard projectCount={0} runCount={0} />
+      <WelcomeCard displayName={displayName} organizationName={organizationName} role={role} plan={plan} projectCount={0} />
       <DashboardActions />
       <Card>
         <CardHeader title="Projects" eyebrow="Empty state" />
@@ -91,8 +141,8 @@ function EmptyProjectsState() {
           <div>
             <h2 className="text-lg font-semibold text-ink-950">No projects yet</h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-600">
-              Create a project to organize research hypotheses, candidate prioritization, evidence, and result bundle
-              review notes.
+              Create a project to organize research questions, candidate prioritization, evidence, and result bundle
+              review notes for this organization.
             </p>
           </div>
           <Button href={quickLinks.newProject} icon={Plus}>
@@ -100,7 +150,8 @@ function EmptyProjectsState() {
           </Button>
         </CardBody>
       </Card>
-      <UsageSummary />
+      <UsageSummary usage={usage} projectCount={0} />
+      <RecentDiscoveryRunsPlaceholder />
       <SavedCandidatesPlaceholder />
       <ResearchReminder />
       <FeedbackCta />
@@ -108,16 +159,28 @@ function EmptyProjectsState() {
   );
 }
 
-function WelcomeCard({ projectCount, runCount }: { projectCount: number; runCount: number }) {
+function WelcomeCard({
+  displayName,
+  organizationName,
+  role,
+  plan,
+  projectCount,
+}: {
+  displayName: string;
+  organizationName: string;
+  role: ProductRole;
+  plan: string;
+  projectCount: number;
+}) {
   return (
     <Card>
       <CardBody className="grid gap-6 p-5 lg:grid-cols-[1fr_auto] lg:items-center">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-teal-700">{organization.plan}</p>
-          <h2 className="mt-2 text-2xl font-semibold text-ink-950">Welcome, {pilotUser.name}</h2>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-teal-700">{plan}</p>
+          <h2 className="mt-2 text-2xl font-semibold text-ink-950">Welcome, {displayName}</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-ink-600">
-            Review research hypotheses, candidate prioritization, and result bundle readiness for{" "}
-            {organization.name}. All mock items require expert review before any use outside planning.
+            Review research projects, tenant-scoped usage, and V0.3 workflow placeholders for {organizationName}.
+            Your current role is {role}. All product outputs require expert review before any use outside planning.
           </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:w-72">
@@ -126,8 +189,8 @@ function WelcomeCard({ projectCount, runCount }: { projectCount: number; runCoun
             <p className="mt-2 text-2xl font-semibold text-ink-950">{projectCount}</p>
           </div>
           <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-400">Runs</p>
-            <p className="mt-2 text-2xl font-semibold text-ink-950">{runCount}</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-400">Role</p>
+            <p className="mt-2 text-2xl font-semibold text-ink-950 capitalize">{role}</p>
           </div>
         </div>
       </CardBody>
@@ -152,53 +215,53 @@ function DashboardActions() {
           <Plus className="h-5 w-5 shrink-0 text-teal-700 transition group-hover:scale-105" aria-hidden="true" />
         </div>
       </Link>
-      <Link
-        href={quickLinks.newRun}
-        className="focus-ring group rounded-product border border-lime-450/30 bg-lime-350/20 p-4 transition hover:bg-lime-350/30"
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-semibold text-ink-950">Start discovery run</p>
-            <p className="mt-1 text-sm leading-6 text-ink-600">
-              Generate a mock result bundle that requires expert review before advancement.
-            </p>
+      {productFeatureFlags.discoveryRunsPlaceholder ? (
+        <div
+          className="rounded-product border border-slatewash-200 bg-slatewash-50 p-4"
+          aria-disabled="true"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-ink-950">Start discovery run</p>
+              <p className="mt-1 text-sm leading-6 text-ink-600">
+                Disabled until Release V0.3 connects the discovery workflow. No live workflow execution is started in V0.2.
+              </p>
+            </div>
+            <StatusBadge tone="gray">V0.3</StatusBadge>
           </div>
-          <ArrowRight className="h-5 w-5 shrink-0 text-lime-900 transition group-hover:translate-x-0.5" aria-hidden="true" />
         </div>
-      </Link>
+      ) : null}
     </div>
   );
 }
 
-function UsageSummary() {
-  const remainingRuns = usageSummary.monthlyRunLimit - usageSummary.discoveryRunsThisMonth;
-
+function UsageSummary({ usage, projectCount }: { usage: DashboardUsageSummary; projectCount: number }) {
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-      <Metric label="Discovery runs" value={String(usageSummary.discoveryRunsThisMonth)} detail="This month" icon={FlaskConical} />
-      <Metric label="Evidence items" value={compactNumber(usageSummary.evidenceItemsReviewed)} detail="Synthetic rows reviewed" icon={FileArchive} />
-      <Metric label="Research hypotheses" value={String(usageSummary.generatedHypotheses)} detail="Generated placeholders" icon={Star} />
-      <Metric label="Run capacity" value={String(remainingRuns)} detail="Pilot preview remaining" icon={UsersRound} />
+      <Metric label="Projects" value={String(projectCount)} detail="Current organization" icon={FileArchive} />
+      <Metric label="Usage events" value={compactNumber(usage.eventsThisMonth)} detail="This month" icon={FlaskConical} />
+      <Metric label="Usage quantity" value={compactNumber(usage.totalQuantityThisMonth)} detail="RLS-scoped sum" icon={Star} />
+      <Metric label="Feedback events" value={compactNumber(usage.feedbackEventsThisMonth)} detail="This month" icon={UsersRound} />
     </div>
   );
 }
 
-function ProjectsList() {
+function ProjectsList({ projects }: { projects: DashboardProject[] }) {
   return (
     <Card>
-      <CardHeader title="Projects" eyebrow="Mock workspace" action={<StatusBadge tone="teal">{projects.length} active</StatusBadge>} />
+      <CardHeader title="Projects" eyebrow="Tenant-scoped data" action={<StatusBadge tone="teal">{projects.length} visible</StatusBadge>} />
       <CardBody>
         <DataTable
-          columns={["Project", "Area", "Status", "Runs", "Updated"]}
+          columns={["Project", "Research goal", "Focus", "Status", "Updated"]}
           rows={projects.map((project) => [
             <Link key={project.id} href={`/projects/${project.id}`} className="font-semibold text-ink-950 hover:text-teal-700">
               {project.name}
             </Link>,
-            project.therapeuticArea,
-            <StatusBadge key={`${project.id}-status`} tone={project.status === "Active" ? "teal" : project.status === "Review" ? "amber" : "gray"}>
+            project.researchGoal ?? "Not specified",
+            project.diseaseFocus ?? project.targetFocus ?? "Not specified",
+            <StatusBadge key={`${project.id}-status`} tone={project.status === "active" ? "teal" : project.status === "archived" ? "gray" : "amber"}>
               {project.status}
             </StatusBadge>,
-            project.runCount,
             dateLabel(project.updatedAt),
           ])}
         />
@@ -207,11 +270,15 @@ function ProjectsList() {
   );
 }
 
-function RecentDiscoveryRuns() {
+function RecentDiscoveryRunsPlaceholder() {
   return (
     <Card>
-      <CardHeader title="Recent discovery runs" eyebrow="Requires expert review" />
+      <CardHeader title="Recent discovery runs" eyebrow="Placeholder until V0.3" action={<StatusBadge tone="gray">Mock only</StatusBadge>} />
       <CardBody>
+        <p className="mb-4 text-sm leading-6 text-ink-600">
+          Recent runs remain synthetic placeholders until Release V0.3 connects the discovery workflow. They are not
+          tenant data and do not indicate live engine execution.
+        </p>
         <DataTable
           columns={["Run", "Status", "Candidates", "Result bundle"]}
           rows={runs.map((run) => {
@@ -243,11 +310,11 @@ function RecentDiscoveryRuns() {
 function SavedCandidatesPlaceholder() {
   return (
     <Card>
-      <CardHeader title="Saved candidates" eyebrow="Placeholder" action={<StatusBadge tone="amber">Release V0.2</StatusBadge>} />
+      <CardHeader title="Saved candidates" eyebrow="Placeholder until V0.3" action={<StatusBadge tone="amber">Mock only</StatusBadge>} />
       <CardBody className="space-y-4">
         <p className="text-sm leading-6 text-ink-600">
-          Saved candidates will collect reviewer selections from candidate prioritization. For V0.1, this card previews
-          the destination without storing user selections.
+          Saved candidates will collect reviewer selections from candidate prioritization in a later release. This card
+          previews the destination without storing user selections.
         </p>
         <div className="grid gap-3 sm:grid-cols-2">
           {candidates.slice(0, 2).map((candidate) => (
@@ -296,19 +363,37 @@ function FeedbackCta() {
   );
 }
 
-export function DashboardOverview({ state = "normal" }: DashboardOverviewProps) {
+export function DashboardOverview({
+  state = "normal",
+  displayName,
+  organizationName,
+  role,
+  plan,
+  projects,
+  usage,
+}: DashboardOverviewProps) {
   if (state === "loading") return <DashboardLoadingSkeleton />;
-  if (state === "error") return <DashboardErrorCard />;
-  if (state === "empty") return <EmptyProjectsState />;
+  if (state === "error") return <DashboardSetupIssuePage email={displayName} />;
+  if (state === "empty" || projects.length === 0) {
+    return (
+      <EmptyProjectsState
+        displayName={displayName}
+        organizationName={organizationName}
+        role={role}
+        plan={plan}
+        usage={usage}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <WelcomeCard projectCount={projects.length} runCount={runs.length} />
+      <WelcomeCard displayName={displayName} organizationName={organizationName} role={role} plan={plan} projectCount={projects.length} />
       <DashboardActions />
-      <UsageSummary />
+      <UsageSummary usage={usage} projectCount={projects.length} />
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <ProjectsList />
-        <RecentDiscoveryRuns />
+        <ProjectsList projects={projects} />
+        <RecentDiscoveryRunsPlaceholder />
       </div>
       <SavedCandidatesPlaceholder />
       <ResearchReminder />

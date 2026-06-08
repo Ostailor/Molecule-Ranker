@@ -1,7 +1,10 @@
+import { productFeatureFlags } from "@/lib/product/feature-flags";
+
 export const featureFlags = {
+  ...productFeatureFlags,
   connectedServices: false,
-  realAuth: false,
-  generationPreview: true,
+  realAuth: true,
+  generationPreview: productFeatureFlags.generatedHypothesesViewer,
   evidenceTrace: true,
-  adminConsole: true,
+  adminConsole: productFeatureFlags.adminDashboard,
 } as const;

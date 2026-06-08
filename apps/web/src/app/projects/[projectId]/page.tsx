@@ -1,44 +1,45 @@
-import { ArrowRight, FileArchive, FlaskConical, Plus, Star } from "lucide-react";
-import Link from "next/link";
+import { ArrowLeft, FileArchive, FlaskConical, ShieldAlert, Star } from "lucide-react";
+
+import { ResearchUseBanner } from "@/components/disclaimers/research-use-banner";
 import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { DataTable } from "@/components/ui/data-table";
 import { Metric } from "@/components/ui/metric";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { candidates, projects, resultBundles, runs, usageSummary } from "@/lib/mock-data";
-import { dateLabel, percent } from "@/lib/formatting";
-import { quickLinks } from "@/lib/routes";
+import { dateLabel } from "@/lib/formatting";
+import { requireUser } from "@/lib/supabase/auth";
+import { createClient } from "@/lib/supabase/server";
+import type { Membership, ProductRole, Project } from "@/lib/supabase/types";
 
 type ProjectPageProps = {
   params: Promise<{
     projectId: string;
   }>;
-  searchParams?: Promise<{
-    state?: string;
-  }>;
 };
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
 
 function ProjectNotFound({ projectId }: { projectId: string }) {
   return (
     <AppShell>
-      <PageHeader title="Project not found" description="This mock project does not exist in the synthetic demo dataset." />
+      <PageHeader title="Project not found" description="No accessible project matches this identifier." />
       <Card>
         <CardBody className="grid gap-5 p-6 lg:grid-cols-[1fr_auto] lg:items-center">
           <div>
-            <h2 className="text-lg font-semibold text-ink-950">No project matches {projectId}</h2>
+            <h2 className="text-lg font-semibold text-ink-950">Project is unavailable</h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-600">
-              Choose a mock project from the dashboard or create a new placeholder project. No backend lookup was made.
+              The project may not exist, may belong to another organization, or may no longer be active. No cross-organization
+              project data is shown for {projectId}.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
-            <Button href="/dashboard" variant="secondary">
+            <Button href="/dashboard" variant="secondary" icon={ArrowLeft}>
               Back to dashboard
             </Button>
-            <Button href={quickLinks.newProject} icon={Plus}>
-              Create project
-            </Button>
+            <Button href="/projects/new">Create project</Button>
           </div>
         </CardBody>
       </Card>
@@ -46,182 +47,166 @@ function ProjectNotFound({ projectId }: { projectId: string }) {
   );
 }
 
-function ProjectSummary({ project, runCount }: { project: (typeof projects)[number]; runCount: number }) {
-  return (
-    <Card>
-      <CardHeader title="Project summary" eyebrow={project.therapeuticArea} action={<StatusBadge tone="teal">{project.status}</StatusBadge>} />
-      <CardBody className="space-y-4">
-        <p className="text-sm leading-6 text-ink-600">{project.objective}</p>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-400">Updated</p>
-            <p className="mt-2 text-sm font-semibold text-ink-950">{dateLabel(project.updatedAt)}</p>
-          </div>
-          <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-400">Discovery runs</p>
-            <p className="mt-2 text-sm font-semibold text-ink-950">{runCount}</p>
-          </div>
-          <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-400">Data mode</p>
-            <p className="mt-2 text-sm font-semibold text-ink-950">Synthetic mock data</p>
-          </div>
-        </div>
-      </CardBody>
-    </Card>
-  );
-}
-
-function NoRunsYet({ projectId }: { projectId: string }) {
-  return (
-    <Card>
-      <CardHeader title="Recent runs" eyebrow="No runs yet" />
-      <CardBody className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
-        <div>
-          <h2 className="text-lg font-semibold text-ink-950">No discovery runs yet</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-600">
-            Start a discovery run to create a mock result bundle for candidate prioritization and expert review.
-          </p>
-        </div>
-        <Button href={`/projects/${projectId}/runs/new`} icon={Plus}>
-          Start new discovery run
-        </Button>
-      </CardBody>
-    </Card>
-  );
-}
-
-function RecentRuns({ projectRuns }: { projectRuns: typeof runs }) {
-  return (
-    <Card>
-      <CardHeader title="Recent runs" eyebrow="Project activity" />
-      <CardBody>
-        <DataTable
-          columns={["Run", "Status", "Candidates", "Started"]}
-          rows={projectRuns.map((run) => [
-            <Link key={run.id} href={`/projects/${run.projectId}/runs/${run.id}`} className="font-semibold text-ink-950 hover:text-teal-700">
-              {run.name}
-            </Link>,
-            <StatusBadge key={`${run.id}-status`} tone={run.status === "Complete" ? "green" : run.status === "Running" ? "teal" : "amber"}>
-              {run.status}
-            </StatusBadge>,
-            run.candidateCount,
-            dateLabel(run.startedAt),
-          ])}
-        />
-      </CardBody>
-    </Card>
-  );
-}
-
-function SavedCandidates() {
-  return (
-    <Card>
-      <CardHeader title="Saved candidates" eyebrow="Mock preview" />
-      <CardBody>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {candidates.slice(0, 3).map((candidate) => (
-            <div key={candidate.id} className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-ink-950">{candidate.name}</p>
-                <StatusBadge tone={candidate.confidence === "Medium" ? "amber" : "gray"}>{candidate.confidence}</StatusBadge>
-              </div>
-              <p className="mt-2 text-xs leading-5 text-ink-600">
-                {percent(candidate.score)} score for candidate prioritization. Requires expert review.
-              </p>
-            </div>
-          ))}
-        </div>
-      </CardBody>
-    </Card>
-  );
-}
-
-function ProjectUsage({ projectRuns }: { projectRuns: typeof runs }) {
-  const candidateTotal = projectRuns.reduce((total, run) => total + run.candidateCount, 0);
-  const evidenceTotal = projectRuns.reduce((total, run) => total + run.evidenceCount, 0);
-
-  return (
-    <div className="grid gap-4 md:grid-cols-3">
-      <Metric label="Project runs" value={String(projectRuns.length)} detail="Synthetic discovery runs" icon={FlaskConical} />
-      <Metric label="Candidate rows" value={String(candidateTotal)} detail="Prioritization placeholders" icon={Star} />
-      <Metric label="Evidence rows" value={String(evidenceTotal || usageSummary.evidenceItemsReviewed)} detail="Demo review items" icon={FileArchive} />
-    </div>
-  );
-}
-
-function ResultBundlesList({ projectRuns }: { projectRuns: typeof runs }) {
-  const runIds = new Set(projectRuns.map((run) => run.id));
-  const bundles = resultBundles.filter((bundle) => runIds.has(bundle.runId));
-
-  return (
-    <Card>
-      <CardHeader title="Result bundles" eyebrow="Review packets" />
-      <CardBody>
-        {bundles.length > 0 ? (
-          <DataTable
-            columns={["Bundle", "Status", "Sections", "Exported"]}
-            rows={bundles.map((bundle) => [
-              bundle.name,
-              <StatusBadge key={`${bundle.id}-status`} tone={bundle.status === "Ready for review" ? "green" : "amber"}>
-                {bundle.status}
-              </StatusBadge>,
-              bundle.sections.length,
-              bundle.exportedAt ? dateLabel(bundle.exportedAt) : "Not exported",
-            ])}
-          />
-        ) : (
-          <p className="text-sm leading-6 text-ink-600">
-            No result bundles are linked yet. Start a discovery run to create a mock review packet.
-          </p>
-        )}
-      </CardBody>
-    </Card>
-  );
-}
-
-export default async function ProjectPage({ params, searchParams }: ProjectPageProps) {
-  const { projectId } = await params;
-  const query = await searchParams;
-  const project = projects.find((item) => item.id === projectId);
-
-  if (!project) return <ProjectNotFound projectId={projectId} />;
-
-  const projectRuns = query?.state === "no-runs" ? [] : runs.filter((run) => run.projectId === project.id);
-
+function SetupIssuePage() {
   return (
     <AppShell>
-      <PageHeader
-        title={project.name}
-        description={project.objective}
-        actions={
-          <Button href={`/projects/${project.id}/runs/new`} icon={Plus}>
-            Start new discovery run
-          </Button>
-        }
-      />
-      <div className="space-y-6">
-        <ProjectSummary project={project} runCount={projectRuns.length} />
-        <ProjectUsage projectRuns={projectRuns} />
-        {projectRuns.length > 0 ? <RecentRuns projectRuns={projectRuns} /> : <NoRunsYet projectId={project.id} />}
-        <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-          <SavedCandidates />
-          <ResultBundlesList projectRuns={projectRuns} />
-        </div>
-        <Card>
-          <CardBody className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-base font-semibold text-ink-950">Ready to continue?</h2>
-              <p className="mt-1 text-sm leading-6 text-ink-600">
-                Start a discovery run to generate a mock result bundle that requires expert review.
-              </p>
-            </div>
-            <Button href={`/projects/${project.id}/runs/new`} icon={ArrowRight}>
-              Start new discovery run
-            </Button>
-          </CardBody>
-        </Card>
-      </div>
+      <PageHeader title="Project unavailable" description="An active organization membership is required to view projects." />
+      <Card>
+        <CardBody className="grid gap-5 p-6 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div>
+            <h2 className="text-lg font-semibold text-ink-950">Workspace membership required</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-600">
+              Finish onboarding or contact a workspace owner before opening project details.
+            </p>
+          </div>
+          <Button href="/onboarding">Finish onboarding</Button>
+        </CardBody>
+      </Card>
     </AppShell>
   );
 }
 
+function ProjectSummary({ project }: { project: Project }) {
+  return (
+    <Card>
+      <CardHeader title="Project summary" eyebrow="Product data" action={<StatusBadge tone="teal">{project.status}</StatusBadge>} />
+      <CardBody className="space-y-4">
+        <p className="text-sm leading-6 text-ink-600">{project.research_goal ?? "No research goal has been added yet."}</p>
+        <div className="grid gap-3 sm:grid-cols-4">
+          <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-400">Disease or area</p>
+            <p className="mt-2 text-sm font-semibold text-ink-950">{project.disease_focus ?? "Not specified"}</p>
+          </div>
+          <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-400">Target focus</p>
+            <p className="mt-2 text-sm font-semibold text-ink-950">{project.target_focus ?? "Not specified"}</p>
+          </div>
+          <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-400">Updated</p>
+            <p className="mt-2 text-sm font-semibold text-ink-950">{dateLabel(project.updated_at)}</p>
+          </div>
+          <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-400">Created by</p>
+            <p className="mt-2 text-sm font-semibold text-ink-950">{project.created_by_user_id ? "Workspace member" : "Unknown"}</p>
+          </div>
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function ProjectUsagePlaceholder() {
+  return (
+    <div className="grid gap-4 md:grid-cols-3">
+      <Metric label="Project runs" value="0" detail="Connected in V0.3" icon={FlaskConical} />
+      <Metric label="Candidate rows" value="0" detail="Placeholder until workflow connection" icon={Star} />
+      <Metric label="Result bundles" value="0" detail="Placeholder until V0.3/V0.4" icon={FileArchive} />
+    </div>
+  );
+}
+
+function RunsPlaceholder() {
+  return (
+    <Card>
+      <CardHeader title="Recent runs" eyebrow="Placeholder until V0.3" action={<StatusBadge tone="gray">Disabled</StatusBadge>} />
+      <CardBody className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
+        <div>
+          <h2 className="text-lg font-semibold text-ink-950">No discovery runs yet</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-600">
+            Start new discovery run remains disabled until Release V0.3 connects the workflow. No live workflow execution is started in V0.2.
+          </p>
+        </div>
+        <StatusBadge tone="gray">V0.3</StatusBadge>
+      </CardBody>
+    </Card>
+  );
+}
+
+function ResultBundlesPlaceholder() {
+  return (
+    <Card>
+      <CardHeader title="Result bundles" eyebrow="Placeholder until V0.3/V0.4" action={<StatusBadge tone="gray">Disabled</StatusBadge>} />
+      <CardBody>
+        <p className="text-sm leading-6 text-ink-600">
+          Result bundles will summarize completed discovery workflows in a later release. V0.2 only shows the project record
+          and does not expose raw internal execution details.
+        </p>
+      </CardBody>
+    </Card>
+  );
+}
+
+function SafetyBoundary() {
+  return (
+    <Card>
+      <CardBody className="flex gap-3">
+        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden="true" />
+        <div>
+          <h2 className="text-sm font-semibold text-ink-950">Project safety boundary</h2>
+          <p className="mt-2 text-sm leading-6 text-ink-700">
+            Do not add patient-specific or protected health information to project fields. Project outputs are research-planning
+            artifacts only and require expert review.
+          </p>
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+export default async function ProjectPage({ params }: ProjectPageProps) {
+  const user = await requireUser("/login");
+  const { projectId } = await params;
+
+  if (!isUuid(projectId)) return <ProjectNotFound projectId={projectId} />;
+
+  const supabase = await createClient();
+  const { data: membershipData } = await supabase
+    .from("product_memberships")
+    .select("id, organization_id, user_id, role, status, created_at, updated_at")
+    .eq("user_id", user.id)
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+  const membership = membershipData as Membership | null;
+
+  if (!membership) return <SetupIssuePage />;
+
+  const { data: projectData } = await supabase
+    .from("product_projects")
+    .select("id, organization_id, created_by_user_id, name, research_goal, disease_focus, target_focus, status, created_at, updated_at")
+    .eq("id", projectId)
+    .eq("organization_id", membership.organization_id)
+    .maybeSingle();
+  const project = projectData as Project | null;
+
+  if (!project) return <ProjectNotFound projectId={projectId} />;
+
+  return (
+    <AppShell userRole={membership.role as ProductRole}>
+      <PageHeader
+        title={project.name}
+        description={project.research_goal ?? "Project details are scoped to your active organization membership."}
+        actions={
+          <Button href="/dashboard" variant="secondary" icon={ArrowLeft}>
+            Back to dashboard
+          </Button>
+        }
+      />
+      <div className="space-y-6">
+        <ProjectSummary project={project} />
+        <ProjectUsagePlaceholder />
+        <RunsPlaceholder />
+        <ResultBundlesPlaceholder />
+        <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+          <SafetyBoundary />
+          <Card>
+            <CardHeader title="Research-use reminder" eyebrow="Boundary" />
+            <CardBody>
+              <ResearchUseBanner compact />
+            </CardBody>
+          </Card>
+        </div>
+      </div>
+    </AppShell>
+  );
+}

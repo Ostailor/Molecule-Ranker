@@ -9,55 +9,74 @@ function read(relativePath) {
   return readFileSync(join(root, relativePath), "utf8");
 }
 
-describe("V0.1 placeholder pages", () => {
-  it("login page renders mock-only access controls and acknowledgement text", () => {
+describe("auth and placeholder pages", () => {
+  it("login page renders real Supabase auth controls and research-use text", () => {
     const loginPage = read("src/app/login/page.tsx");
+    const loginForm = read("src/components/auth/login-form.tsx");
 
-    assert.match(loginPage, /PLACEHOLDER_V0_1_AUTH/);
-    assert.match(loginPage, /type="email"/);
-    assert.match(loginPage, /I acknowledge MolCreate is for research-planning artifacts and hypotheses only/);
-    assert.match(loginPage, /Pilot access note/);
+    assert.match(loginPage, /LoginForm/);
+    assert.match(loginForm, /loginAction/);
+    assert.match(loginForm, /type="email"/);
+    assert.match(loginForm, /type="password"/);
+    assert.match(loginForm, /AuthSubmitButton/);
     assert.match(loginPage, /Research-use disclaimer/);
     assert.match(loginPage, /Terms placeholder/);
     assert.match(loginPage, /Privacy placeholder/);
-    assert.match(loginPage, /disabled/);
     assert.match(read("src/app/terms-placeholder/page.tsx"), /PLACEHOLDER_V0_1_TERMS/);
     assert.match(read("src/app/privacy-placeholder/page.tsx"), /PLACEHOLDER_V0_1_PRIVACY/);
   });
 
-  it("login page has no real credential submission path", () => {
-    const loginPage = read("src/app/login/page.tsx");
+  it("auth forms avoid client-side credential storage or fetch calls", () => {
+    const source = [
+      read("src/components/auth/login-form.tsx"),
+      read("src/components/auth/signup-form.tsx"),
+      read("src/components/auth/forgot-password-form.tsx"),
+      read("src/components/auth/reset-password-form.tsx"),
+      read("src/components/auth/auth-submit-button.tsx"),
+    ].join("\n");
 
-    assert.doesNotMatch(loginPage, /\baction=/);
-    assert.doesNotMatch(loginPage, /type="submit"/);
-    assert.doesNotMatch(loginPage, /\bfetch\s*\(/);
-    assert.doesNotMatch(loginPage, /localStorage|sessionStorage|document\.cookie/);
+    assert.match(source, /\baction=\{formAction\}/);
+    assert.match(source, /type="submit"/);
+    assert.doesNotMatch(source, /\bfetch\s*\(/);
+    assert.doesNotMatch(source, /localStorage|sessionStorage|document\.cookie/);
   });
 
-  it("onboarding page renders the V0.1 placeholder checklist and cards", () => {
+  it("onboarding page renders the authenticated V0.2 setup form and status", () => {
     const onboardingPage = read("src/app/onboarding/page.tsx");
+    const onboardingForm = read("src/components/onboarding/onboarding-form.tsx");
+    const source = `${onboardingPage}\n${onboardingForm}`;
     const expected = [
-      "Confirm research-use boundary",
-      "Create first project",
-      "Run first discovery workflow",
-      "Review result bundle",
-      "Export/save candidates",
-      "Mock organization",
-      "Usage-limit preview",
-      "Support contact",
-      "Release V0.2",
-      "PLACEHOLDER_V0_1_ONBOARDING",
+      "requireUser",
+      "OnboardingForm",
+      "Current account status",
+      "Authenticated user",
+      "researchUseAcknowledged",
+      "Research-use boundary",
+      "Finish onboarding",
+      "product_profiles",
+      "product_memberships",
+      "product_organizations",
     ];
 
     for (const text of expected) {
-      assert.match(onboardingPage, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      assert.match(source, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+
+    for (const field of ["researchUseAcknowledged", "displayName", "organizationName", "useCase"]) {
+      assert.match(onboardingForm, new RegExp(`name="${field}"`));
     }
   });
 
-  it("onboarding page does not store user data or call a backend", () => {
+  it("onboarding avoids patient and payment collection", () => {
     const onboardingPage = read("src/app/onboarding/page.tsx");
+    const onboardingForm = read("src/components/onboarding/onboarding-form.tsx");
+    const source = `${onboardingPage}\n${onboardingForm}`;
 
-    assert.doesNotMatch(onboardingPage, /\bfetch\s*\(/);
-    assert.doesNotMatch(onboardingPage, /localStorage|sessionStorage|document\.cookie/);
+    assert.match(source, /Do not enter\s+patient-specific data/);
+    assert.match(source, /protected health information/);
+    assert.match(source, /payment (details|information)/);
+    assert.doesNotMatch(source, /medical history|diagnosis|date of birth|insurance|credit card/i);
+    assert.doesNotMatch(source, /\bfetch\s*\(/);
+    assert.doesNotMatch(source, /localStorage|sessionStorage|document\.cookie/);
   });
 });

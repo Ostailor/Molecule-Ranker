@@ -3,7 +3,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { featureFlags } from "@/lib/feature-flags";
+import { productFeatureFlags } from "@/lib/product/feature-flags";
 import { candidates, generatedHypotheses, projects, runs } from "@/lib/mock-data";
 
 type GeneratedPageProps = {
@@ -16,7 +16,7 @@ export default async function GeneratedPage({ params, searchParams }: GeneratedP
   const query = await searchParams;
   const project = projects.find((item) => item.id === projectId);
   const run = runs.find((item) => item.id === runId && item.projectId === projectId);
-  const featureEnabled = featureFlags.generationPreview && query?.state !== "disabled";
+  const featureEnabled = productFeatureFlags.generatedHypothesesViewer && query?.state !== "disabled";
   const visibleHypotheses = query?.state === "empty" ? [] : generatedHypotheses;
 
   if (!project || !run) {

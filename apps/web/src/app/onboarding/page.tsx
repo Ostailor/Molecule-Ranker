@@ -1,99 +1,121 @@
-import { Mail, Gauge, Building2 } from "lucide-react";
+import { CheckCircle2, UserRound, Building2, ShieldCheck } from "lucide-react";
+
+import { OnboardingForm } from "@/components/onboarding/onboarding-form";
 import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader } from "@/components/layout/page-header";
-import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { quickLinks } from "@/lib/routes";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { requireUser } from "@/lib/supabase/auth";
+import { createClient } from "@/lib/supabase/server";
+import type { Membership, Organization, Profile } from "@/lib/supabase/types";
 
-const onboardingChecklist = [
-  "Confirm research-use boundary",
-  "Create first project",
-  "Run first discovery workflow",
-  "Review result bundle",
-  "Export/save candidates",
-];
+function stringMetadataValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
 
-export default function OnboardingPage() {
+export default async function OnboardingPage() {
+  const user = await requireUser("/login?next=/onboarding");
+  const supabase = await createClient();
+  const profilePromise = supabase.from("product_profiles").select("*").eq("id", user.id).maybeSingle();
+  const membershipPromise = supabase
+    .from("product_memberships")
+    .select("organization_id, role, status")
+    .eq("user_id", user.id)
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+  const [profileResult, membershipResult] = await Promise.all([profilePromise, membershipPromise]);
+  const profile = profileResult.data as Profile | null;
+  const membership = membershipResult.data as Pick<Membership, "organization_id" | "role" | "status"> | null;
+  const { data: organization } = membership?.organization_id
+    ? await supabase.from("product_organizations").select("id, name, slug, status").eq("id", membership.organization_id).maybeSingle()
+    : { data: null };
+  const currentOrganization = organization as Pick<Organization, "id" | "name" | "slug" | "status"> | null;
+  const metadataDisplayName = stringMetadataValue(user.user_metadata?.display_name);
+  const defaultDisplayName = profile?.display_name ?? metadataDisplayName ?? user.email ?? "";
+  const researchUseAcknowledged = Boolean(profile?.research_use_acknowledged_at);
+  const onboardingComplete = Boolean(profile?.onboarding_completed);
+
   return (
-    <AppShell>
+    <AppShell userRole={membership?.role}>
       <PageHeader
         title="Onboarding"
-        description="Placeholder setup flow for V0.1 pilot review. This page does not store user data or call a backend."
-        actions={<Button href={quickLinks.newProject}>Create first project</Button>}
+        description="Confirm the pilot workspace boundary, profile, and organization before using the product dashboard."
       />
-      {/* PLACEHOLDER_V0_1_ONBOARDING: remove this mock setup surface when Release V0.2 workspace onboarding ships. */}
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+
+      <div className="grid gap-6 xl:grid-cols-[1fr_0.9fr]">
         <Card>
-          <CardHeader title="Release V0.2 readiness checklist" eyebrow="Placeholder" />
+          <CardHeader title="Finish onboarding" eyebrow="Release V0.2" />
           <CardBody>
-            <ol className="space-y-3">
-              {onboardingChecklist.map((item, index) => (
-                <li key={item} className="flex items-start gap-3 rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-product bg-teal-450/10 text-xs font-semibold text-teal-700">
-                    {index + 1}
-                  </span>
-                  <span className="text-sm font-semibold text-ink-950">{item}</span>
-                </li>
-              ))}
-            </ol>
+            <OnboardingForm defaultDisplayName={defaultDisplayName} organizationName={currentOrganization?.name ?? undefined} />
           </CardBody>
         </Card>
 
         <div className="space-y-6">
           <Card>
-            <CardHeader title="Mock organization" eyebrow="Placeholder card" />
+            <CardHeader title="Current account status" eyebrow="Authenticated user" />
             <CardBody>
-              <div className="flex items-start gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-product bg-teal-450/10 text-teal-700">
-                  <Building2 className="h-5 w-5" aria-hidden="true" />
-                </span>
-                <div>
-                  <p className="text-sm font-semibold text-ink-950">Demo Research Organization</p>
-                  <p className="mt-1 text-sm leading-6 text-ink-600">
-                    Static placeholder for pilot walkthroughs. No organization data is saved.
-                  </p>
+              <div className="space-y-3">
+                <div className="flex items-start justify-between gap-3 rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+                  <div className="flex items-start gap-3">
+                    <UserRound className="mt-0.5 h-4 w-4 text-teal-700" aria-hidden="true" />
+                    <div>
+                      <p className="text-sm font-semibold text-ink-950">Profile</p>
+                      <p className="mt-1 text-sm leading-6 text-ink-600">{defaultDisplayName || user.email}</p>
+                    </div>
+                  </div>
+                  <StatusBadge tone={profile ? "green" : "amber"}>{profile ? "Found" : "Missing"}</StatusBadge>
+                </div>
+
+                <div className="flex items-start justify-between gap-3 rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+                  <div className="flex items-start gap-3">
+                    <Building2 className="mt-0.5 h-4 w-4 text-teal-700" aria-hidden="true" />
+                    <div>
+                      <p className="text-sm font-semibold text-ink-950">Organization</p>
+                      <p className="mt-1 text-sm leading-6 text-ink-600">{currentOrganization?.name ?? "Create one to continue"}</p>
+                    </div>
+                  </div>
+                  <StatusBadge tone={currentOrganization ? "green" : "amber"}>{currentOrganization ? "Found" : "Needed"}</StatusBadge>
+                </div>
+
+                <div className="flex items-start justify-between gap-3 rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 text-teal-700" aria-hidden="true" />
+                    <div>
+                      <p className="text-sm font-semibold text-ink-950">Membership</p>
+                      <p className="mt-1 text-sm leading-6 text-ink-600">
+                        {membership ? `${membership.role} membership is active` : "An owner membership will be created if needed"}
+                      </p>
+                    </div>
+                  </div>
+                  <StatusBadge tone={membership ? "green" : "amber"}>{membership ? "Active" : "Needed"}</StatusBadge>
+                </div>
+
+                <div className="flex items-start justify-between gap-3 rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+                  <div className="flex items-start gap-3">
+                    <ShieldCheck className="mt-0.5 h-4 w-4 text-teal-700" aria-hidden="true" />
+                    <div>
+                      <p className="text-sm font-semibold text-ink-950">Research-use boundary</p>
+                      <p className="mt-1 text-sm leading-6 text-ink-600">
+                        {researchUseAcknowledged ? "Previously acknowledged" : "Acknowledgement required before continuing"}
+                      </p>
+                    </div>
+                  </div>
+                  <StatusBadge tone={researchUseAcknowledged ? "green" : "amber"}>
+                    {researchUseAcknowledged ? "Acknowledged" : "Required"}
+                  </StatusBadge>
                 </div>
               </div>
             </CardBody>
           </Card>
 
           <Card>
-            <CardHeader title="Usage-limit preview" eyebrow="Mock limits" />
+            <CardHeader title="Safety boundary" eyebrow={onboardingComplete ? "Complete" : "Required"} />
             <CardBody>
-              <div className="flex items-start gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-product bg-teal-450/10 text-teal-700">
-                  <Gauge className="h-5 w-5" aria-hidden="true" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="font-semibold text-ink-950">Discovery runs</span>
-                    <span className="text-ink-600">3 of 10 previewed</span>
-                  </div>
-                  <div className="mt-3 h-2 rounded-full bg-slatewash-100">
-                    <div className="h-2 w-[30%] rounded-full bg-teal-450" />
-                  </div>
-                  <p className="mt-3 text-sm leading-6 text-ink-600">
-                    Limits are illustrative only. No usage counter is stored in V0.1.
-                  </p>
-                </div>
-              </div>
-            </CardBody>
-          </Card>
-
-          <Card>
-            <CardHeader title="Support contact" eyebrow="Pilot support" />
-            <CardBody>
-              <div className="flex items-start gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-product bg-teal-450/10 text-teal-700">
-                  <Mail className="h-5 w-5" aria-hidden="true" />
-                </span>
-                <div>
-                  <p className="text-sm font-semibold text-ink-950">Questions or access changes</p>
-                  <p className="mt-1 text-sm leading-6 text-ink-600">
-                    Use the Feedback page for pilot notes. This placeholder does not send email or create tickets.
-                  </p>
-                </div>
-              </div>
+              <p className="text-sm leading-6 text-ink-700">
+                MolCreate is limited to research-planning artifacts and hypotheses. Do not enter patient-specific data,
+                protected health information, payment information, treatment requests, synthesis plans, or wet-lab execution instructions.
+              </p>
             </CardBody>
           </Card>
         </div>

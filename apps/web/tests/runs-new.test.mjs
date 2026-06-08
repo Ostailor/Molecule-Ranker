@@ -44,13 +44,15 @@ describe("new discovery run page", () => {
 
   it("respects the mock feature flag for generated hypotheses", () => {
     const form = read("src/components/runs/start-discovery-run-form.tsx");
-    const flags = read("src/lib/feature-flags.ts");
+    const flags = read("src/lib/product/feature-flags.ts");
 
-    assert.match(flags, /generationPreview: true/);
-    assert.match(form, /featureFlags\.generationPreview \?/);
+    assert.match(flags, /generatedHypothesesViewer: true/);
+    assert.match(form, /productFeatureFlags\.generatedHypothesesViewer \?/);
+    assert.match(form, /productFeatureFlags\.discoveryRunsPlaceholder/);
+    assert.match(form, /productFeatureFlags\.exportsPlaceholder/);
     assert.match(form, /Include generated hypotheses/);
     assert.match(form, /Generated hypotheses are hidden by the current mock feature flag/);
-    assert.match(form, /generatedCount = includeGenerated && featureFlags\.generationPreview \? 3 : 0/);
+    assert.match(form, /generatedCount = includeGenerated && productFeatureFlags\.generatedHypothesesViewer \? 3 : 0/);
   });
 
   it("creates only local mock state and links to the mock run page", () => {

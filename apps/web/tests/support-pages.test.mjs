@@ -10,21 +10,48 @@ function read(relativePath) {
 }
 
 describe("support and admin pages", () => {
-  it("usage page renders plan, usage, storage, exports, and billing placeholders", () => {
+  it("usage page renders real organization usage and later-release placeholders", () => {
     const page = read("src/app/usage/page.tsx");
 
     for (const text of [
-      "Plan placeholder",
-      "Projects used",
-      "Runs used",
-      "Generated hypotheses usage",
-      "Exports usage",
-      "Storage usage",
-      "Billing placeholder",
+      "requireOrganizationMember",
+      "getUsageSummaryForOrg",
+      "getPlanUsageLimits",
+      "productUsageActionLabels.create_project",
+      "productUsageActionLabels.feedback_create",
+      "Later release placeholders",
       "Release V0.5",
+      "No payment provider connected",
+      "does not enforce paid subscriptions",
     ]) {
       assert.match(page, new RegExp(text));
     }
+
+    assert.doesNotMatch(page, /mock-data|resultBundles|usageSummary|PLACEHOLDER_V0_1_USAGE/);
+  });
+
+  it("usage page displays configured plan limits from product usage config", () => {
+    const page = read("src/app/usage/page.tsx");
+    const usage = read("src/lib/product/usage.ts");
+
+    for (const text of [
+      "free_internal",
+      "pilot",
+      "trial",
+      "create_project",
+      "feedback_create",
+      "onboarding_complete",
+      "run_discovery",
+      "generate_hypotheses",
+      "export_result",
+      "codex_task",
+      "Release V0.5",
+    ]) {
+      assert.match(`${page}\n${usage}`, new RegExp(text));
+    }
+
+    assert.match(page, /formatLimit\(planLimits\.create_project\)/);
+    assert.match(page, /formatLimit\(planLimits\.feedback_create\)/);
   });
 
   it("account page renders profile, organization, acknowledgement, and legal links", () => {
@@ -60,19 +87,36 @@ describe("support and admin pages", () => {
     assert.doesNotMatch(form, /localStorage|sessionStorage|document\.cookie/);
   });
 
-  it("admin page is clearly placeholder and admin-only", () => {
+  it("admin page uses owner/admin auth and org-scoped data", () => {
     const page = read("src/app/admin/page.tsx");
 
     for (const text of [
-      "Admin-only placeholder",
-      "not available to normal users",
-      "Pilot users summary mock",
-      "Projects/runs mock",
-      "Feature flags mock",
-      "Support status mock",
-      "PLACEHOLDER_V0_1_ADMIN",
+      "requireAdminRole",
+      "context.organization.id",
+      "product_memberships",
+      "product_profiles",
+      "product_projects",
+      "product_usage_events",
+      "product_feedback",
+      "Members list",
+      "Workspace status",
+      "Feature flags",
     ]) {
       assert.match(page, new RegExp(text));
     }
+
+    assert.match(page, /\.eq\("organization_id", organizationId\)/);
+    assert.doesNotMatch(page, /Pilot users summary mock|Projects\/runs mock|PLACEHOLDER_V0_1_ADMIN/);
+    assert.doesNotMatch(page, /SUPABASE_SERVICE_ROLE_KEY|service_role|engine|raw internal/i);
+  });
+
+  it("admin page keeps later-release actions disabled", () => {
+    const page = read("src/app/admin/page.tsx");
+
+    for (const text of ["Invite user", "Manage roles", "Billing", "Disabled", "V0.5"]) {
+      assert.match(page, new RegExp(text));
+    }
+
+    assert.match(page, /Role changes are intentionally disabled in V0\.2/);
   });
 });

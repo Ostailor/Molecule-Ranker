@@ -5,7 +5,7 @@ import { ArrowRight, CheckCircle2, FileArchive, FlaskConical, ListChecks, Shield
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { ResearchUseBanner } from "@/components/disclaimers/research-use-banner";
-import { featureFlags } from "@/lib/feature-flags";
+import { productFeatureFlags } from "@/lib/product/feature-flags";
 
 type StartDiscoveryRunFormProps = {
   projectName: string;
@@ -29,15 +29,32 @@ export function StartDiscoveryRunForm({
   diseaseOrArea,
   runHref,
 }: StartDiscoveryRunFormProps) {
-  const [includeGenerated, setIncludeGenerated] = useState<boolean>(featureFlags.generationPreview);
+  const [includeGenerated, setIncludeGenerated] = useState<boolean>(productFeatureFlags.generatedHypothesesViewer);
   const [acknowledged, setAcknowledged] = useState(false);
   const [mockStarted, setMockStarted] = useState(false);
 
-  const generatedCount = includeGenerated && featureFlags.generationPreview ? 3 : 0;
+  const generatedCount = includeGenerated && productFeatureFlags.generatedHypothesesViewer ? 3 : 0;
   const taskUsageLabel = useMemo(() => {
-    if (includeGenerated && featureFlags.generationPreview) return "Standard preview estimate";
+    if (includeGenerated && productFeatureFlags.generatedHypothesesViewer) return "Standard preview estimate";
     return "Lower preview estimate";
   }, [includeGenerated]);
+
+  if (!productFeatureFlags.discoveryRunsPlaceholder) {
+    return (
+      <div className="grid gap-6 xl:grid-cols-[1fr_0.72fr]">
+        <Card>
+          <CardHeader title="Discovery workflow setup" eyebrow="Feature disabled" />
+          <CardBody>
+            <p className="text-sm leading-6 text-ink-600">
+              Discovery run placeholders are hidden by the current product feature flag. No workflow execution is
+              available in Release V0.2.
+            </p>
+          </CardBody>
+        </Card>
+        <ResearchUseBanner />
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_0.72fr]">
@@ -100,7 +117,7 @@ export function StartDiscoveryRunForm({
             </fieldset>
 
             <div className="grid gap-3 rounded-product border border-slatewash-200 p-3">
-              {featureFlags.generationPreview ? (
+              {productFeatureFlags.generatedHypothesesViewer ? (
                 <label className="flex items-start gap-3">
                   <input
                     type="checkbox"
@@ -122,20 +139,26 @@ export function StartDiscoveryRunForm({
                 </p>
               )}
 
-              <label className="flex items-start gap-3">
-                <input
-                  type="checkbox"
-                  name="export-result-bundle"
-                  defaultChecked
-                  className="mt-1 rounded border-slatewash-300 text-teal-550 focus:ring-teal-550"
-                />
-                <span>
-                  <span className="block text-sm font-semibold text-ink-950">Prepare result bundle export</span>
-                  <span className="mt-1 block text-sm leading-6 text-ink-600">
-                    Creates a mock export-ready bundle link after the placeholder run state is created.
+              {productFeatureFlags.exportsPlaceholder ? (
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    name="export-result-bundle"
+                    defaultChecked
+                    className="mt-1 rounded border-slatewash-300 text-teal-550 focus:ring-teal-550"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-ink-950">Prepare result bundle export</span>
+                    <span className="mt-1 block text-sm leading-6 text-ink-600">
+                      Creates a mock export-ready bundle link after the placeholder run state is created.
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+              ) : (
+                <p className="text-sm leading-6 text-ink-600">
+                  Result bundle export placeholders are hidden by the current product feature flag.
+                </p>
+              )}
             </div>
 
             <label className="flex items-start gap-3 rounded-product border border-amber-200 bg-amber-50 p-3">
