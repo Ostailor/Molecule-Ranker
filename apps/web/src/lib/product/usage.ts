@@ -5,9 +5,9 @@ import type { Json, UsageEvent } from "@/lib/supabase/types";
 
 export const v02UsageActions = ["create_project", "feedback_create", "login", "onboarding_complete"] as const;
 
-export const v03PlaceholderUsageActions = ["run_discovery", "generate_hypotheses", "export_result", "codex_task"] as const;
+export const v03UsageActions = ["run_discovery", "generated_hypotheses", "export_result", "codex_task"] as const;
 
-export const productUsageActions = [...v02UsageActions, ...v03PlaceholderUsageActions] as const;
+export const productUsageActions = [...v02UsageActions, ...v03UsageActions] as const;
 
 export type ProductUsageAction = (typeof productUsageActions)[number];
 
@@ -62,7 +62,7 @@ export const productUsageActionLabels: Record<ProductUsageAction, string> = {
   login: "Logins",
   onboarding_complete: "Onboarding completions",
   run_discovery: "Discovery runs",
-  generate_hypotheses: "Generated hypotheses",
+  generated_hypotheses: "Generated hypotheses",
   export_result: "Result exports",
   codex_task: "Codex tasks",
 };
@@ -73,8 +73,8 @@ export const defaultProductUsagePlanLimits: ProductUsagePlanConfig = {
     feedback_create: HIGH_INTERNAL_LIMIT,
     login: HIGH_INTERNAL_LIMIT,
     onboarding_complete: HIGH_INTERNAL_LIMIT,
-    run_discovery: 0,
-    generate_hypotheses: 0,
+    run_discovery: HIGH_INTERNAL_LIMIT,
+    generated_hypotheses: 0,
     export_result: 0,
     codex_task: 0,
   },
@@ -83,8 +83,8 @@ export const defaultProductUsagePlanLimits: ProductUsagePlanConfig = {
     feedback_create: 100,
     login: 500,
     onboarding_complete: 1,
-    run_discovery: 0,
-    generate_hypotheses: 0,
+    run_discovery: 50,
+    generated_hypotheses: 0,
     export_result: 0,
     codex_task: 0,
   },
@@ -93,8 +93,8 @@ export const defaultProductUsagePlanLimits: ProductUsagePlanConfig = {
     feedback_create: 25,
     login: 100,
     onboarding_complete: 1,
-    run_discovery: 0,
-    generate_hypotheses: 0,
+    run_discovery: 3,
+    generated_hypotheses: 0,
     export_result: 0,
     codex_task: 0,
   },
@@ -128,7 +128,7 @@ function emptyActionSummary(action: ProductUsageAction, limit: number | null): P
     eventCount: 0,
     limit,
     remaining: limit,
-    placeholder: v03PlaceholderUsageActions.includes(action as (typeof v03PlaceholderUsageActions)[number]),
+    placeholder: action !== "run_discovery" && v03UsageActions.includes(action as (typeof v03UsageActions)[number]),
   };
 }
 
@@ -223,7 +223,7 @@ export async function checkUsageAllowed(
     const label = productUsageActionLabels[action];
     const message =
       limit === 0
-        ? `${label} is not available in Release V0.2 for the ${summary.plan} plan.`
+        ? `${label} is not available in Release V0.3 for the ${summary.plan} plan.`
         : `${label} exceeds the ${summary.plan} plan limit of ${limit} for the current period.`;
 
     throw productApiError("PLAN_LIMIT_EXCEEDED", message);

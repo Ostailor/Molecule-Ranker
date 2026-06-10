@@ -1,43 +1,111 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ArrowRight, CheckCircle2, FileArchive, FlaskConical, ListChecks, ShieldAlert } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useMemo, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+import { CheckCircle2, FileArchive, FlaskConical, ListChecks, ShieldAlert } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { ResearchUseBanner } from "@/components/disclaimers/research-use-banner";
 import { productFeatureFlags } from "@/lib/product/feature-flags";
 
 type StartDiscoveryRunFormProps = {
-  projectName: string;
+  projectId: string;
   projectObjective: string;
   diseaseOrArea: string;
-  runHref: string;
+  targetFocus?: string | null;
+  usageRemaining?: number | null;
+  usageLimit?: number | null;
+  usageBlockedMessage?: string | null;
+  allowReadOnlyLive?: boolean;
 };
 
 const requiredDisclaimers = [
-  "Generated molecules are computational hypotheses.",
-  "Result bundle is not clinical validation.",
+  "No patient-specific info.",
   "No medical advice.",
-  "No lab protocols.",
+  "Not a lab protocol.",
+  "Generated hypotheses are computational only.",
+  "Result bundle is not clinical validation.",
   "No synthesis instructions.",
   "No dosing.",
+  "Antibody generation disabled.",
+  "External writes disabled.",
+  "Write-approved mode disabled.",
 ];
 
+const maxGeneratedHypothesisLimit = 3;
+
 export function StartDiscoveryRunForm({
-  projectName,
+  projectId,
   projectObjective,
   diseaseOrArea,
-  runHref,
+  targetFocus,
+  usageRemaining,
+  usageLimit,
+  usageBlockedMessage,
+  allowReadOnlyLive = false,
 }: StartDiscoveryRunFormProps) {
-  const [includeGenerated, setIncludeGenerated] = useState<boolean>(productFeatureFlags.generatedHypothesesViewer);
+  const router = useRouter();
+  const [includeGenerated, setIncludeGenerated] = useState(false);
+  const [maxGeneratedHypotheses, setMaxGeneratedHypotheses] = useState(maxGeneratedHypothesisLimit);
   const [acknowledged, setAcknowledged] = useState(false);
-  const [mockStarted, setMockStarted] = useState(false);
+  const [status, setStatus] = useState<"idle" | "submitting" | "redirecting" | "error">("idle");
+  const [message, setMessage] = useState<string | null>(usageBlockedMessage ?? null);
+  const usageBlocked = Boolean(usageBlockedMessage);
 
-  const generatedCount = includeGenerated && productFeatureFlags.generatedHypothesesViewer ? 3 : 0;
+  const generatedCount = includeGenerated && productFeatureFlags.generatedHypothesesViewer ? maxGeneratedHypotheses : 0;
   const taskUsageLabel = useMemo(() => {
     if (includeGenerated && productFeatureFlags.generatedHypothesesViewer) return "Standard preview estimate";
     return "Lower preview estimate";
   }, [includeGenerated]);
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!acknowledged) {
+      setStatus("error");
+      setMessage("Acknowledge the research-use boundary before starting a run.");
+      return;
+    }
+
+    if (usageBlocked) return;
+
+    const formData = new FormData(event.currentTarget);
+    setStatus("submitting");
+    setMessage(null);
+
+    try {
+      const response = await fetch(`/api/product/projects/${projectId}/runs`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          disease_or_goal: String(formData.get("disease_or_goal") ?? ""),
+          target_focus: String(formData.get("target_focus") ?? ""),
+          mode: String(formData.get("workflow_mode") ?? "dry_run"),
+          include_generated_hypotheses:
+            productFeatureFlags.generatedHypothesesViewer && formData.get("include_generated_hypotheses") === "on",
+          max_generated_hypotheses: Number(formData.get("max_generated_hypotheses") ?? maxGeneratedHypothesisLimit),
+          prepare_result_bundle: true,
+          acknowledgement: acknowledged,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+
+      if (!response.ok || !payload?.ok) {
+        setStatus("error");
+        setMessage(payload?.error?.message ?? "Could not start the discovery run.");
+        return;
+      }
+
+      const runId = payload.data.run.id;
+      setStatus("redirecting");
+      setMessage("Discovery run created. Redirecting to run status.");
+      router.push(`/projects/${projectId}/runs/${runId}`);
+    } catch {
+      setStatus("error");
+      setMessage("Could not start the discovery run.");
+    }
+  }
 
   if (!productFeatureFlags.discoveryRunsPlaceholder) {
     return (
@@ -46,8 +114,7 @@ export function StartDiscoveryRunForm({
           <CardHeader title="Discovery workflow setup" eyebrow="Feature disabled" />
           <CardBody>
             <p className="text-sm leading-6 text-ink-600">
-              Discovery run placeholders are hidden by the current product feature flag. No workflow execution is
-              available in Release V0.2.
+              Discovery runs are hidden by the current product feature flag. No workflow execution is available.
             </p>
           </CardBody>
         </Card>
@@ -59,13 +126,13 @@ export function StartDiscoveryRunForm({
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_0.72fr]">
       <Card>
-        <CardHeader title="Discovery workflow setup" eyebrow="PLACEHOLDER_V0_1_RUN_START" />
+        <CardHeader title="Discovery workflow setup" eyebrow="V0.3 bounded runner" />
         <CardBody>
-          <form className="grid gap-5">
+          <form className="grid gap-5" onSubmit={onSubmit}>
             <label className="block">
-              <span className="text-sm font-semibold text-ink-800">Disease / project objective</span>
+              <span className="text-sm font-semibold text-ink-800">Disease or goal</span>
               <textarea
-                name="disease-project-objective"
+                name="disease_or_goal"
                 rows={4}
                 className="mt-2 w-full rounded-product border-slatewash-200 text-sm leading-6 focus:border-teal-550 focus:ring-teal-550"
                 defaultValue={`${diseaseOrArea}: ${projectObjective}`}
@@ -75,9 +142,9 @@ export function StartDiscoveryRunForm({
             <label className="block">
               <span className="text-sm font-semibold text-ink-800">Optional target focus</span>
               <input
-                name="target-focus"
+                name="target_focus"
                 className="mt-2 w-full rounded-product border-slatewash-200 text-sm focus:border-teal-550 focus:ring-teal-550"
-                defaultValue="ExampleTargetA"
+                defaultValue={targetFocus ?? ""}
               />
             </label>
 
@@ -86,34 +153,48 @@ export function StartDiscoveryRunForm({
               <label className="flex items-start gap-3 rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
                 <input
                   type="radio"
-                  name="workflow-mode"
-                  value="dry-run-preview"
+                  name="workflow_mode"
+                  value="dry_run"
                   defaultChecked
                   className="mt-1 border-slatewash-300 text-teal-550 focus:ring-teal-550"
                 />
                 <span>
                   <span className="block text-sm font-semibold text-ink-950">Dry run preview</span>
                   <span className="mt-1 block text-sm leading-6 text-ink-600">
-                    Review configuration, usage estimate, and result bundle shape before any live workflow exists.
+                    Execute the bounded product-safe wrapper without external writes or live integrations.
                   </span>
                 </span>
               </label>
               <label className="flex items-start gap-3 rounded-product border border-slatewash-200 p-3">
                 <input
                   type="radio"
-                  name="workflow-mode"
-                  value="read-only-evidence-workflow-placeholder"
+                  name="workflow_mode"
+                  value="mocked"
                   className="mt-1 border-slatewash-300 text-teal-550 focus:ring-teal-550"
                 />
                 <span>
-                  <span className="block text-sm font-semibold text-ink-950">
-                    Read-only evidence workflow placeholder
-                  </span>
+                  <span className="block text-sm font-semibold text-ink-950">Mocked discovery workflow</span>
                   <span className="mt-1 block text-sm leading-6 text-ink-600">
-                    Reserved for a later evidence review workflow. No backend execution is triggered in V0.1.
+                    Create deterministic product-safe status and result artifacts for local review.
                   </span>
                 </span>
               </label>
+              {allowReadOnlyLive ? (
+                <label className="flex items-start gap-3 rounded-product border border-slatewash-200 p-3">
+                  <input
+                    type="radio"
+                    name="workflow_mode"
+                    value="read_only_live"
+                    className="mt-1 border-slatewash-300 text-teal-550 focus:ring-teal-550"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-ink-950">Read-only live workflow</span>
+                    <span className="mt-1 block text-sm leading-6 text-ink-600">
+                      Uses only the reviewed read-only engine path with external writes disabled.
+                    </span>
+                  </span>
+                </label>
+              ) : null}
             </fieldset>
 
             <div className="grid gap-3 rounded-product border border-slatewash-200 p-3">
@@ -121,7 +202,7 @@ export function StartDiscoveryRunForm({
                 <label className="flex items-start gap-3">
                   <input
                     type="checkbox"
-                    name="include-generated-hypotheses"
+                    name="include_generated_hypotheses"
                     checked={includeGenerated}
                     onChange={(event) => setIncludeGenerated(event.target.checked)}
                     className="mt-1 rounded border-slatewash-300 text-teal-550 focus:ring-teal-550"
@@ -129,7 +210,7 @@ export function StartDiscoveryRunForm({
                   <span>
                     <span className="block text-sm font-semibold text-ink-950">Include generated hypotheses</span>
                     <span className="mt-1 block text-sm leading-6 text-ink-600">
-                      Adds a clearly labeled generated hypotheses section to the mock result bundle.
+                      Adds a clearly labeled generated hypotheses summary to the product-safe result bundle.
                     </span>
                   </span>
                 </label>
@@ -139,18 +220,39 @@ export function StartDiscoveryRunForm({
                 </p>
               )}
 
+              <label className="block">
+                <span className="text-sm font-semibold text-ink-800">Max generated hypotheses</span>
+                <input
+                  type="number"
+                  name="max_generated_hypotheses"
+                  min={0}
+                  max={maxGeneratedHypothesisLimit}
+                  step={1}
+                  value={maxGeneratedHypotheses}
+                  disabled={!includeGenerated || !productFeatureFlags.generatedHypothesesViewer}
+                  onChange={(event) =>
+                    setMaxGeneratedHypotheses(
+                      Math.min(maxGeneratedHypothesisLimit, Math.max(0, Number.parseInt(event.target.value || "0", 10))),
+                    )
+                  }
+                  className="mt-2 w-32 rounded-product border-slatewash-200 text-sm focus:border-teal-550 focus:ring-teal-550 disabled:bg-slatewash-100 disabled:text-ink-500"
+                />
+              </label>
+
               {productFeatureFlags.exportsPlaceholder ? (
                 <label className="flex items-start gap-3">
                   <input
                     type="checkbox"
                     name="export-result-bundle"
-                    defaultChecked
+                    checked
+                    disabled
+                    readOnly
                     className="mt-1 rounded border-slatewash-300 text-teal-550 focus:ring-teal-550"
                   />
                   <span>
                     <span className="block text-sm font-semibold text-ink-950">Prepare result bundle export</span>
                     <span className="mt-1 block text-sm leading-6 text-ink-600">
-                      Creates a mock export-ready bundle link after the placeholder run state is created.
+                      Stores an inline product-safe result bundle artifact after the run completes.
                     </span>
                   </span>
                 </label>
@@ -180,24 +282,22 @@ export function StartDiscoveryRunForm({
 
             <div className="flex flex-wrap items-center gap-3">
               <button
-                type="button"
-                disabled={!acknowledged}
-                onClick={() => setMockStarted(true)}
+                type="submit"
+                disabled={!acknowledged || usageBlocked || status === "submitting"}
                 className="focus-ring inline-flex h-9 items-center justify-center gap-2 rounded-product border border-teal-550 bg-teal-550 px-3 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:border-slatewash-200 disabled:bg-slatewash-200 disabled:text-ink-500"
               >
                 <FlaskConical className="h-4 w-4" aria-hidden="true" />
-                <span>Start mock run</span>
+                <span>{status === "submitting" || status === "redirecting" ? "Starting run" : "Start discovery run"}</span>
               </button>
-              {mockStarted ? (
-                <Button href={runHref} icon={ArrowRight} variant="secondary">
-                  Open mock run
-                </Button>
-              ) : null}
             </div>
 
-            {mockStarted ? (
-              <div className="rounded-product border border-teal-450/40 bg-teal-450/10 p-3 text-sm leading-6 text-ink-700">
-                Mock run state created locally for {projectName}. No backend execution was started.
+            {message ? (
+              <div className={`rounded-product border p-3 text-sm leading-6 ${
+                status === "error" || usageBlocked
+                  ? "border-rose-200 bg-rose-50 text-ink-700"
+                  : "border-teal-450/40 bg-teal-450/10 text-ink-700"
+              }`}>
+                {message}
               </div>
             ) : null}
           </form>
@@ -205,7 +305,12 @@ export function StartDiscoveryRunForm({
       </Card>
 
       <div className="grid content-start gap-6">
-        <UsageEstimateCard generatedCount={generatedCount} taskUsageLabel={taskUsageLabel} />
+        <UsageEstimateCard
+          generatedCount={generatedCount}
+          taskUsageLabel={taskUsageLabel}
+          usageLimit={usageLimit}
+          usageRemaining={usageRemaining}
+        />
         <RunDisclaimers />
         <ResearchUseBanner />
       </div>
@@ -216,9 +321,13 @@ export function StartDiscoveryRunForm({
 function UsageEstimateCard({
   generatedCount,
   taskUsageLabel,
+  usageLimit,
+  usageRemaining,
 }: {
   generatedCount: number;
   taskUsageLabel: string;
+  usageLimit?: number | null;
+  usageRemaining?: number | null;
 }) {
   return (
     <Card>
@@ -228,6 +337,11 @@ function UsageEstimateCard({
           <EstimateRow icon={ListChecks} label="Discovery runs" value="1 discovery run" />
           <EstimateRow icon={CheckCircle2} label="Generated hypotheses" value={`${generatedCount} generated hypotheses`} />
           <EstimateRow icon={FileArchive} label="Estimated Codex task usage" value={taskUsageLabel} />
+          <EstimateRow
+            icon={ShieldAlert}
+            label="Run limit remaining"
+            value={usageLimit === null ? "Internal plan" : `${usageRemaining ?? 0} of ${usageLimit ?? 0}`}
+          />
         </div>
       </CardBody>
     </Card>

@@ -9,7 +9,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import Link from "next/link";
-import { candidates, resultBundles, runs } from "@/lib/mock-data";
+import { candidates } from "@/lib/mock-data";
 import { quickLinks } from "@/lib/routes";
 import { compactNumber, dateLabel, percent } from "@/lib/formatting";
 import { ResearchUseBanner } from "@/components/disclaimers/research-use-banner";
@@ -33,6 +33,18 @@ export type DashboardProject = {
   updatedAt: string;
 };
 
+export type DashboardRun = {
+  id: string;
+  projectId: string;
+  projectName: string;
+  diseaseOrGoal: string;
+  mode: string;
+  status: string;
+  createdAt: string;
+  completedAt: string | null;
+  hasResultBundle: boolean;
+};
+
 export type DashboardUsageSummary = {
   eventsThisMonth: number;
   totalQuantityThisMonth: number;
@@ -47,6 +59,7 @@ type DashboardOverviewProps = {
   role: ProductRole;
   plan: string;
   projects: DashboardProject[];
+  recentRuns: DashboardRun[];
   usage: DashboardUsageSummary;
 };
 
@@ -130,11 +143,17 @@ export function DashboardAccountStatusPage({ organizationName, status }: { organ
   );
 }
 
-function EmptyProjectsState({ displayName, organizationName, role, plan, usage }: Omit<DashboardOverviewProps, "projects" | "state">) {
+function EmptyProjectsState({
+  displayName,
+  organizationName,
+  role,
+  plan,
+  usage,
+}: Omit<DashboardOverviewProps, "projects" | "recentRuns" | "state">) {
   return (
     <div className="space-y-6" aria-label="Empty projects dashboard state">
       <WelcomeCard displayName={displayName} organizationName={organizationName} role={role} plan={plan} projectCount={0} />
-      <DashboardActions />
+      <DashboardActions projects={[]} />
       <Card>
         <CardHeader title="Projects" eyebrow="Empty state" />
         <CardBody className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
@@ -151,7 +170,7 @@ function EmptyProjectsState({ displayName, organizationName, role, plan, usage }
         </CardBody>
       </Card>
       <UsageSummary usage={usage} projectCount={0} />
-      <RecentDiscoveryRunsPlaceholder />
+      <RecentDiscoveryRuns recentRuns={[]} projects={[]} />
       <SavedCandidatesPlaceholder />
       <ResearchReminder />
       <FeedbackCta />
@@ -198,7 +217,9 @@ function WelcomeCard({
   );
 }
 
-function DashboardActions() {
+function DashboardActions({ projects }: { projects: DashboardProject[] }) {
+  const firstProject = projects[0];
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Link
@@ -216,20 +237,22 @@ function DashboardActions() {
         </div>
       </Link>
       {productFeatureFlags.discoveryRunsPlaceholder ? (
-        <div
-          className="rounded-product border border-slatewash-200 bg-slatewash-50 p-4"
-          aria-disabled="true"
+        <Link
+          href={firstProject ? `/projects/${firstProject.id}/runs/new` : quickLinks.newProject}
+          className="focus-ring group rounded-product border border-slatewash-200 bg-slatewash-50 p-4 transition hover:bg-white"
         >
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-ink-950">Start discovery run</p>
               <p className="mt-1 text-sm leading-6 text-ink-600">
-                Disabled until Release V0.3 connects the discovery workflow. No live workflow execution is started in V0.2.
+                {firstProject
+                  ? "Create a bounded mocked or dry-run discovery workflow from a project."
+                  : "Create a project before starting a bounded discovery workflow."}
               </p>
             </div>
-            <StatusBadge tone="gray">V0.3</StatusBadge>
+            <StatusBadge tone="teal">V0.3</StatusBadge>
           </div>
-        </div>
+        </Link>
       ) : null}
     </div>
   );
@@ -270,38 +293,65 @@ function ProjectsList({ projects }: { projects: DashboardProject[] }) {
   );
 }
 
-function RecentDiscoveryRunsPlaceholder() {
+function statusTone(status: string): "green" | "teal" | "amber" | "rose" | "gray" {
+  if (status === "succeeded") return "green";
+  if (status === "running" || status === "queued") return "teal";
+  if (status === "partially_succeeded") return "amber";
+  if (status === "failed") return "rose";
+  return "gray";
+}
+
+function statusLabel(status: string) {
+  return status.replace(/_/g, " ");
+}
+
+function RecentDiscoveryRuns({ recentRuns, projects }: { recentRuns: DashboardRun[]; projects: DashboardProject[] }) {
+  const firstProject = projects[0];
+
   return (
     <Card>
-      <CardHeader title="Recent discovery runs" eyebrow="Placeholder until V0.3" action={<StatusBadge tone="gray">Mock only</StatusBadge>} />
+      <CardHeader
+        title="Recent discovery runs"
+        eyebrow="Tenant-scoped runs"
+        action={
+          <Button href={firstProject ? `/projects/${firstProject.id}/runs/new` : quickLinks.newProject} variant="secondary" icon={FlaskConical}>
+            Start run
+          </Button>
+        }
+      />
       <CardBody>
-        <p className="mb-4 text-sm leading-6 text-ink-600">
-          Recent runs remain synthetic placeholders until Release V0.3 connects the discovery workflow. They are not
-          tenant data and do not indicate live engine execution.
-        </p>
-        <DataTable
-          columns={["Run", "Status", "Candidates", "Result bundle"]}
-          rows={runs.map((run) => {
-            const bundle = resultBundles.find((item) => item.runId === run.id);
-
-            return [
+        {recentRuns.length > 0 ? (
+          <DataTable
+            columns={["Run", "Project", "Status", "Created", "Result"]}
+            rows={recentRuns.map((run) => [
               <Link key={run.id} href={`/projects/${run.projectId}/runs/${run.id}`} className="font-semibold text-ink-950 hover:text-teal-700">
-                {run.name}
+                {run.diseaseOrGoal}
               </Link>,
-              <StatusBadge key={`${run.id}-status`} tone={run.status === "Complete" ? "green" : run.status === "Running" ? "teal" : "amber"}>
-                {run.status}
+              run.projectName,
+              <StatusBadge key={`${run.id}-status`} tone={statusTone(run.status)}>
+                {statusLabel(run.status)}
               </StatusBadge>,
-              run.candidateCount,
-              bundle ? (
+              dateLabel(run.createdAt),
+              run.hasResultBundle ? (
                 <Link key={`${run.id}-bundle`} href={`/projects/${run.projectId}/runs/${run.id}/result`} className="font-semibold text-teal-700 hover:text-teal-550">
-                  {bundle.status}
+                  Result bundle
                 </Link>
               ) : (
-                "Not generated"
+                "Pending"
               ),
-            ];
-          })}
-        />
+            ])}
+          />
+        ) : (
+          <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div>
+              <h2 className="text-lg font-semibold text-ink-950">No recent discovery runs</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-600">
+                Create a bounded mocked or dry-run discovery workflow from a project. Runs from other organizations stay hidden.
+              </p>
+            </div>
+            <StatusBadge tone="teal">Ready</StatusBadge>
+          </div>
+        )}
       </CardBody>
     </Card>
   );
@@ -370,6 +420,7 @@ export function DashboardOverview({
   role,
   plan,
   projects,
+  recentRuns,
   usage,
 }: DashboardOverviewProps) {
   if (state === "loading") return <DashboardLoadingSkeleton />;
@@ -389,11 +440,11 @@ export function DashboardOverview({
   return (
     <div className="space-y-6">
       <WelcomeCard displayName={displayName} organizationName={organizationName} role={role} plan={plan} projectCount={projects.length} />
-      <DashboardActions />
+      <DashboardActions projects={projects} />
       <UsageSummary usage={usage} projectCount={projects.length} />
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <ProjectsList projects={projects} />
-        <RecentDiscoveryRunsPlaceholder />
+        <RecentDiscoveryRuns recentRuns={recentRuns} projects={projects} />
       </div>
       <SavedCandidatesPlaceholder />
       <ResearchReminder />

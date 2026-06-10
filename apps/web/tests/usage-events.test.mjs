@@ -10,7 +10,7 @@ function read(relativePath) {
 }
 
 describe("product usage events", () => {
-  it("defines V0.2 usage actions and V0.3 placeholders in one web helper", () => {
+  it("defines V0.2 usage actions and V0.3 workflow actions in one web helper", () => {
     const usage = read("src/lib/product/usage.ts");
 
     assert.ok(existsSync(join(root, "src/lib/product/usage.ts")));
@@ -21,13 +21,14 @@ describe("product usage events", () => {
       "login",
       "onboarding_complete",
       "run_discovery",
-      "generate_hypotheses",
+      "generated_hypotheses",
       "export_result",
       "codex_task",
     ]) {
       assert.match(usage, new RegExp(`"${action}"`));
     }
 
+    assert.match(usage, /export const v03UsageActions/);
     assert.match(usage, /export async function recordUsageEvent/);
     assert.match(usage, /export async function getUsageSummaryForOrg/);
     assert.match(usage, /export async function checkUsageAllowed/);
@@ -35,9 +36,10 @@ describe("product usage events", () => {
     assert.doesNotMatch(usage, /SUPABASE_SERVICE_ROLE_KEY|service_role|serviceRole/);
   });
 
-  it("records project creation and feedback usage from authenticated org context", () => {
+  it("records project, run, and feedback usage from authenticated org context", () => {
     const projectAction = read("src/lib/supabase/project-actions.ts");
     const projectApi = read("src/app/api/product/projects/route.ts");
+    const runsApi = read("src/app/api/product/projects/[projectId]/runs/route.ts");
     const feedbackApi = read("src/app/api/product/feedback/route.ts");
 
     assert.match(projectAction, /checkUsageAllowed\("create_project", 1, \{ supabaseClient: supabase \}\)/);
@@ -46,6 +48,14 @@ describe("product usage events", () => {
     assert.match(projectApi, /recordUsageEvent\("create_project", 1, \{ project_id: data\.id \}/);
     assert.match(feedbackApi, /checkUsageAllowed\("feedback_create", 1, \{ context, supabaseClient: supabase \}\)/);
     assert.match(feedbackApi, /recordUsageEvent\("feedback_create", 1, \{ category, feedback_id: data\.id \}/);
+    assert.match(runsApi, /checkRunUsageLimits\(\{ context, supabase, options \}\)/);
+    assert.match(runsApi, /checkUsageAllowed\("run_discovery", 1, \{ context, supabaseClient: supabase \}\)/);
+    assert.match(runsApi, /checkUsageAllowed\("generated_hypotheses", generatedHypothesisCount, \{ context, supabaseClient: supabase \}\)/);
+    assert.match(runsApi, /checkUsageAllowed\("codex_task", 1, \{ context, supabaseClient: supabase \}\)/);
+    assert.match(runsApi, /recordRunUsageEvents\(\{ context, supabase, projectId, run, options \}\)/);
+    assert.match(runsApi, /recordUsageEvent\(\s*"run_discovery"/);
+    assert.match(runsApi, /recordUsageEvent\(\s*"generated_hypotheses"/);
+    assert.match(runsApi, /recordUsageEvent\(\s*"codex_task"/);
   });
 
   it("summarizes usage events by action for the current organization", () => {
@@ -68,6 +78,6 @@ describe("product usage events", () => {
     assert.match(usage, /getPlanUsageLimits\(context\.plan, options\.limits\)/);
     assert.match(usage, /projectedQuantity > limit/);
     assert.match(usage, /throw productApiError\("PLAN_LIMIT_EXCEEDED"/);
-    assert.match(usage, /Release V0\.2/);
+    assert.match(usage, /Release V0\.3/);
   });
 });

@@ -59,6 +59,49 @@ export type UsageEvent = {
   created_at: string;
 };
 
+export type ProductRunStatus = "queued" | "running" | "succeeded" | "failed" | "partially_succeeded" | "cancelled";
+export type ProductRunMode = "mocked" | "dry_run" | "read_only_live";
+export type ProductRunType = "discovery" | "dry_run_discovery" | "mocked_discovery";
+export type ProductRunArtifactStorageKind = "database" | "local_file" | "supabase_storage";
+
+export type ProductRun = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  created_by_user_id: string | null;
+  run_type: ProductRunType;
+  mode: ProductRunMode;
+  status: ProductRunStatus;
+  disease_or_goal: string;
+  target_focus: string | null;
+  options: Json;
+  progress: Json;
+  result_summary: Json;
+  error_summary: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProductRunArtifact = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  run_id: string;
+  artifact_type: string;
+  storage_kind: ProductRunArtifactStorageKind;
+  storage_path: string | null;
+  content_json: Json | null;
+  content_text: string | null;
+  sha256: string | null;
+  size_bytes: number | null;
+  public_to_user: boolean;
+  admin_only: boolean;
+  created_at: string;
+  metadata: Json;
+};
+
 export type ProductFeedback = {
   id: string;
   organization_id: string;
@@ -120,6 +163,70 @@ export type Database = {
           metadata?: Json;
         };
         Update: Partial<Omit<UsageEvent, "id">>;
+        Relationships: [];
+      };
+      product_runs: {
+        Row: ProductRun;
+        Insert: Omit<
+          ProductRun,
+          | "id"
+          | "created_at"
+          | "updated_at"
+          | "run_type"
+          | "status"
+          | "mode"
+          | "options"
+          | "progress"
+          | "result_summary"
+          | "error_summary"
+          | "started_at"
+          | "completed_at"
+        > & {
+          id?: string;
+          created_at?: string;
+          updated_at?: string;
+          run_type?: ProductRunType;
+          status?: ProductRunStatus;
+          mode?: ProductRunMode;
+          options?: Json;
+          progress?: Json;
+          result_summary?: Json;
+          error_summary?: string | null;
+          started_at?: string | null;
+          completed_at?: string | null;
+        };
+        Update: Partial<Omit<ProductRun, "id" | "organization_id" | "project_id" | "created_by_user_id">>;
+        Relationships: [];
+      };
+      product_run_artifacts: {
+        Row: ProductRunArtifact;
+        Insert: Omit<
+          ProductRunArtifact,
+          | "id"
+          | "created_at"
+          | "storage_kind"
+          | "storage_path"
+          | "content_json"
+          | "content_text"
+          | "sha256"
+          | "size_bytes"
+          | "public_to_user"
+          | "admin_only"
+          | "metadata"
+        > & {
+          id?: string;
+          created_at?: string;
+          storage_kind?: ProductRunArtifactStorageKind;
+          storage_path?: string | null;
+          content_json?: Json | null;
+          content_text?: string | null;
+          sha256?: string | null;
+          size_bytes?: number | null;
+          public_to_user?: boolean;
+          admin_only?: boolean;
+          metadata?: Json;
+        };
+        Update: Partial<Omit<ProductRunArtifact, "id" | "organization_id" | "project_id" | "run_id">>;
         Relationships: [];
       };
       product_feedback: {

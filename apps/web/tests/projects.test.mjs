@@ -53,7 +53,7 @@ describe("project pages", () => {
       ".eq(\"organization_id\", membership.organization_id)",
       "Project summary",
       "Recent runs",
-      "Start new discovery run",
+      "Start discovery run",
       "Result bundles",
     ]) {
       assert.match(page, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -61,6 +61,31 @@ describe("project pages", () => {
 
     assert.match(migration, /projects_select_for_members/);
     assert.match(migration, /public\.is_org_member\(organization_id\)/);
+  });
+
+  it("project detail shows project runs with status, timestamps, and result links", () => {
+    const page = read("src/app/projects/[projectId]/page.tsx");
+
+    assert.match(page, /\.from\("product_runs"\)/);
+    assert.match(page, /\.eq\("organization_id", membership\.organization_id\)/);
+    assert.match(page, /\.eq\("project_id", projectId\)/);
+    assert.match(page, /\.order\("created_at", \{ ascending: false \}\)/);
+    assert.match(page, /runStatusTone\(run\.status\)/);
+    assert.match(page, /Created: \{dateLabel\(run\.created_at\)\}/);
+    assert.match(page, /Completed: \{run\.completed_at \? dateLabel\(run\.completed_at\) : "Pending"\}/);
+    assert.match(page, /hasResultBundle\(run\)/);
+    assert.match(page, /\/projects\/\$\{projectId\}\/runs\/\$\{run\.id\}\/result/);
+    assert.match(page, /View result bundle/);
+  });
+
+  it("project detail hides cross-org runs and has an empty run state", () => {
+    const page = read("src/app/projects/[projectId]/page.tsx");
+
+    assert.match(page, /\.eq\("organization_id", membership\.organization_id\)/);
+    assert.match(page, /No discovery runs yet/);
+    assert.match(page, /Start a bounded dry-run or mocked workflow from this project/);
+    assert.match(page, /Runs from other organizations|No cross-organization\s+project data is shown/);
+    assert.doesNotMatch(page, /service_role|SUPABASE_SERVICE_ROLE_KEY|raw engine/i);
   });
 
   it("unsafe-request warning appears on create project page", () => {
@@ -87,11 +112,12 @@ describe("project pages", () => {
     assert.match(page, /if \(!project\) return <ProjectNotFound/);
   });
 
-  it("runs and result bundles remain placeholders until later releases", () => {
+  it("runs and result bundles are connected to V0.3 product state", () => {
     const page = read("src/app/projects/[projectId]/page.tsx");
 
-    assert.match(page, /Placeholder until V0\.3/);
-    assert.match(page, /Placeholder until V0\.3\/V0\.4/);
-    assert.match(page, /No live workflow execution is started in V0\.2/);
+    assert.match(page, /\.from\("product_runs"\)/);
+    assert.match(page, /\.from\("product_run_artifacts"\)/);
+    assert.match(page, /Product-safe artifacts/);
+    assert.match(page, /V0\.3 stores product-safe status and result\s+artifacts only/);
   });
 });

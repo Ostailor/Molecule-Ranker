@@ -4,6 +4,7 @@ import {
   DashboardOverview,
   DashboardSetupIssuePage,
   type DashboardProject,
+  type DashboardRun,
   type DashboardUsageSummary,
   type DashboardViewState,
 } from "@/components/dashboard/dashboard-overview";
@@ -13,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { quickLinks } from "@/lib/routes";
 import { requireUser } from "@/lib/supabase/auth";
 import { createClient } from "@/lib/supabase/server";
-import type { Membership, Organization, ProductRole, Profile, Project, UsageEvent } from "@/lib/supabase/types";
+import type { Membership, Organization, ProductRole, ProductRun, Profile, Project, UsageEvent } from "@/lib/supabase/types";
 
 type DashboardPageProps = {
   searchParams?: Promise<{
@@ -74,6 +75,22 @@ function projectForDashboard(project: Project): DashboardProject {
     targetFocus: project.target_focus,
     status: project.status,
     updatedAt: project.updated_at,
+  };
+}
+
+function runForDashboard(run: ProductRun, projectsById: Map<string, DashboardProject>): DashboardRun {
+  const project = projectsById.get(run.project_id);
+
+  return {
+    id: run.id,
+    projectId: run.project_id,
+    projectName: project?.name ?? "Project",
+    diseaseOrGoal: run.disease_or_goal,
+    mode: run.mode,
+    status: run.status,
+    createdAt: run.created_at,
+    completedAt: run.completed_at,
+    hasResultBundle: run.status === "succeeded" || run.status === "partially_succeeded",
   };
 }
 
@@ -138,8 +155,16 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     .gte("created_at", monthStartIso())
     .order("created_at", { ascending: false })
     .limit(100);
-  const [projectsResult, usageResult] = await Promise.all([projectsPromise, usagePromise]);
+  const runsPromise = supabase
+    .from("product_runs")
+    .select("id, organization_id, project_id, created_by_user_id, run_type, mode, status, disease_or_goal, target_focus, options, progress, result_summary, error_summary, started_at, completed_at, created_at, updated_at")
+    .eq("organization_id", organization.id)
+    .order("created_at", { ascending: false })
+    .limit(5);
+  const [projectsResult, usageResult, runsResult] = await Promise.all([projectsPromise, usagePromise, runsPromise]);
   const projects = ((projectsResult.data ?? []) as Project[]).map(projectForDashboard);
+  const projectsById = new Map(projects.map((project) => [project.id, project]));
+  const recentRuns = ((runsResult.data ?? []) as ProductRun[]).map((run) => runForDashboard(run, projectsById));
   const usage = summarizeUsage((usageResult.data ?? []) as UsageEvent[]);
 
   return (
@@ -165,6 +190,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         role={membership.role as ProductRole}
         plan={planLabel(organization.plan)}
         projects={projects}
+        recentRuns={recentRuns}
         usage={usage}
       />
     </AppShell>

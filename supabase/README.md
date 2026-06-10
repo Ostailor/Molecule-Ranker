@@ -1,12 +1,14 @@
 # Supabase Schema
 
-This directory contains the Release V0.2 Supabase schema for authentication,
+This directory contains the Release V0.3 Supabase schema for authentication,
 users, organizations, memberships, roles, tenant-scoped projects, usage events,
-and feedback.
+feedback, bounded discovery runs, and product-safe run artifacts.
 
 ## Files
 
 - `migrations/0001_product_auth_schema.sql` creates the V0.2 product auth schema.
+- `migrations/0002_product_discovery_runs.sql` adds the V0.3 `product_runs`
+  and `product_run_artifacts` tables with tenant-scoped RLS policies.
 - `seed.sql` is intentionally not present yet. Do not add seed users,
   organizations, secrets, billing records, patient data, or PHI fixtures.
 
@@ -15,6 +17,11 @@ and feedback.
 The migration enables and forces Row Level Security on every product table.
 Policies use Supabase `auth.uid()` plus active organization memberships to
 isolate tenant data.
+
+Run artifacts intentionally store only database-backed product-safe summaries
+or explicitly declared storage pointers. Raw engine internals, AgentGraph state,
+Codex transcripts, traces, logs, external write payloads, cache paths, and
+integration secrets must not be stored in these tables.
 
 The schema intentionally does not include:
 

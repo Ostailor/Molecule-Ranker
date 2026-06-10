@@ -8,6 +8,8 @@ ReleaseStage = Literal[
     "local_productization",
     "hosted_alpha",
     "hosted_alpha_auth",
+    "hosted_alpha_discovery",
+    "hosted_alpha_discovery_runs",
     "private_beta",
     "paid_pilot",
     "public_pilot",

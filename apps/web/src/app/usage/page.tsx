@@ -11,7 +11,7 @@ import {
   getUsageSummaryForOrg,
   productUsageActionLabels,
   v02UsageActions,
-  v03PlaceholderUsageActions,
+  v03UsageActions,
 } from "@/lib/product/usage";
 import { productFeatureFlags } from "@/lib/product/feature-flags";
 import { requireOrganizationMember } from "@/lib/product/auth-context";
@@ -35,7 +35,7 @@ export default async function UsagePage() {
   const usage = await getUsageSummaryForOrg(context.organization.id, { context, supabaseClient: supabase });
   const planLimits = getPlanUsageLimits(context.plan);
   const primaryActions = v02UsageActions.map((action) => usage.byAction[action]);
-  const placeholderActions = v03PlaceholderUsageActions.map((action) => usage.byAction[action]);
+  const v03Actions = v03UsageActions.map((action) => usage.byAction[action]);
 
   return (
     <AppShell userRole={context.role}>
@@ -44,13 +44,19 @@ export default async function UsagePage() {
         description={`Current-period usage visible to your ${context.organization.name} membership. Owner/admin roles can review organization-wide rows.`}
       />
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <Metric label="Plan" value={formatPlan(context.plan)} detail="Configured on organization" icon={WalletCards} />
         <Metric
           label={productUsageActionLabels.create_project}
           value={String(usage.byAction.create_project.quantity)}
           detail={`${formatLimit(planLimits.create_project)} current-period limit`}
           icon={FolderKanban}
+        />
+        <Metric
+          label={productUsageActionLabels.run_discovery}
+          value={String(usage.byAction.run_discovery.quantity)}
+          detail={`${formatLimit(planLimits.run_discovery)} current-period limit`}
+          icon={Activity}
         />
         <Metric
           label={productUsageActionLabels.feedback_create}
@@ -98,16 +104,20 @@ export default async function UsagePage() {
         </Card>
 
         <Card>
-          <CardHeader title="Later release placeholders" eyebrow="V0.3 run actions" />
+          <CardHeader title="Discovery workflow usage" eyebrow="V0.3 run actions" />
           <CardBody>
             <DataTable
-              columns={["Action", "Used", "Availability"]}
-              rows={placeholderActions.map((summary) => [
+              columns={["Action", "Used", "Limit / availability"]}
+              rows={v03Actions.map((summary) => [
                 summary.label,
                 String(summary.quantity),
-                <StatusBadge key={summary.action} tone="gray">
-                  Placeholder
-                </StatusBadge>,
+                summary.placeholder ? (
+                  <StatusBadge key={summary.action} tone="gray">
+                    Later release
+                  </StatusBadge>
+                ) : (
+                  formatLimit(summary.limit)
+                ),
               ])}
             />
           </CardBody>
@@ -122,8 +132,8 @@ export default async function UsagePage() {
                 <StatusBadge tone="amber">Stripe planned for Release V0.5</StatusBadge>
               </div>
               <p className="mt-4 text-sm leading-6 text-ink-600">
-                V0.2 records visible product usage for authenticated organization members. It does not enforce paid subscriptions,
-                collect payment details, or start discovery runs.
+                V0.3 records visible product usage for authenticated organization members. It does not enforce paid subscriptions,
+                collect payment details, or create external workflow writes.
               </p>
             </CardBody>
           </Card>

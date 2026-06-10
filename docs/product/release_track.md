@@ -86,10 +86,14 @@ Non-goals:
 
 ## Release V0.3: Discovery Workflow From Web App To Engine
 
+Status: implemented as the Bounded Discovery Workflow release.
+
+Reference: `docs/product/v0_3_discovery_workflow.md`
+
 Goals:
 
 - Start a bounded discovery run from the web app.
-- Connect the product API to the existing FastAPI engine and job queue.
+- Connect the product API to a product-safe engine wrapper.
 - Expose safe run creation and run status.
 
 Success criteria:
@@ -98,12 +102,15 @@ Success criteria:
 - Run progress is visible without raw AgentGraph, MCP, repair, governance, or
   Codex transcript internals.
 - Usage limits are checked before run creation.
+- Product-safe result artifacts are stored behind tenant-scoped APIs.
 
 Non-goals:
 
 - No external writes.
 - No write-approved-live mode for normal pilot users.
 - No full autonomous Codex mode.
+- No production-grade worker infrastructure.
+- No advanced result bundle viewer.
 
 ## Release V0.4: Result Bundle Viewer And Candidate/Evidence UI
 

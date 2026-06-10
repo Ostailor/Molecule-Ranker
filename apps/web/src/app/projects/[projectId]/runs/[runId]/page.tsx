@@ -3,37 +3,61 @@ import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { projects, runs } from "@/lib/mock-data";
+import { requireUser } from "@/lib/supabase/auth";
+import { createClient } from "@/lib/supabase/server";
+import type { Membership, ProductRole, ProductRun, Project } from "@/lib/supabase/types";
 
 type RunPageProps = {
   params: Promise<{ projectId: string; runId: string }>;
-  searchParams?: Promise<{ state?: string }>;
 };
 
-const runStates = new Set<DiscoveryRunViewState>(["queued", "running", "completed", "failed", "partial", "cancelled"]);
-
-export default async function RunPage({ params, searchParams }: RunPageProps) {
+export default async function RunPage({ params }: RunPageProps) {
   const { projectId, runId } = await params;
-  const query = await searchParams;
-  const project = projects.find((item) => item.id === projectId);
-  const run = runs.find((item) => item.id === runId && item.projectId === projectId);
-  const requestedState = query?.state;
-  const runState = isRunState(requestedState) ? requestedState : stateFromRunStatus(run?.status);
+  const user = await requireUser(`/login?next=/projects/${projectId}/runs/${runId}`);
+  const supabase = await createClient();
+  const { data: membershipData } = await supabase
+    .from("product_memberships")
+    .select("id, organization_id, user_id, role, status, created_at, updated_at")
+    .eq("user_id", user.id)
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+  const membership = membershipData as Membership | null;
+  const { data: projectData } = membership
+    ? await supabase
+        .from("product_projects")
+        .select("id, organization_id, created_by_user_id, name, research_goal, disease_focus, target_focus, status, created_at, updated_at")
+        .eq("id", projectId)
+        .eq("organization_id", membership.organization_id)
+        .maybeSingle()
+    : { data: null };
+  const { data: runData } = membership
+    ? await supabase
+        .from("product_runs")
+        .select("id, organization_id, project_id, created_by_user_id, run_type, mode, status, disease_or_goal, target_focus, options, progress, result_summary, error_summary, started_at, completed_at, created_at, updated_at")
+        .eq("id", runId)
+        .eq("project_id", projectId)
+        .eq("organization_id", membership.organization_id)
+        .maybeSingle()
+    : { data: null };
+  const project = projectData as Project | null;
+  const run = runData as ProductRun | null;
+  const runState = stateFromRunStatus(run?.status);
   const resultHref = `/projects/${projectId}/runs/${runId}/result`;
 
-  if (!project || !run) {
+  if (!membership || !project || !run) {
     return (
       <AppShell>
         <PageHeader
           title="Discovery run not found"
-          description="No synthetic run matches this route. No backend lookup was made."
+          description="No accessible run matches this project in your active organization."
           actions={<Button href={`/projects/${projectId}`}>Back to project</Button>}
         />
         <Card>
-          <CardHeader title="Unable to show run status" eyebrow="Mock route state" />
+          <CardHeader title="Unable to show run status" eyebrow="Tenant-scoped lookup" />
           <CardBody>
             <p className="text-sm leading-6 text-ink-600">
-              Select a synthetic UI demo project and discovery run to inspect the bounded workflow timeline.
+              Select a project and discovery run from your organization to inspect the bounded workflow timeline.
             </p>
           </CardBody>
         </Card>
@@ -42,12 +66,12 @@ export default async function RunPage({ params, searchParams }: RunPageProps) {
   }
 
   return (
-    <AppShell>
+    <AppShell userRole={membership.role as ProductRole}>
       <PageHeader
         title="Discovery run workspace"
         description="Inspect run status, coarse workflow steps, timestamps, reviewer warnings, and result bundle readiness."
         actions={
-          runState === "completed" ? (
+          runState === "completed" || runState === "partial" ? (
             <Button href={resultHref}>View result bundle</Button>
           ) : (
             <Button href={`/projects/${projectId}/runs/new`} variant="secondary">
@@ -61,13 +85,11 @@ export default async function RunPage({ params, searchParams }: RunPageProps) {
   );
 }
 
-function isRunState(value: string | undefined): value is DiscoveryRunViewState {
-  return Boolean(value && runStates.has(value as DiscoveryRunViewState));
-}
-
-function stateFromRunStatus(status: string | undefined): DiscoveryRunViewState {
-  if (status === "Complete") return "completed";
-  if (status === "Running") return "running";
-  if (status === "Needs review") return "partial";
+function stateFromRunStatus(status: string | undefined | null): DiscoveryRunViewState {
+  if (status === "succeeded") return "completed";
+  if (status === "partially_succeeded") return "partial";
+  if (status === "running") return "running";
+  if (status === "failed") return "failed";
+  if (status === "cancelled") return "cancelled";
   return "queued";
 }

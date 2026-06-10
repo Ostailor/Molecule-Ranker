@@ -10,10 +10,10 @@ from molecule_ranker.product.schemas import ProductRelease
 from molecule_ranker.v3.governance_contract import REQUIRED_GUARDRAILS
 
 DEFAULT_RELEASE_TRACK = "pilot_release"
-DEFAULT_RELEASE_VERSION = "0.2.0"
+DEFAULT_RELEASE_VERSION = "0.3.0"
 DEFAULT_ENGINE_VERSION = "3.0.0"
-DEFAULT_RELEASE_NAME = "Release V0.2 Auth, Users, Organizations, Permissions"
-DEFAULT_RELEASE_STAGE = "hosted_alpha_auth"
+DEFAULT_RELEASE_NAME = "Release V0.3 Discovery Workflow Connection"
+DEFAULT_RELEASE_STAGE = "hosted_alpha_discovery_runs"
 
 
 def build_default_product_release(metadata: dict[str, Any] | None = None) -> ProductRelease:
@@ -32,6 +32,13 @@ def build_default_product_release(metadata: dict[str, Any] | None = None) -> Pro
             "auth_implemented": True,
             "organizations_implemented": True,
             "role_checks_implemented": True,
+            "discovery_run_creation_implemented": True,
+            "discovery_run_status_implemented": True,
+            "product_artifact_storage_implemented": True,
+            "result_bundle_summary_implemented": True,
+            "advanced_result_viewer_implemented": False,
+            "bounded_discovery_runs_implemented": True,
+            "product_safe_artifacts_implemented": True,
             "billing_implemented": False,
             "stripe_implemented": False,
             "live_engine_execution_enabled": False,

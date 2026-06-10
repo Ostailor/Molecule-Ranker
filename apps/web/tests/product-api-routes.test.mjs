@@ -10,11 +10,19 @@ function read(relativePath) {
 }
 
 describe("product API route stubs", () => {
-  it("defines the requested V0.2 product API routes", () => {
+  it("defines the requested product API routes through V0.3", () => {
     for (const route of [
       "src/app/api/product/me/route.ts",
       "src/app/api/product/projects/route.ts",
       "src/app/api/product/projects/[projectId]/route.ts",
+      "src/app/api/product/projects/[projectId]/runs/route.ts",
+      "src/app/api/product/projects/[projectId]/runs/[runId]/route.ts",
+      "src/app/api/product/projects/[projectId]/runs/[runId]/status/route.ts",
+      "src/app/api/product/projects/[projectId]/runs/[runId]/cancel/route.ts",
+      "src/app/api/product/projects/[projectId]/runs/[runId]/result-bundle/route.ts",
+      "src/app/api/product/projects/[projectId]/runs/[runId]/artifacts/route.ts",
+      "src/app/api/product/projects/[projectId]/runs/[runId]/artifacts/[artifactId]/route.ts",
+      "src/app/api/product/projects/[projectId]/runs/[runId]/result/route.ts",
       "src/app/api/product/usage/route.ts",
       "src/app/api/product/feedback/route.ts",
       "src/app/api/product/admin/summary/route.ts",
@@ -28,6 +36,14 @@ describe("product API route stubs", () => {
       read("src/app/api/product/me/route.ts"),
       read("src/app/api/product/projects/route.ts"),
       read("src/app/api/product/projects/[projectId]/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/status/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/cancel/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/result-bundle/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/artifacts/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/artifacts/[artifactId]/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/result/route.ts"),
       read("src/app/api/product/usage/route.ts"),
       read("src/app/api/product/feedback/route.ts"),
       read("src/app/api/product/admin/summary/route.ts"),
@@ -101,20 +117,105 @@ describe("product API route stubs", () => {
     assert.match(adminRoute, /\.from\("product_usage_events"\)/);
   });
 
-  it("does not expose raw workflow internals or V0.3 API surfaces", () => {
-    const routeSources = [
-      read("src/app/api/product/me/route.ts"),
-      read("src/app/api/product/projects/route.ts"),
-      read("src/app/api/product/projects/[projectId]/route.ts"),
-      read("src/app/api/product/usage/route.ts"),
-      read("src/app/api/product/feedback/route.ts"),
-      read("src/app/api/product/admin/summary/route.ts"),
-    ].join("\n");
+  it("V0.3 run APIs are tenant-scoped and hide raw workflow internals", () => {
+    const runApiRoutes = [
+      read("src/app/api/product/projects/[projectId]/runs/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/status/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/cancel/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/result-bundle/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/artifacts/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/artifacts/[artifactId]/route.ts"),
+      read("src/app/api/product/projects/[projectId]/runs/[runId]/result/route.ts"),
+    ];
+    const routeSources = runApiRoutes.join("\n");
+    const runner = read("src/lib/product/engine-runner.ts");
+    const storage = read("src/lib/product/artifact-storage.ts");
+    const worker = read("src/lib/product/run-worker.ts");
 
-    assert.doesNotMatch(routeSources, /engine|raw internal|codex|transcript/i);
-    assert.ok(!existsSync(join(root, "src/app/api/product/runs/route.ts")));
+    assert.match(routeSources, /requireProductPermission\("run:create", supabase\)/);
+    assert.match(routeSources, /requireProductPermission\("run:read", supabase\)/);
+    assert.match(routeSources, /\.eq\("organization_id", context\.organization\.id\)/);
+    assert.match(routeSources, /\.from\("product_runs"\)/);
+    assert.match(routeSources, /listRunArtifacts/);
+    assert.match(storage, /\.from\("product_run_artifacts"\)/);
+    assert.match(routeSources, /checkRunUsageLimits\(\{ context, supabase, options \}\)/);
+    assert.match(routeSources, /checkUsageAllowed\("run_discovery", 1, \{ context, supabaseClient: supabase \}\)/);
+    assert.match(routeSources, /checkUsageAllowed\("generated_hypotheses", generatedHypothesisCount, \{ context, supabaseClient: supabase \}\)/);
+    assert.match(routeSources, /checkUsageAllowed\("codex_task", 1, \{ context, supabaseClient: supabase \}\)/);
+    assert.match(routeSources, /recordUsageEvent\(\s*"run_discovery"/);
+    assert.match(routeSources, /recordUsageEvent\(\s*"generated_hypotheses"/);
+    assert.match(runner, /runProductSafeDiscoveryWorkflow/);
+    assert.match(storage, /storeProductSafeResultArtifact/);
+    assert.match(storage, /storeRunArtifact/);
+    assert.match(worker, /executeProductRunWorker/);
+    assert.match(worker, /runProductSafeDiscoveryWorkflow/);
+    assert.match(worker, /storeProductSafeResultArtifact/);
+    for (const source of runApiRoutes) {
+      assert.match(source, /\[89ab\]\[0-9a-f\]\{3\}-\[0-9a-f\]\{12\}/);
+      assert.doesNotMatch(source, /\[89ab\]\[0-9a-f\]\{12\}/);
+    }
+    assert.doesNotMatch(routeSources, /AgentGraph|raw Codex|transcript|trace|stderr|stdout|service_role/i);
     assert.ok(!existsSync(join(root, "src/app/api/product/candidates/route.ts")));
     assert.ok(!existsSync(join(root, "src/app/api/product/evidence/route.ts")));
     assert.ok(!existsSync(join(root, "src/app/api/product/generated/route.ts")));
+  });
+
+  it("run creation validates auth, roles, usage, tenant scope, and unsafe options", () => {
+    const route = read("src/app/api/product/projects/[projectId]/runs/route.ts");
+    const worker = read("src/lib/product/run-worker.ts");
+    const runSafety = read("src/lib/product/run-safety.ts");
+    const permissions = read("src/lib/product/permissions.ts");
+
+    assert.match(route, /requireProductPermission\("run:create", supabase\)/);
+    assert.match(route, /roleHasPermission\(context\.role, "project:read"\)/);
+    assert.match(route, /getProjectForContext\(supabase, projectId, context\.organization\.id\)/);
+    assert.match(route, /\.eq\("organization_id", organizationId\)/);
+    assert.match(route, /readSafeRunOptions\(input\)/);
+    assert.match(route, /input\.disease_or_goal \?\? input\.disease_project_objective/);
+    assert.match(route, /checkRunUsageLimits\(\{ context, supabase, options \}\)/);
+    assert.match(route, /checkUsageAllowed\("run_discovery", 1, \{ context, supabaseClient: supabase \}\)/);
+    assert.match(route, /checkUsageAllowed\("generated_hypotheses", generatedHypothesisCount, \{ context, supabaseClient: supabase \}\)/);
+    assert.match(route, /checkUsageAllowed\("codex_task", 1, \{ context, supabaseClient: supabase \}\)/);
+    assert.match(route, /recordRunUsageEvents\(\{ context, supabase, projectId, run, options \}\)/);
+    assert.match(route, /recordUsageEvent\(\s*"run_discovery"/);
+    assert.match(route, /recordUsageEvent\(\s*"generated_hypotheses"/);
+    assert.match(route, /status: "queued"/);
+    assert.match(route, /executeProductRunWorker\(\{ context, supabase, project, run, options \}\)/);
+    assert.match(worker, /status: "running"/);
+    assert.match(worker, /status: "succeeded"/);
+    assert.match(worker, /status: "failed"/);
+    assert.match(worker, /status: "partially_succeeded"/);
+    assert.match(worker, /withRunTimeout/);
+    assert.match(worker, /safeEngineError\(error\)/);
+    assert.match(runSafety, /acknowledgement !== true/);
+    assert.match(runSafety, /Choose mocked, dry_run, or an enabled read_only_live workflow mode/);
+    assert.match(runSafety, /max_generated_hypotheses/);
+    assert.match(runSafety, /externalWritesEnabled: false/);
+    assert.match(runSafety, /antibodyGenerationEnabled: false/);
+    assert.match(permissions, /researcher: \[[\s\S]*"run:create"/);
+    assert.doesNotMatch(permissions.match(/viewer: \[[^\]]+\]/s)?.[0] ?? "", /run:create/);
+  });
+
+  it("status, cancel, result bundle, and artifact detail routes expose only product-safe state", () => {
+    const statusRoute = read("src/app/api/product/projects/[projectId]/runs/[runId]/status/route.ts");
+    const cancelRoute = read("src/app/api/product/projects/[projectId]/runs/[runId]/cancel/route.ts");
+    const resultBundleRoute = read("src/app/api/product/projects/[projectId]/runs/[runId]/result-bundle/route.ts");
+    const artifactDetailRoute = read("src/app/api/product/projects/[projectId]/runs/[runId]/artifacts/[artifactId]/route.ts");
+
+    assert.match(statusRoute, /status, progress, error_summary, result_summary/);
+    assert.match(statusRoute, /requireProductPermission\("run:read", supabase\)/);
+    assert.match(statusRoute, /\.eq\("organization_id", context\.organization\.id\)/);
+    assert.match(cancelRoute, /requireProductPermission\("run:create", supabase\)/);
+    assert.match(cancelRoute, /currentRun\.status !== "queued" && currentRun\.status !== "running"/);
+    assert.match(cancelRoute, /status: "cancelled"/);
+    assert.match(cancelRoute, /Active subprocess termination is not implemented in the V0\.3 dev runner/);
+    assert.match(resultBundleRoute, /listRunArtifacts\(\{ \.\.\.context, supabase, projectId, runId \}, runId\)/);
+    assert.match(resultBundleRoute, /artifact_type === "result_bundle_json"/);
+    assert.match(artifactDetailRoute, /getRunArtifact\(\{ \.\.\.context, supabase, projectId, runId \}, artifactId\)/);
+
+    for (const source of [statusRoute, cancelRoute, resultBundleRoute, artifactDetailRoute]) {
+      assert.doesNotMatch(source, /stdout|stderr|stack|raw logs|raw Codex|AgentGraph|service_role/i);
+    }
   });
 });

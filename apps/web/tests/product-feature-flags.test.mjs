@@ -49,7 +49,7 @@ describe("product feature flags", () => {
     assert.match(runForm, /productFeatureFlags\.exportsPlaceholder/);
     assert.match(generatedPage, /productFeatureFlags\.generatedHypothesesViewer/);
     assert.match(resultOverview, /productFeatureFlags\.generatedHypothesesViewer/);
-    assert.match(resultOverview, /productFeatureFlags\.exportsPlaceholder/);
+    assert.match(resultOverview, /Artifact list/);
     assert.match(dashboard, /productFeatureFlags\.discoveryRunsPlaceholder/);
     assert.match(usage, /productFeatureFlags\.stripeBillingPlaceholder/);
   });

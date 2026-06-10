@@ -11,7 +11,7 @@ UsageAction = Literal[
     "login",
     "onboarding_complete",
     "run_discovery",
-    "generate_hypotheses",
+    "generated_hypotheses",
     "export_result",
     "codex_task",
 ]
@@ -62,7 +62,7 @@ ACTION_LIMIT_FIELDS: dict[UsageAction, str] = {
     "login": "max_storage_mb",
     "onboarding_complete": "max_storage_mb",
     "run_discovery": "max_runs_per_month",
-    "generate_hypotheses": "max_generated_hypotheses_per_run",
+    "generated_hypotheses": "max_generated_hypotheses_per_run",
     "export_result": "max_result_bundle_exports_per_month",
     "codex_task": "max_codex_tasks_per_month",
 }

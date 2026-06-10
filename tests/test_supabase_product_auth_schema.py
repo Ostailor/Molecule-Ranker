@@ -5,10 +5,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "supabase" / "migrations" / "0001_product_auth_schema.sql"
+RUNS_MIGRATION = ROOT / "supabase" / "migrations" / "0002_product_discovery_runs.sql"
 
 
 def _sql() -> str:
     return MIGRATION.read_text()
+
+
+def _runs_sql() -> str:
+    return RUNS_MIGRATION.read_text()
 
 
 def test_supabase_product_auth_migration_exists_with_required_tables() -> None:
@@ -129,3 +134,36 @@ def test_supabase_product_auth_schema_avoids_forbidden_surfaces() -> None:
 
     for term in forbidden:
         assert term not in executable_sql
+
+
+def test_supabase_product_runs_artifacts_migration_exists_with_rls() -> None:
+    text = _runs_sql()
+
+    for table in ["product_runs", "product_run_artifacts"]:
+        assert f"create table if not exists public.{table}" in text
+        assert f"alter table public.{table} enable row level security" in text
+        assert f"alter table public.{table} force row level security" in text
+
+    assert "run_type text not null default 'discovery'" in text
+    assert "mode text not null default 'dry_run'" in text
+    assert "status text not null default 'queued'" in text
+    assert "disease_or_goal text not null" in text
+    assert "options jsonb not null default '{}'::jsonb" in text
+    assert "progress jsonb not null default '{}'::jsonb" in text
+    assert "constraint product_runs_run_type_check check (run_type in ('discovery', 'dry_run_discovery', 'mocked_discovery'))" in text
+    assert "constraint product_runs_mode_check check (mode in ('mocked', 'dry_run', 'read_only_live'))" in text
+    assert (
+        "constraint product_runs_status_check check (status in ('queued', 'running', 'succeeded', 'failed', "
+        "'partially_succeeded', 'cancelled'))"
+        in text
+    )
+    assert "constraint product_run_artifacts_storage_kind_check check (storage_kind in ('database', 'local_file', 'supabase_storage'))" in text
+    assert "constraint product_run_artifacts_run_tenant_fk foreign key (run_id, organization_id, project_id)" in text
+    assert "constraint product_run_artifacts_no_cache_storage_path" in text
+    assert "constraint product_run_artifacts_no_raw_internal_artifact_types" in text
+    assert "public.has_org_role(organization_id, array['owner', 'admin', 'researcher'])" in text
+    assert "public.is_org_member(organization_id)" in text
+    assert "created_by_user_id = auth.uid()" in text
+    assert "run organization_id, project_id, and created_by_user_id are immutable" in text
+    assert "admin_only = false\n      or public.has_org_role(organization_id, array['owner', 'admin'])" in text
+    assert re.search(r"raw\s+engine\s+internals", text, flags=re.I)

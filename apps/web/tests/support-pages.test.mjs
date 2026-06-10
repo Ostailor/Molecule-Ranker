@@ -10,7 +10,7 @@ function read(relativePath) {
 }
 
 describe("support and admin pages", () => {
-  it("usage page renders real organization usage and later-release placeholders", () => {
+  it("usage page renders real organization usage and V0.3 discovery workflow usage", () => {
     const page = read("src/app/usage/page.tsx");
 
     for (const text of [
@@ -18,8 +18,9 @@ describe("support and admin pages", () => {
       "getUsageSummaryForOrg",
       "getPlanUsageLimits",
       "productUsageActionLabels.create_project",
+      "productUsageActionLabels.run_discovery",
       "productUsageActionLabels.feedback_create",
-      "Later release placeholders",
+      "Discovery workflow usage",
       "Release V0.5",
       "No payment provider connected",
       "does not enforce paid subscriptions",
@@ -42,7 +43,7 @@ describe("support and admin pages", () => {
       "feedback_create",
       "onboarding_complete",
       "run_discovery",
-      "generate_hypotheses",
+      "generated_hypotheses",
       "export_result",
       "codex_task",
       "Release V0.5",
@@ -51,7 +52,9 @@ describe("support and admin pages", () => {
     }
 
     assert.match(page, /formatLimit\(planLimits\.create_project\)/);
+    assert.match(page, /formatLimit\(planLimits\.run_discovery\)/);
     assert.match(page, /formatLimit\(planLimits\.feedback_create\)/);
+    assert.match(page, /formatLimit\(summary\.limit\)/);
   });
 
   it("account page renders profile, organization, acknowledgement, and legal links", () => {

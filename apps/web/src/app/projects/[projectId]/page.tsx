@@ -10,7 +10,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { dateLabel } from "@/lib/formatting";
 import { requireUser } from "@/lib/supabase/auth";
 import { createClient } from "@/lib/supabase/server";
-import type { Membership, ProductRole, Project } from "@/lib/supabase/types";
+import type { Membership, ProductRole, ProductRun, ProductRunArtifact, Project } from "@/lib/supabase/types";
 
 type ProjectPageProps = {
   params: Promise<{
@@ -95,45 +95,117 @@ function ProjectSummary({ project }: { project: Project }) {
   );
 }
 
-function ProjectUsagePlaceholder() {
+function ProjectUsageSummary({ runs, artifacts }: { runs: ProductRun[]; artifacts: ProductRunArtifact[] }) {
+  const completedRuns = runs.filter((run) => run.status === "succeeded").length;
+
   return (
     <div className="grid gap-4 md:grid-cols-3">
-      <Metric label="Project runs" value="0" detail="Connected in V0.3" icon={FlaskConical} />
-      <Metric label="Candidate rows" value="0" detail="Placeholder until workflow connection" icon={Star} />
-      <Metric label="Result bundles" value="0" detail="Placeholder until V0.3/V0.4" icon={FileArchive} />
+      <Metric label="Project runs" value={String(runs.length)} detail={`${completedRuns} completed`} icon={FlaskConical} />
+      <Metric label="Candidate rows" value="Summary only" detail="Detailed UI later" icon={Star} />
+      <Metric label="Result bundles" value={String(artifacts.length)} detail="Product-safe artifacts" icon={FileArchive} />
     </div>
   );
 }
 
-function RunsPlaceholder() {
+function RecentRuns({ projectId, runs }: { projectId: string; runs: ProductRun[] }) {
   return (
     <Card>
-      <CardHeader title="Recent runs" eyebrow="Placeholder until V0.3" action={<StatusBadge tone="gray">Disabled</StatusBadge>} />
-      <CardBody className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
-        <div>
-          <h2 className="text-lg font-semibold text-ink-950">No discovery runs yet</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-600">
-            Start new discovery run remains disabled until Release V0.3 connects the workflow. No live workflow execution is started in V0.2.
-          </p>
-        </div>
-        <StatusBadge tone="gray">V0.3</StatusBadge>
+      <CardHeader
+        title="Recent runs"
+        eyebrow="V0.3 product state"
+        action={<Button href={`/projects/${projectId}/runs/new`}>Start discovery run</Button>}
+      />
+      <CardBody>
+        {runs.length > 0 ? (
+          <div className="grid gap-3">
+            {runs.map((run) => (
+              <div key={run.id} className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3 text-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <a href={`/projects/${projectId}/runs/${run.id}`} className="focus-ring font-semibold text-ink-950 hover:text-teal-700">
+                    {run.disease_or_goal}
+                  </a>
+                  <StatusBadge tone={runStatusTone(run.status)}>{runStatusLabel(run.status)}</StatusBadge>
+                </div>
+                <div className="mt-3 grid gap-2 text-xs leading-5 text-ink-500 sm:grid-cols-3">
+                  <span>Mode: {run.mode}</span>
+                  <span>Created: {dateLabel(run.created_at)}</span>
+                  <span>Completed: {run.completed_at ? dateLabel(run.completed_at) : "Pending"}</span>
+                </div>
+                {hasResultBundle(run) ? (
+                  <a href={`/projects/${projectId}/runs/${run.id}/result`} className="mt-3 inline-flex text-sm font-semibold text-teal-700 hover:text-teal-550">
+                    View result bundle
+                  </a>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div>
+              <h2 className="text-lg font-semibold text-ink-950">No discovery runs yet</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-600">
+                Start a bounded dry-run or mocked workflow from this project. V0.3 stores product-safe status and result
+                artifacts only.
+              </p>
+            </div>
+            <StatusBadge tone="teal">Ready</StatusBadge>
+          </div>
+        )}
       </CardBody>
     </Card>
   );
 }
 
-function ResultBundlesPlaceholder() {
+function runStatusTone(status: ProductRun["status"]): "green" | "teal" | "amber" | "rose" | "gray" {
+  if (status === "succeeded") return "green";
+  if (status === "failed") return "rose";
+  if (status === "partially_succeeded") return "amber";
+  if (status === "cancelled") return "gray";
+  return "teal";
+}
+
+function runStatusLabel(status: ProductRun["status"]) {
+  return status.replace(/_/g, " ");
+}
+
+function hasResultBundle(run: ProductRun) {
+  return run.status === "succeeded" || run.status === "partially_succeeded";
+}
+
+function ResultBundlesSummary({ artifacts }: { artifacts: ProductRunArtifact[] }) {
   return (
     <Card>
-      <CardHeader title="Result bundles" eyebrow="Placeholder until V0.3/V0.4" action={<StatusBadge tone="gray">Disabled</StatusBadge>} />
+      <CardHeader title="Result bundles" eyebrow="Product-safe artifacts" action={<StatusBadge tone="teal">{artifacts.length}</StatusBadge>} />
       <CardBody>
-        <p className="text-sm leading-6 text-ink-600">
-          Result bundles will summarize completed discovery workflows in a later release. V0.2 only shows the project record
-          and does not expose raw internal execution details.
-        </p>
+        {artifacts.length > 0 ? (
+          <ul className="grid gap-3 text-sm">
+            {artifacts.map((artifact) => (
+              <li key={artifact.id} className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+                <a className="focus-ring font-semibold text-ink-950" href={`/projects/${artifact.project_id}/runs/${artifact.run_id}/result`}>
+                  {artifactDisplayName(artifact)}
+                </a>
+                <p className="mt-1 text-ink-500">{dateLabel(artifact.created_at)}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm leading-6 text-ink-600">
+            Result bundles will appear after a bounded discovery workflow completes. V0.3 does not expose raw internal
+            execution details.
+          </p>
+        )}
       </CardBody>
     </Card>
   );
+}
+
+function artifactDisplayName(artifact: ProductRunArtifact) {
+  const metadata =
+    artifact.metadata && typeof artifact.metadata === "object" && !Array.isArray(artifact.metadata)
+      ? (artifact.metadata as Record<string, unknown>)
+      : {};
+
+  return typeof metadata.display_name === "string" ? metadata.display_name : "Product-safe result bundle";
 }
 
 function SafetyBoundary() {
@@ -181,22 +253,46 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
 
   if (!project) return <ProjectNotFound projectId={projectId} />;
 
+  const { data: runData } = await supabase
+    .from("product_runs")
+    .select("id, organization_id, project_id, created_by_user_id, run_type, mode, status, disease_or_goal, target_focus, options, progress, result_summary, error_summary, started_at, completed_at, created_at, updated_at")
+    .eq("organization_id", membership.organization_id)
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: false })
+    .limit(5);
+  const runs = (runData ?? []) as ProductRun[];
+
+  const { data: artifactData } = await supabase
+    .from("product_run_artifacts")
+    .select("id, organization_id, project_id, run_id, artifact_type, storage_kind, storage_path, content_json, content_text, sha256, size_bytes, public_to_user, admin_only, created_at, metadata")
+    .eq("organization_id", membership.organization_id)
+    .eq("project_id", projectId)
+    .eq("artifact_type", "result_bundle_json")
+    .order("created_at", { ascending: false })
+    .limit(5);
+  const artifacts = (artifactData ?? []) as ProductRunArtifact[];
+
   return (
     <AppShell userRole={membership.role as ProductRole}>
       <PageHeader
         title={project.name}
         description={project.research_goal ?? "Project details are scoped to your active organization membership."}
         actions={
-          <Button href="/dashboard" variant="secondary" icon={ArrowLeft}>
-            Back to dashboard
-          </Button>
+          <div className="flex flex-wrap gap-3">
+            <Button href="/dashboard" variant="secondary" icon={ArrowLeft}>
+              Back to dashboard
+            </Button>
+            <Button href={`/projects/${project.id}/runs/new`} icon={FlaskConical}>
+              Start discovery run
+            </Button>
+          </div>
         }
       />
       <div className="space-y-6">
         <ProjectSummary project={project} />
-        <ProjectUsagePlaceholder />
-        <RunsPlaceholder />
-        <ResultBundlesPlaceholder />
+        <ProjectUsageSummary runs={runs} artifacts={artifacts} />
+        <RecentRuns projectId={project.id} runs={runs} />
+        <ResultBundlesSummary artifacts={artifacts} />
         <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
           <SafetyBoundary />
           <Card>

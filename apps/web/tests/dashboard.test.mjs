@@ -25,6 +25,22 @@ describe("dashboard page", () => {
     assert.doesNotMatch(dashboard, /import \{[^}]*projects[^}]*\} from "@\/lib\/mock-data"/);
   });
 
+  it("loads recent organization runs from Supabase", () => {
+    const page = read("src/app/dashboard/page.tsx");
+    const dashboard = read("src/components/dashboard/dashboard-overview.tsx");
+
+    assert.match(page, /\.from\("product_runs"\)/);
+    assert.match(page, /\.eq\("organization_id", organization\.id\)/);
+    assert.match(page, /\.order\("created_at", \{ ascending: false \}\)/);
+    assert.match(page, /recentRuns=\{recentRuns\}/);
+    assert.match(dashboard, /type DashboardRun/);
+    assert.match(dashboard, /RecentDiscoveryRuns/);
+    assert.match(dashboard, /Tenant-scoped runs/);
+    assert.match(dashboard, /\/projects\/\$\{run\.projectId\}\/runs\/\$\{run\.id\}/);
+    assert.match(dashboard, /Result bundle/);
+    assert.doesNotMatch(dashboard, /resultBundles|runs \} from "@\/lib\/mock-data"/);
+  });
+
   it("renders an empty projects state", () => {
     const dashboard = read("src/components/dashboard/dashboard-overview.tsx");
 
@@ -54,24 +70,27 @@ describe("dashboard page", () => {
     assert.match(dashboard, /Account status limits dashboard access/);
   });
 
-  it("documents cross-org project isolation through scoped query and RLS expectation", () => {
+  it("documents cross-org project and run isolation through scoped query and RLS expectation", () => {
     const page = read("src/app/dashboard/page.tsx");
     const rlsDocs = read("../../docs/product/v0_2_rls_policies.md");
     const migration = read("../../supabase/migrations/0001_product_auth_schema.sql");
+    const runsMigration = read("../../supabase/migrations/0002_product_discovery_runs.sql");
 
     assert.match(page, /\.eq\("organization_id", organization\.id\)/);
     assert.match(page, /product_projects/);
+    assert.match(page, /product_runs/);
     assert.match(migration, /projects_select_for_members/);
     assert.match(migration, /public\.is_org_member\(organization_id\)/);
+    assert.match(runsMigration, /runs_select_for_org_members/);
     assert.match(rlsDocs, /cannot read or write\s+rows outside organizations/i);
   });
 
-  it("keeps recent runs as V0.3 placeholder content", () => {
+  it("renders empty recent run state and create-run CTA", () => {
     const dashboard = read("src/components/dashboard/dashboard-overview.tsx");
 
-    assert.match(dashboard, /RecentDiscoveryRunsPlaceholder/);
-    assert.match(dashboard, /Placeholder until V0\.3/);
-    assert.match(dashboard, /Mock only/);
-    assert.match(dashboard, /No live workflow execution is started in V0\.2/);
+    assert.match(dashboard, /No recent discovery runs/);
+    assert.match(dashboard, /Start run/);
+    assert.match(dashboard, /\/projects\/\$\{firstProject\.id\}\/runs\/new/);
+    assert.match(dashboard, /recentRuns\.length > 0/);
   });
 });

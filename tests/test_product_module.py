@@ -45,13 +45,13 @@ from molecule_ranker.product.schemas import PilotOrganization, PilotUser, UsageL
 from molecule_ranker.v3.governance_contract import REQUIRED_GUARDRAILS
 
 
-def test_product_release_schema_accepts_release_v0_2_auth_stage() -> None:
+def test_product_release_schema_accepts_release_v0_3_discovery_stage() -> None:
     release = ProductRelease(
         release_track="pilot_release",
-        release_version="0.2.0",
+        release_version="0.3.0",
         engine_version="3.0.0",
-        release_name="Release V0.2 Auth, Users, Organizations, Permissions",
-        release_stage="hosted_alpha_auth",
+        release_name="Release V0.3 Discovery Workflow Connection",
+        release_stage="hosted_alpha_discovery_runs",
         enabled_user_features=["view_ranked_candidates"],
         hidden_internal_features=["external_write_integrations"],
         required_guardrails=["no_medical_advice"],
@@ -59,7 +59,7 @@ def test_product_release_schema_accepts_release_v0_2_auth_stage() -> None:
     )
 
     assert release.release_track == "pilot_release"
-    assert release.release_stage == "hosted_alpha_auth"
+    assert release.release_stage == "hosted_alpha_discovery_runs"
     assert release.metadata["payments_implemented"] is False
 
 
@@ -154,20 +154,27 @@ def test_default_release_preserves_dev_engine_guardrails_and_hides_internal_feat
     release = build_default_product_release()
 
     assert release.release_track == "pilot_release"
-    assert release.release_version == "0.2.0"
+    assert release.release_version == "0.3.0"
     assert release.engine_version == "3.0.0"
-    assert release.release_name == "Release V0.2 Auth, Users, Organizations, Permissions"
-    assert release.release_stage == "hosted_alpha_auth"
+    assert release.release_name == "Release V0.3 Discovery Workflow Connection"
+    assert release.release_stage == "hosted_alpha_discovery_runs"
     assert set(REQUIRED_GUARDRAILS).issubset(release.required_guardrails)
     assert "view_ranked_candidates" in release.enabled_user_features
     assert "external_write_integrations" in release.hidden_internal_features
     assert release.metadata["auth_implemented"] is True
     assert release.metadata["organizations_implemented"] is True
     assert release.metadata["role_checks_implemented"] is True
+    assert release.metadata["discovery_run_creation_implemented"] is True
+    assert release.metadata["discovery_run_status_implemented"] is True
+    assert release.metadata["product_artifact_storage_implemented"] is True
+    assert release.metadata["result_bundle_summary_implemented"] is True
+    assert release.metadata["bounded_discovery_runs_implemented"] is True
+    assert release.metadata["product_safe_artifacts_implemented"] is True
     assert release.metadata["billing_implemented"] is False
     assert release.metadata["stripe_implemented"] is False
     assert release.metadata["live_engine_execution_enabled"] is False
     assert release.metadata["external_writes_enabled"] is False
+    assert release.metadata["advanced_result_viewer_implemented"] is False
     assert release.metadata["payments_implemented"] is False
     assert release.metadata["production_deployment_enabled"] is False
 
@@ -445,7 +452,7 @@ def test_usage_summary_reports_counts_limits_and_remaining() -> None:
     )
 
     record_usage_event(user, "run_discovery", {})
-    record_usage_event(user, "generate_hypotheses", {"amount": 5})
+    record_usage_event(user, "generated_hypotheses", {"amount": 5})
     record_usage_event(user, "export_result", {})
     record_usage_event(user, "codex_task", {"amount": 3})
     record_usage_event(user, "feedback_create", {})
@@ -456,7 +463,7 @@ def test_usage_summary_reports_counts_limits_and_remaining() -> None:
     assert summary["plan"] == "pilot"
     assert summary["admin_bypass"] is False
     assert summary["usage"]["run_discovery"] == 1
-    assert summary["usage"]["generate_hypotheses"] == 5
+    assert summary["usage"]["generated_hypotheses"] == 5
     assert summary["usage"]["export_result"] == 1
     assert summary["usage"]["codex_task"] == 3
     assert summary["usage"]["feedback_create"] == 1

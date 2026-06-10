@@ -19,10 +19,10 @@ function sourceFiles(dir = srcDir) {
 }
 
 const roles = {
-  owner: ["project:create", "project:read", "admin:read", "feedback:create"],
-  admin: ["project:create", "project:read", "admin:read", "feedback:create"],
-  researcher: ["project:create", "project:read", "feedback:create"],
-  viewer: ["project:read", "feedback:create"],
+  owner: ["project:create", "project:read", "run:create", "run:read", "admin:read", "feedback:create"],
+  admin: ["project:create", "project:read", "run:create", "run:read", "admin:read", "feedback:create"],
+  researcher: ["project:create", "project:read", "run:create", "run:read", "feedback:create"],
+  viewer: ["project:read", "run:read", "feedback:create"],
 };
 
 const fixtures = {
@@ -37,6 +37,14 @@ const fixtures = {
   usageEvents: [
     { id: "usage-a", organization_id: "org-a", user_id: "user-a", event_type: "create_project", quantity: 1 },
     { id: "usage-b", organization_id: "org-b", user_id: "user-b", event_type: "feedback_create", quantity: 1 },
+  ],
+  runs: [
+    { id: "run-a", organization_id: "org-a", project_id: "project-a", created_by_user_id: "user-a" },
+    { id: "run-b", organization_id: "org-b", project_id: "project-b", created_by_user_id: "user-b" },
+  ],
+  artifacts: [
+    { id: "artifact-a", organization_id: "org-a", project_id: "project-a", run_id: "run-a" },
+    { id: "artifact-b", organization_id: "org-b", project_id: "project-b", run_id: "run-b" },
   ],
 };
 
@@ -127,6 +135,22 @@ function listUsageEvents(ctx) {
   return fixtures.usageEvents.filter((event) => event.organization_id === ctx.organization.id);
 }
 
+function listRuns(ctx, projectId) {
+  const authError = requireAuth(ctx);
+  if (authError) return authError;
+  if (!hasPermission(ctx.role, "run:read")) return { status: 403, code: "FORBIDDEN" };
+
+  return fixtures.runs.filter((run) => run.organization_id === ctx.organization.id && run.project_id === projectId);
+}
+
+function listArtifacts(ctx, runId) {
+  const authError = requireAuth(ctx);
+  if (authError) return authError;
+  if (!hasPermission(ctx.role, "run:read")) return { status: 403, code: "FORBIDDEN" };
+
+  return fixtures.artifacts.filter((artifact) => artifact.organization_id === ctx.organization.id && artifact.run_id === runId);
+}
+
 describe("tenant isolation with mocked Supabase data", () => {
   it("User A in Org A cannot see Org B projects", () => {
     const result = listProjects(context());
@@ -184,6 +208,16 @@ describe("tenant isolation with mocked Supabase data", () => {
     assert.ok(rows.every((row) => row.organization_id === "org-a"));
   });
 
+  it("runs and artifacts are scoped to org", () => {
+    const runs = listRuns(context(), "project-a");
+    const artifacts = listArtifacts(context(), "run-a");
+
+    assert.deepEqual(runs.map((row) => row.id), ["run-a"]);
+    assert.deepEqual(artifacts.map((row) => row.id), ["artifact-a"]);
+    assert.deepEqual(listRuns(context(), "project-b"), []);
+    assert.deepEqual(listArtifacts(context(), "run-b"), []);
+  });
+
   it("unauthenticated user cannot access product API", () => {
     assert.deepEqual(listProjects(null), { status: 401, code: "UNAUTHENTICATED" });
     assert.deepEqual(adminSummary({ authenticated: false }), { status: 401, code: "UNAUTHENTICATED" });
@@ -204,6 +238,11 @@ describe("tenant isolation with mocked Supabase data", () => {
     const adminSummaryRoute = read("src/app/api/product/admin/summary/route.ts");
     const feedbackRoute = read("src/app/api/product/feedback/route.ts");
     const usageRoute = read("src/app/api/product/usage/route.ts");
+    const runsRoute = read("src/app/api/product/projects/[projectId]/runs/route.ts");
+    const runRoute = read("src/app/api/product/projects/[projectId]/runs/[runId]/route.ts");
+    const artifactsRoute = read("src/app/api/product/projects/[projectId]/runs/[runId]/artifacts/route.ts");
+    const resultRoute = read("src/app/api/product/projects/[projectId]/runs/[runId]/result/route.ts");
+    const artifactStorage = read("src/lib/product/artifact-storage.ts");
     const usageHelper = read("src/lib/product/usage.ts");
     const permissions = read("src/lib/product/permissions.ts");
 
@@ -215,6 +254,12 @@ describe("tenant isolation with mocked Supabase data", () => {
     assert.match(adminSummaryRoute, /\.eq\("organization_id", context\.organization\.id\)/);
     assert.match(feedbackRoute, /organization_id: context\.organization\.id/);
     assert.match(usageRoute, /getUsageSummaryForOrg\(context\.organization\.id/);
+    assert.match(runsRoute, /\.eq\("organization_id", context\.organization\.id\)/);
+    assert.match(runRoute, /\.eq\("organization_id", context\.organization\.id\)/);
+    assert.match(artifactsRoute, /listRunArtifacts\(\{ \.\.\.context, supabase, projectId, runId \}, runId\)/);
+    assert.match(resultRoute, /listRunArtifacts\(\{ \.\.\.context, supabase, projectId, runId \}, runId\)/);
+    assert.match(artifactStorage, /\.eq\("organization_id", context\.organization\.id\)/);
+    assert.match(artifactStorage, /artifactVisibilityFilter/);
     assert.match(usageHelper, /context\.organization\.id !== orgId/);
     assert.match(permissions, /viewer: \["project:read", "run:read", "feedback:create"\]/);
     assert.doesNotMatch(permissions.match(/researcher: \[[^\]]+\]/s)?.[0] ?? "", /admin:read/);

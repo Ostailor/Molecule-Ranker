@@ -83,7 +83,7 @@ describe("product shell layout", () => {
       "tool marketplace",
       "cures",
       "validated drug",
-      "safe",
+      "safe and effective",
       "effective",
       "active binder",
       "clinical proof",

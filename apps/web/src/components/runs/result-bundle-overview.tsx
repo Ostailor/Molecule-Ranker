@@ -1,36 +1,47 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Boxes,
   ClipboardCheck,
-  Download,
   FileArchive,
   FileText,
   FlaskConical,
   Lightbulb,
   ShieldAlert,
 } from "lucide-react";
-import type { DiscoveryRun, Project, ResultBundle } from "@/lib/mock-data";
-import { candidates, evidenceItems, generatedHypotheses } from "@/lib/mock-data";
+
 import { dateLabel } from "@/lib/formatting";
 import { productFeatureFlags } from "@/lib/product/feature-flags";
-import { Button } from "@/components/ui/button";
+import type { ProductRun, ProductRunArtifact, Project } from "@/lib/supabase/types";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Metric } from "@/components/ui/metric";
 import { StatusBadge } from "@/components/ui/status-badge";
 
 type ResultBundleOverviewProps = {
   project: Project;
-  run: DiscoveryRun;
-  bundle?: ResultBundle;
+  initialRun: ProductRun;
   projectId: string;
   runId: string;
 };
 
+type ResultBundleApiPayload = {
+  run?: Partial<ProductRun> & {
+    status?: string;
+    error_summary?: string | null;
+    result_summary?: unknown;
+  };
+  artifact?: ProductRunArtifact | null;
+  artifacts?: ProductRunArtifact[];
+  summary?: unknown;
+};
+
 const keyLimitations = [
-  "All rows are synthetic UI demo data and must be replaced with imported evidence before research use.",
-  "Candidate prioritization scores are placeholders for workflow review, not a measure of biomedical readiness.",
+  "The V0.3 result is a bounded product-safe summary, not an advanced result bundle viewer.",
+  "Deep candidate and evidence viewers remain a V0.4 scope item.",
   "Evidence coverage may be incomplete and requires expert review before downstream planning.",
-  "Generated hypotheses are not source-backed unless exact imported results are attached in a later release.",
+  "Generated hypotheses are computational only and require separate human review.",
 ];
 
 const guardrailNotices = [
@@ -39,69 +50,162 @@ const guardrailNotices = [
   "Not medical advice.",
   "Not a lab protocol.",
   "Not a synthesis plan.",
-  "Generated hypotheses have no direct evidence unless exact imported results exist.",
+  "No patient-specific treatment guidance.",
 ];
 
 const reviewChecklist = [
-  "Confirm project objective and disease or area are bounded for research planning.",
-  "Review candidate ranking warnings before saving candidates.",
-  "Check evidence coverage and provenance notes for each candidate.",
-  "Separate generated hypotheses from imported evidence during review.",
-  "Record limitations and unresolved questions in research notes before export.",
+  "Confirm project objective and disease or goal are bounded for research planning.",
+  "Review summary counts and warnings before using downstream planning notes.",
+  "Check evidence coverage limitations before prioritizing follow-up work.",
+  "Separate generated hypotheses from evidence-backed sections during review.",
+  "Record unresolved questions before any export or handoff.",
 ];
 
-export function ResultBundleOverview({
-  project,
-  run,
-  bundle,
-  projectId,
-  runId,
-}: ResultBundleOverviewProps) {
-  const warningsCount = candidates.reduce((total, candidate) => total + candidate.warnings.length, 0) +
-    generatedHypotheses.reduce((total, hypothesis) => total + hypothesis.warnings.length, 0);
-  const exportAvailability = bundle?.status === "Ready for review" ? "Available" : "Draft";
-  const candidatesHref = `/projects/${projectId}/runs/${runId}/candidates`;
-  const evidenceHref = `/projects/${projectId}/runs/${runId}/evidence`;
-  const generatedHref = `/projects/${projectId}/runs/${runId}/generated`;
-  const generatedHypothesesCount = productFeatureFlags.generatedHypothesesViewer ? generatedHypotheses.length : 0;
-  const resultSections = bundle?.sections ?? [
-    "Candidate ranking",
-    "Evidence",
-    ...(productFeatureFlags.generatedHypothesesViewer ? ["Generated hypotheses"] : []),
+export function ResultBundleOverview({ project, initialRun, projectId, runId }: ResultBundleOverviewProps) {
+  const [run, setRun] = useState(initialRun);
+  const [bundle, setBundle] = useState<ProductRunArtifact | null>(null);
+  const [artifacts, setArtifacts] = useState<ProductRunArtifact[]>([]);
+  const [message, setMessage] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadResultBundle() {
+      try {
+        const response = await fetch(`/api/product/projects/${projectId}/runs/${runId}/result-bundle`, {
+          headers: { Accept: "application/json" },
+        });
+        const payload = await response.json().catch(() => null);
+
+        if (!response.ok || !payload?.ok) {
+          if (response.status === 401 || response.status === 403 || response.status === 404) {
+            setMessage(payload?.error?.message ?? "This result bundle is not available in the current organization.");
+            setLoaded(true);
+            return;
+          }
+
+          setMessage("Could not load the product-safe result bundle.");
+          setLoaded(true);
+          return;
+        }
+
+        if (cancelled) return;
+
+        const data = payload.data as ResultBundleApiPayload;
+        setRun((current) => ({ ...current, ...data.run }));
+        setBundle(data.artifact ?? null);
+        setArtifacts(data.artifacts ?? []);
+        setMessage(null);
+        setLoaded(true);
+      } catch {
+        if (!cancelled) {
+          setMessage("Could not load the product-safe result bundle.");
+          setLoaded(true);
+        }
+      }
+    }
+
+    void loadResultBundle();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, runId]);
+
+  const bundleContent = objectValue(bundle?.content_json);
+  const metadata = objectValue(bundle?.metadata);
+  const artifactSummary = objectValue(bundleContent.summary);
+  const payload = objectValue(bundleContent.payload);
+  const payloadCounts = objectValue(payload.counts);
+  const runSummary = objectValue(run.result_summary);
+  const summary = { ...runSummary, ...artifactSummary };
+  const counts = {
+    candidates: numberValue(summary.candidateCount, payloadCounts.ranked_candidates),
+    evidence: numberValue(summary.evidenceItemCount, payloadCounts.evidence_items),
+    generated: productFeatureFlags.generatedHypothesesViewer
+      ? numberValue(summary.generatedHypothesisCount, payloadCounts.generated_hypotheses)
+      : 0,
+    warnings: numberValue(summary.warningCount, payloadCounts.warnings),
+  };
+  const sections = stringArrayValue(summary.sections, [
+    "Candidate summary",
+    "Evidence summary",
+    ...(productFeatureFlags.generatedHypothesesViewer ? ["Generated summary"] : []),
     "Limitations",
-  ];
+    "Required human review",
+  ]);
+  const displayName = typeof metadata.display_name === "string" ? metadata.display_name : "Product-safe result bundle";
+  const isFailed = run.status === "failed";
+  const isPartial = run.status === "partially_succeeded";
+  const isPending = !isFailed && !bundle;
+
+  if (message) {
+    return <SafeResultState title="Result bundle unavailable" tone="rose" message={message} />;
+  }
+
+  if (isFailed) {
+    return (
+      <SafeResultState
+        title="Run failed before result bundle creation"
+        tone="rose"
+        message={run.error_summary || "The bounded workflow could not prepare a product-safe result bundle."}
+      />
+    );
+  }
+
+  if (isPending) {
+    return (
+      <SafeResultState
+        title={loaded ? "Result bundle pending" : "Loading result bundle"}
+        tone="amber"
+        message="The product-safe result bundle is not available yet. Check the run status page while the workflow completes."
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
+      {isPartial ? (
+        <Card>
+          <CardHeader title="Partial result warning" eyebrow="Review required" />
+          <CardBody>
+            <p className="text-sm leading-6 text-ink-700">
+              This run partially succeeded. Review available summaries and limitations before using the bundle for
+              research planning.
+            </p>
+          </CardBody>
+        </Card>
+      ) : null}
+
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <Metric label="Ranked candidates" value={String(candidates.length)} detail="Candidate ranking" icon={Boxes} />
-        <Metric label="Evidence items" value={String(evidenceItems.length)} detail="Evidence coverage" icon={FileText} />
+        <Metric label="Ranked candidates" value={String(counts.candidates)} detail="Summary only" icon={Boxes} />
+        <Metric label="Evidence items" value={String(counts.evidence)} detail="Summary only" icon={FileText} />
         <Metric
           label="Generated hypotheses"
-          value={String(generatedHypothesesCount)}
-          detail={productFeatureFlags.generatedHypothesesViewer ? "No direct evidence" : "Feature hidden"}
+          value={String(counts.generated)}
+          detail={productFeatureFlags.generatedHypothesesViewer ? "Computational only" : "Feature hidden"}
           icon={Lightbulb}
         />
-        <Metric label="Warnings" value={String(warningsCount)} detail="Require review" icon={AlertTriangle} />
-        <Metric label="Export availability" value={exportAvailability} detail="Placeholder" icon={Download} />
+        <Metric label="Warnings" value={String(counts.warnings)} detail="Require review" icon={AlertTriangle} />
+        <Metric label="Artifacts" value={String(artifacts.length)} detail="Product-safe list" icon={FileArchive} />
       </section>
 
       <Card>
         <CardHeader
           title="Result summary"
-          eyebrow="PLACEHOLDER_V0_1_RESULT_OVERVIEW"
-          action={<StatusBadge tone={bundle?.status === "Ready for review" ? "green" : "amber"}>{bundle?.status ?? "Draft"}</StatusBadge>}
+          eyebrow="V0.3 product-safe artifact"
+          action={<StatusBadge tone={isPartial ? "amber" : "green"}>{String(summary.status ?? "Ready for review")}</StatusBadge>}
         />
         <CardBody>
           <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
             <div>
               <p className="text-sm leading-6 text-ink-700">
-                {bundle?.name ?? "Synthetic result bundle"} summarizes {project.name} outputs from {run.name}. It is
-                organized for human review across candidate ranking, evidence, generated hypotheses, limitations, and
-                research notes.
+                {displayName} summarizes {project.name} outputs from {run.disease_or_goal}. It is a summary-level
+                artifact for human review and does not include deep candidate or evidence viewers.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
-                {resultSections.map((section) => (
+                {sections.map((section) => (
                   <StatusBadge key={section} tone="gray">
                     {section}
                   </StatusBadge>
@@ -111,20 +215,9 @@ export function ResultBundleOverview({
             <div className="rounded-product border border-slatewash-200 bg-slatewash-50 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-400">Run context</p>
               <dl className="mt-3 grid gap-3 text-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-ink-500">Project</dt>
-                  <dd className="text-right font-semibold text-ink-950">{project.therapeuticArea}</dd>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-ink-500">Run mode</dt>
-                  <dd className="text-right font-semibold text-ink-950">{run.mode}</dd>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-ink-500">Updated</dt>
-                  <dd className="text-right font-semibold text-ink-950">
-                    {bundle?.exportedAt ? dateLabel(bundle.exportedAt) : dateLabel(run.startedAt)}
-                  </dd>
-                </div>
+                <SummaryRow label="Project" value={project.disease_focus ?? "Research area"} />
+                <SummaryRow label="Run mode" value={run.mode} />
+                <SummaryRow label="Updated" value={dateLabel(bundle?.created_at ?? run.completed_at ?? run.created_at)} />
               </dl>
             </div>
           </div>
@@ -133,75 +226,60 @@ export function ResultBundleOverview({
 
       <div className="grid gap-6 xl:grid-cols-3">
         <SummaryCard
-          title="Candidate ranking summary"
-          eyebrow="Ranked candidates"
+          title="Candidate summary"
+          eyebrow="Summary only"
           icon={Boxes}
-          href={candidatesHref}
-          cta="Open candidates"
-          body="Candidate hypotheses are ordered for research review with confidence labels, evidence counts, tags, and warnings."
+          body={`The result bundle reports ${counts.candidates} ranked candidate summaries. Deep candidate inspection remains V0.4 scope.`}
         />
         <SummaryCard
-          title="Evidence coverage"
-          eyebrow="Synthetic rows"
+          title="Evidence summary"
+          eyebrow="Summary only"
           icon={FileText}
-          href={evidenceHref}
-          cta="Open evidence"
-          body="Evidence items summarize source type, title, confidence, and provenance notes for UI review only."
+          body={`The result bundle reports ${counts.evidence} evidence summary items. Deep evidence review remains V0.4 scope.`}
         />
-        {productFeatureFlags.generatedHypothesesViewer ? (
-          <SummaryCard
-            title="Generated hypotheses summary"
-            eyebrow="No direct evidence"
-            icon={FlaskConical}
-            href={generatedHref}
-            cta="Open generated hypotheses"
-            body="Generated hypotheses are separated from evidence-backed sections and require explicit human review."
-          />
-        ) : null}
+        <SummaryCard
+          title="Generated summary"
+          eyebrow="Computational only"
+          icon={FlaskConical}
+          body={`The result bundle reports ${counts.generated} generated hypotheses. Generated hypotheses require human review and are not direct evidence.`}
+        />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-        <ListCard title="Key limitations" eyebrow="Review required" items={keyLimitations} icon={AlertTriangle} />
+        <ListCard title="Limitations" eyebrow="Review required" items={keyLimitations} icon={AlertTriangle} />
+        <ListCard title="Required human review" eyebrow="Before use" items={reviewChecklist} icon={ClipboardCheck} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
         <ListCard title="Guardrail notices" eyebrow="Research boundary" items={guardrailNotices} icon={ShieldAlert} />
+        <ArtifactList artifacts={artifacts} />
       </div>
+    </div>
+  );
+}
 
-      <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-        {productFeatureFlags.exportsPlaceholder ? (
-          <Card id="export-actions">
-            <CardHeader title="Export actions placeholder" eyebrow="PLACEHOLDER_V0_1_EXPORT" />
-            <CardBody>
-              <p className="text-sm leading-6 text-ink-600">
-                Export actions are disabled in V0.2. This area reserves the future download, share, and archive controls
-                without creating files or calling a backend.
-              </p>
-              <div className="mt-4 flex flex-wrap gap-3">
-                <Button href="#export-actions" icon={FileArchive} variant="secondary">
-                  Export placeholder
-                </Button>
-                <Button href={candidatesHref} variant="ghost">
-                  Review before export
-                </Button>
-              </div>
-            </CardBody>
-          </Card>
-        ) : (
-          <Card id="export-actions">
-            <CardHeader title="Export actions hidden" eyebrow="Feature disabled" />
-            <CardBody>
-              <p className="text-sm leading-6 text-ink-600">
-                Export placeholders are hidden by the current product feature flag. No export files are created in V0.2.
-              </p>
-            </CardBody>
-          </Card>
-        )}
+function SafeResultState({ title, message, tone }: { title: string; message: string; tone: "amber" | "rose" }) {
+  return (
+    <Card>
+      <CardHeader title={title} eyebrow={tone === "rose" ? "Safe failure state" : "Pending state"} />
+      <CardBody>
+        <div
+          className={`rounded-product border p-3 text-sm leading-6 text-ink-700 ${
+            tone === "rose" ? "border-rose-200 bg-rose-50" : "border-amber-200 bg-amber-50"
+          }`}
+        >
+          {message}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
 
-        <ListCard
-          title="Human review checklist"
-          eyebrow="Before use"
-          items={reviewChecklist}
-          icon={ClipboardCheck}
-        />
-      </div>
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="text-ink-500">{label}</dt>
+      <dd className="text-right font-semibold text-ink-950">{value}</dd>
     </div>
   );
 }
@@ -211,15 +289,11 @@ function SummaryCard({
   eyebrow,
   icon: Icon,
   body,
-  href,
-  cta,
 }: {
   title: string;
   eyebrow: string;
   icon: typeof Boxes;
   body: string;
-  href: string;
-  cta: string;
 }) {
   return (
     <Card>
@@ -229,9 +303,6 @@ function SummaryCard({
           <Icon className="h-5 w-5" aria-hidden="true" />
         </div>
         <p className="text-sm leading-6 text-ink-600">{body}</p>
-        <Button href={href} variant="secondary" className="mt-4">
-          {cta}
-        </Button>
       </CardBody>
     </Card>
   );
@@ -265,4 +336,49 @@ function ListCard({
       </CardBody>
     </Card>
   );
+}
+
+function ArtifactList({ artifacts }: { artifacts: ProductRunArtifact[] }) {
+  return (
+    <Card>
+      <CardHeader title="Artifact list" eyebrow="Product-safe artifacts" />
+      <CardBody>
+        {artifacts.length === 0 ? (
+          <p className="text-sm leading-6 text-ink-600">No product-safe artifacts are available yet.</p>
+        ) : (
+          <ul className="grid gap-3 text-sm leading-6 text-ink-700">
+            {artifacts.map((artifact) => (
+              <li key={artifact.id} className="rounded-product border border-slatewash-200 bg-slatewash-50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-semibold text-ink-950">{artifact.artifact_type}</span>
+                  <StatusBadge tone={artifact.admin_only ? "amber" : "green"}>
+                    {artifact.admin_only ? "Admin only" : "Visible"}
+                  </StatusBadge>
+                </div>
+                <p className="mt-1 text-xs text-ink-500">
+                  {artifact.storage_kind} · {artifact.size_bytes ?? 0} bytes · {dateLabel(artifact.created_at)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function numberValue(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+
+  return 0;
+}
+
+function stringArrayValue(value: unknown, fallback: string[]) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : fallback;
 }
